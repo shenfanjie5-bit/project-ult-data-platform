@@ -14,6 +14,9 @@ import pytest
 PROJECT_ROOT = Path(__file__).resolve().parents[2]
 DBT_PROJECT_DIR = PROJECT_ROOT / "src" / "data_platform" / "dbt"
 DBT_FIXTURE_RAW = PROJECT_ROOT / "tests" / "dbt" / "fixtures" / "raw"
+DBT_FIXTURE_RUN_ID = "123e4567-e89b-42d3-a456-426614174000"
+DBT_LATER_RUN_ID = "223e4567-e89b-42d3-a456-426614174000"
+DBT_LEGACY_RUN_ID = "323e4567-e89b-42d3-a456-426614174000"
 
 
 def test_dbt_skeleton_files_are_present() -> None:
@@ -28,7 +31,9 @@ def test_dbt_skeleton_files_are_present() -> None:
         DBT_PROJECT_DIR / "seeds" / ".gitkeep",
         DBT_PROJECT_DIR / "macros" / ".gitkeep",
         PROJECT_ROOT / "scripts" / "dbt.sh",
-        DBT_FIXTURE_RAW / "tushare" / "stock_basic" / "dt=20260415" / "sample.parquet",
+        DBT_FIXTURE_RAW / "tushare" / "stock_basic" / "dt=20260415" / (
+            f"{DBT_FIXTURE_RUN_ID}.parquet"
+        ),
         DBT_FIXTURE_RAW / "tushare" / "stock_basic" / "dt=20260415" / "_manifest.json",
     ]
 
@@ -146,10 +151,39 @@ def test_stg_stock_basic_sql_transforms_fixture_with_duckdb(tmp_path: Path) -> N
     assert len(transformed_rows) == 3
     assert transformed_rows[0][0] == "000001.SZ"
     assert transformed_rows[0][1] == date(1991, 4, 3)
-    assert transformed_rows[0][2] == "sample"
+    assert transformed_rows[0][2] == DBT_FIXTURE_RUN_ID
     assert transformed_rows[0][3] == datetime(2026, 4, 15, 1, 0)
     assert transformed_rows[2][4] is False
     assert type_row == ("VARCHAR", "DATE")
+
+
+def test_stg_stock_basic_sql_transforms_rawwriter_fixture_with_duckdb(
+    tmp_path: Path,
+) -> None:
+    duckdb = pytest.importorskip("duckdb")
+
+    raw_zone_path = tmp_path / "raw"
+    _write_rawwriter_stock_basic_fixture(raw_zone_path, tmp_path)
+    model_sql = _render_stg_stock_basic_sql_for_raw_path(raw_zone_path)
+
+    connection = duckdb.connect(":memory:")
+    try:
+        connection.execute(f"create view stg_stock_basic as {model_sql}")
+        transformed_rows = connection.execute(
+            """
+            select ts_code, list_date, source_run_id, raw_loaded_at, is_active
+            from stg_stock_basic
+            order by ts_code
+            """
+        ).fetchall()
+    finally:
+        connection.close()
+
+    assert len(transformed_rows) == 3
+    assert transformed_rows[0][0] == "000001.SZ"
+    assert transformed_rows[0][1] == date(1991, 4, 3)
+    assert transformed_rows[0][2] == DBT_FIXTURE_RUN_ID
+    assert transformed_rows[2][4] is False
 
 
 def test_stg_stock_basic_selects_latest_manifest_artifact_with_duplicate_keys(
@@ -160,12 +194,15 @@ def test_stg_stock_basic_selects_latest_manifest_artifact_with_duplicate_keys(
     raw_zone_path = tmp_path / "raw"
     shutil.copytree(DBT_FIXTURE_RAW, raw_zone_path)
     partition_path = raw_zone_path / "tushare" / "stock_basic" / "dt=20260415"
-    shutil.copyfile(partition_path / "sample.parquet", partition_path / "later.parquet")
+    shutil.copyfile(
+        partition_path / f"{DBT_FIXTURE_RUN_ID}.parquet",
+        partition_path / f"{DBT_LATER_RUN_ID}.parquet",
+    )
     _write_stock_basic_manifest(
         partition_path / "_manifest.json",
         [
-            ("sample", "2026-04-15T01:00:00+00:00"),
-            ("later", "2026-04-15T02:00:00+00:00"),
+            (DBT_FIXTURE_RUN_ID, "2026-04-15T01:00:00+00:00"),
+            (DBT_LATER_RUN_ID, "2026-04-15T02:00:00+00:00"),
         ],
     )
 
@@ -196,7 +233,7 @@ def test_stg_stock_basic_selects_latest_manifest_artifact_with_duplicate_keys(
 
     assert len(transformed_rows) == 3
     assert {row[0] for row in transformed_rows} == {"000001.SZ", "000002.SZ", "000003.BJ"}
-    assert {row[1] for row in transformed_rows} == {"later"}
+    assert {row[1] for row in transformed_rows} == {DBT_LATER_RUN_ID}
     assert {row[2] for row in transformed_rows} == {datetime(2026, 4, 15, 2, 0)}
     assert duplicate_count == 0
 
@@ -209,7 +246,7 @@ def test_stg_stock_basic_tolerates_schema_drifted_historical_artifact(
     raw_zone_path = tmp_path / "raw"
     shutil.copytree(DBT_FIXTURE_RAW, raw_zone_path)
     partition_path = raw_zone_path / "tushare" / "stock_basic" / "dt=20260415"
-    legacy_path = partition_path / "legacy_schema.parquet"
+    legacy_path = partition_path / f"{DBT_LEGACY_RUN_ID}.parquet"
 
     connection = duckdb.connect(":memory:")
     try:
@@ -229,8 +266,8 @@ def test_stg_stock_basic_tolerates_schema_drifted_historical_artifact(
     _write_stock_basic_manifest(
         partition_path / "_manifest.json",
         [
-            ("legacy_schema", "2026-04-15T00:00:00+00:00"),
-            ("sample", "2026-04-15T01:00:00+00:00"),
+            (DBT_LEGACY_RUN_ID, "2026-04-15T00:00:00+00:00"),
+            (DBT_FIXTURE_RUN_ID, "2026-04-15T01:00:00+00:00"),
         ],
     )
 
@@ -261,7 +298,7 @@ def test_stg_stock_basic_tolerates_schema_drifted_historical_artifact(
 
     assert len(transformed_rows) == 3
     assert {row[0] for row in transformed_rows} == {"000001.SZ", "000002.SZ", "000003.BJ"}
-    assert {row[1] for row in transformed_rows} == {"sample"}
+    assert {row[1] for row in transformed_rows} == {DBT_FIXTURE_RUN_ID}
     assert {row[2] for row in transformed_rows} == {datetime(2026, 4, 15, 1, 0)}
     assert duplicate_count == 0
 
@@ -414,7 +451,7 @@ def test_stg_stock_basic_run_and_test_with_fixture(tmp_path: Path) -> None:
     assert len(transformed_rows) == 3
     assert transformed_rows[0][0] == "000001.SZ"
     assert transformed_rows[0][1] == date(1991, 4, 3)
-    assert transformed_rows[0][2] == "sample"
+    assert transformed_rows[0][2] == DBT_FIXTURE_RUN_ID
     assert transformed_rows[0][3] == datetime(2026, 4, 15, 1, 0)
     assert transformed_rows[2][4] is False
     assert type_row == ("VARCHAR", "DATE")
@@ -431,6 +468,34 @@ data_platform:
       path: "{{ env_var('DP_DUCKDB_PATH') }}"
       threads: 1
 """.lstrip()
+    )
+
+
+def _write_rawwriter_stock_basic_fixture(raw_zone_path: Path, tmp_path: Path) -> None:
+    pa = pytest.importorskip("pyarrow")
+
+    from data_platform.raw import RawWriter
+
+    RawWriter(
+        raw_zone_path=raw_zone_path,
+        iceberg_warehouse_path=tmp_path / "iceberg" / "warehouse",
+    ).write_arrow(
+        "tushare",
+        "stock_basic",
+        date(2026, 4, 15),
+        DBT_FIXTURE_RUN_ID,
+        pa.table(
+            {
+                "ts_code": ["000001.SZ", "000002.SZ", "000003.BJ"],
+                "symbol": ["000001", "000002", "000003"],
+                "name": ["Ping An Bank", "Vanke A", "Test BJ"],
+                "area": ["Shenzhen", "Shenzhen", ""],
+                "industry": ["Bank", "Real Estate", ""],
+                "market": ["Main", "Main", "BJ"],
+                "list_status": ["L", "L", "D"],
+                "list_date": [19910403, 19910129, 20200101],
+            }
+        ),
     )
 
 
