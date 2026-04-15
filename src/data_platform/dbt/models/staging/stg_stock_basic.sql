@@ -41,5 +41,6 @@
         "cast(nullif(trim(cast(\"is_hs\" as varchar)), '') as varchar) as \"is_hs\"",
         "cast(nullif(trim(cast(\"act_name\" as varchar)), '') as varchar) as \"act_name\"",
         "cast(nullif(trim(cast(\"act_ent_type\" as varchar)), '') as varchar) as \"act_ent_type\""
-    ]
+    ],
+    "static"
 ) }}

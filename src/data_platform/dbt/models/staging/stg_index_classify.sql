@@ -20,5 +20,6 @@
         "cast(nullif(trim(cast(\"is_pub\" as varchar)), '') as varchar) as \"is_pub\"",
         "cast(nullif(trim(cast(\"parent_code\" as varchar)), '') as varchar) as \"parent_code\"",
         "cast(nullif(trim(cast(\"src\" as varchar)), '') as varchar) as \"src\""
-    ]
+    ],
+    "static"
 ) }}

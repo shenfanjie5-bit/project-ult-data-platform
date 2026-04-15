@@ -32,5 +32,6 @@
         "cast(nullif(trim(cast(\"weight_rule\" as varchar)), '') as varchar) as \"weight_rule\"",
         "cast(nullif(trim(cast(\"desc\" as varchar)), '') as varchar) as \"desc\"",
         "strptime(nullif(trim(cast(\"exp_date\" as varchar)), ''), '%Y%m%d')::date as \"exp_date\""
-    ]
+    ],
+    "static"
 ) }}

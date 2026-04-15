@@ -38,5 +38,6 @@
         "cast(nullif(trim(cast(\"employees\" as varchar)), '') as varchar) as \"employees\"",
         "cast(nullif(trim(cast(\"main_business\" as varchar)), '') as varchar) as \"main_business\"",
         "cast(nullif(trim(cast(\"business_scope\" as varchar)), '') as varchar) as \"business_scope\""
-    ]
+    ],
+    "static"
 ) }}

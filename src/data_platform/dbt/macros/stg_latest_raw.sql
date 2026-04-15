@@ -1,4 +1,4 @@
-{% macro stg_latest_raw(source_id, dataset, source_columns, select_list) -%}
+{% macro stg_latest_raw(source_id, dataset, source_columns, select_list, partition_mode="partitioned") -%}
 with raw_manifest_files as (
     select
         partition_date,
@@ -32,7 +32,9 @@ ranked_raw_artifacts as (
         partition_date,
         partition_yyyymmdd,
         row_number() over (
+{%- if partition_mode != "static" %}
             partition by partition_date
+{%- endif %}
             order by raw_loaded_at desc, partition_date desc, source_run_id desc
         ) as artifact_rank
     from raw_artifacts

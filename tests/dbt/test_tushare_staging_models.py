@@ -73,15 +73,20 @@ def test_staging_sql_uses_raw_manifest_only() -> None:
     assert "filename=1" in macro_sql
     assert "union_by_name=1" in macro_sql
     assert "union all by name" in macro_sql
+    assert 'partition_mode="partitioned"' in macro_sql
     assert "row_number() over" in macro_sql
     assert "partition by partition_date" in macro_sql
     assert "order by raw_loaded_at desc, partition_date desc, source_run_id desc" in macro_sql
     assert "select *" not in macro_sql.lower()
 
+    static_datasets = {asset.dataset for asset in TUSHARE_ASSETS if asset.partition == "static"}
     for path in sorted(STAGING_DIR.glob("stg_*.sql")):
+        dataset = path.stem.removeprefix("stg_")
         model_sql = path.read_text()
         lowered_sql = model_sql.lower()
         assert "{{ stg_latest_raw(" in model_sql
+        if dataset in static_datasets:
+            assert '"static"' in model_sql
         assert "select *" not in lowered_sql
         assert "canonical." not in lowered_sql
         assert "formal." not in lowered_sql
@@ -235,6 +240,55 @@ def test_partitioned_staging_keeps_latest_artifact_per_partition(
         ("000001.SZ", date(2026, 4, 14), first_partition_latest.run_id),
         ("000002.SZ", date(2026, 4, 15), second_partition.run_id),
     ]
+
+
+def test_static_staging_keeps_latest_artifact_globally(
+    tmp_path: Path,
+) -> None:
+    duckdb = pytest.importorskip("duckdb")
+
+    raw_zone_path = tmp_path / "raw"
+    writer = RawWriter(
+        raw_zone_path=raw_zone_path,
+        iceberg_warehouse_path=tmp_path / "iceberg" / "warehouse",
+    )
+    stock_basic_asset = _asset_by_dataset("stock_basic")
+    writer.write_arrow(
+        "tushare",
+        "stock_basic",
+        date(2026, 4, 14),
+        str(uuid4()),
+        _sample_table_with_values(
+            stock_basic_asset,
+            {"ts_code": "000001.SZ", "name": "OLD"},
+        ),
+    )
+    latest_artifact = writer.write_arrow(
+        "tushare",
+        "stock_basic",
+        date(2026, 4, 15),
+        str(uuid4()),
+        _sample_table_with_values(
+            stock_basic_asset,
+            {"ts_code": "000001.SZ", "name": "NEW"},
+        ),
+    )
+
+    model_sql = _render_staging_model("stg_stock_basic", raw_zone_path)
+    connection = duckdb.connect(":memory:")
+    try:
+        connection.execute(f"create view stg_stock_basic as {model_sql}")
+        rows = connection.execute(
+            """
+            select ts_code, name, source_run_id
+            from stg_stock_basic
+            order by ts_code
+            """
+        ).fetchall()
+    finally:
+        connection.close()
+
+    assert rows == [("000001.SZ", "NEW", latest_artifact.run_id)]
 
 
 def test_staging_sql_tolerates_schema_drifted_historical_artifact(
