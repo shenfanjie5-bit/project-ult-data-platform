@@ -15,7 +15,7 @@ from typing import Any, Protocol, cast
 import pyarrow as pa  # type: ignore[import-untyped]
 import pandas as pd  # type: ignore[import-untyped]
 
-from data_platform.adapters.base import AssetSpec, BaseAdapter, FetchParams, QuotaConfig
+from data_platform.adapters.base import AssetSpec, BaseAdapter, FetchParams
 from data_platform.adapters.tushare.assets import (
     TUSHARE_ASSETS,
     TUSHARE_STOCK_BASIC_ASSET_NAME,
@@ -56,7 +56,10 @@ class TushareAdapter(BaseAdapter):
 
         self._token = resolved_token
         self._client = client
-        self._quota_config = QuotaConfig(requests_per_minute=200, daily_credit_quota=None)
+        self._quota_config: dict[str, Any] = {
+            "requests_per_minute": 200,
+            "daily_credit_quota": None,
+        }
         super().__init__(max_retries=max_retries)
 
     def source_id(self) -> str:
@@ -71,8 +74,8 @@ class TushareAdapter(BaseAdapter):
     def get_staging_dbt_models(self) -> list[str]:
         return ["stg_stock_basic"]
 
-    def get_quota_config(self) -> QuotaConfig:
-        return self._quota_config
+    def get_quota_config(self) -> dict[str, Any]:
+        return dict(self._quota_config)
 
     def _fetch(self, asset_id: str, params: FetchParams) -> pa.Table:
         if asset_id != TUSHARE_STOCK_BASIC_ASSET_NAME:
