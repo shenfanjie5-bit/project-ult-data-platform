@@ -7,7 +7,7 @@ import re
 import subprocess
 import sys
 from pathlib import Path
-from uuid import uuid4
+from uuid import UUID, uuid4
 
 import pytest
 from sqlalchemy import create_engine, text
@@ -105,6 +105,32 @@ def test_p1a_smoke_allows_explicit_skip_without_dp_pg_dsn(tmp_path: Path) -> Non
 
     assert result.returncode == 0
     assert "P1a smoke skipped" in result.stdout
+
+
+def test_p1a_smoke_seed_fixture_writes_contract_valid_run_id(tmp_path: Path) -> None:
+    env = _base_script_env(tmp_path)
+
+    result = subprocess.run(
+        [sys.executable, "-c", _seed_tushare_fixture_source()],
+        cwd=PROJECT_ROOT,
+        env=env,
+        capture_output=True,
+        text=True,
+        check=False,
+        timeout=60,
+    )
+
+    assert result.returncode == 0, result.stdout + result.stderr
+    artifact_path = Path(result.stdout.strip().splitlines()[-1])
+    run_id = artifact_path.name.removesuffix(".parquet")
+    parsed_run_id = UUID(run_id)
+    manifest = json.loads((artifact_path.parent / "_manifest.json").read_text())
+
+    assert parsed_run_id.version == 4
+    assert run_id == str(parsed_run_id)
+    assert run_id.startswith("p1a-smoke-") is False
+    assert manifest["artifacts"][0]["run_id"] == run_id
+    assert manifest["artifacts"][0]["row_count"] == FIXTURE_ROW_COUNT
 
 
 def test_p1a_smoke_refuses_non_smoke_database(tmp_path: Path) -> None:
@@ -210,6 +236,17 @@ def _run_smoke(env: dict[str, str]) -> subprocess.CompletedProcess[str]:
     assert result.returncode == 0, result.stdout + result.stderr
     assert "skipped" not in result.stdout.lower()
     return result
+
+
+def _seed_tushare_fixture_source() -> str:
+    script = (PROJECT_ROOT / "scripts" / "smoke_p1a.sh").read_text()
+    match = re.search(
+        r"seed_tushare_fixture\(\) \{\n\s+\"\$\{PYTHON\}\" - <<'PY'\n(?P<source>.*?)\nPY\n\}",
+        script,
+        re.DOTALL,
+    )
+    assert match is not None
+    return match.group("source")
 
 
 def _query_canonical_payload(env: dict[str, str]) -> dict[str, object]:

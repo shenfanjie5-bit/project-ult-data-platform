@@ -239,7 +239,7 @@ artifact = RawWriter().write_arrow(
     adapter.source_id(),
     "stock_basic",
     date(2026, 4, 15),
-    f"p1a-smoke-{uuid.uuid4().hex}",
+    str(uuid.uuid4()),
     table,
 )
 print(artifact.path)
