@@ -7,12 +7,14 @@ import json
 import os
 import re
 import uuid
-from collections.abc import Callable
+from collections.abc import Callable, Iterator
+from contextlib import contextmanager
 from dataclasses import dataclass
 from datetime import UTC, date, datetime
 from pathlib import Path
 from typing import Any, TypeAlias
 
+import fcntl
 import pyarrow as pa  # type: ignore[import-untyped]
 import pyarrow.parquet as pq  # type: ignore[import-untyped]
 
@@ -120,33 +122,29 @@ class RawWriter:
         row_count: int,
         write_tmp: Callable[[Path], None],
     ) -> RawArtifact:
-        if artifact_path.exists():
-            raise RawArtifactExists(f"raw artifact already exists: {artifact_path}")
-
-        self._raise_if_manifest_contains_run_id(artifact_path.parent, run_id)
         artifact_path.parent.mkdir(parents=True, exist_ok=True)
 
-        tmp_path = artifact_path.with_name(f"{artifact_path.name}.tmp")
+        tmp_path = artifact_path.with_name(f".{artifact_path.name}.{uuid.uuid4().hex}.tmp")
         try:
             write_tmp(tmp_path)
-            if artifact_path.exists():
-                raise RawArtifactExists(f"raw artifact already exists: {artifact_path}")
-            os.replace(tmp_path, artifact_path)
+            with _partition_lock(self._lock_path(artifact_path.parent)):
+                self._raise_if_run_id_exists(artifact_path.parent, run_id, artifact_path)
+                _materialize_artifact(tmp_path, artifact_path)
+
+                artifact = RawArtifact(
+                    source_id=source_id,
+                    dataset=dataset,
+                    partition_date=partition_date,
+                    run_id=run_id,
+                    path=artifact_path,
+                    row_count=row_count,
+                    written_at=datetime.now(tz=UTC),
+                )
+                self._write_manifest(artifact)
+                return artifact
         except Exception:
             tmp_path.unlink(missing_ok=True)
             raise
-
-        artifact = RawArtifact(
-            source_id=source_id,
-            dataset=dataset,
-            partition_date=partition_date,
-            run_id=run_id,
-            path=artifact_path,
-            row_count=row_count,
-            written_at=datetime.now(tz=UTC),
-        )
-        self._write_manifest(artifact)
-        return artifact
 
     def _artifact_path(
         self,
@@ -169,6 +167,24 @@ class RawWriter:
     def _manifest_path(self, partition_path: Path) -> Path:
         return partition_path / "_manifest.json"
 
+    def _lock_path(self, partition_path: Path) -> Path:
+        return partition_path / "._manifest.lock"
+
+    def _raise_if_run_id_exists(
+        self,
+        partition_path: Path,
+        run_id: str,
+        artifact_path: Path,
+    ) -> None:
+        if artifact_path.exists():
+            raise RawArtifactExists(f"raw artifact already exists: {artifact_path}")
+
+        self._raise_if_manifest_contains_run_id(partition_path, run_id)
+        for existing_path in partition_path.glob(f"{run_id}.*"):
+            if existing_path.name.endswith(".tmp"):
+                continue
+            raise RawArtifactExists(f"raw artifact already exists for run_id={run_id!r}")
+
     def _raise_if_manifest_contains_run_id(self, partition_path: Path, run_id: str) -> None:
         manifest_path = self._manifest_path(partition_path)
         if not manifest_path.exists():
@@ -190,10 +206,12 @@ class RawWriter:
         artifacts.sort(key=lambda item: str(item["written_at"]))
 
         manifest = {
-            **artifact_dict,
+            "source_id": artifact.source_id,
+            "dataset": artifact.dataset,
+            "partition_date": artifact.partition_date.isoformat(),
             "artifacts": artifacts,
         }
-        tmp_path = manifest_path.with_name(f"{manifest_path.name}.tmp")
+        tmp_path = manifest_path.with_name(f".{manifest_path.name}.{uuid.uuid4().hex}.tmp")
         try:
             with tmp_path.open("w", encoding="utf-8") as file:
                 json.dump(manifest, file, ensure_ascii=False, indent=2, sort_keys=True)
@@ -259,7 +277,28 @@ def _default_iceberg_warehouse_path(
     if env_path:
         return Path(env_path).expanduser()
 
-    return None
+    from data_platform.config import get_settings
+
+    return get_settings().iceberg_warehouse_path.expanduser()
+
+
+@contextmanager
+def _partition_lock(lock_path: Path) -> Iterator[None]:
+    with lock_path.open("a+", encoding="utf-8") as lock_file:
+        fcntl.flock(lock_file.fileno(), fcntl.LOCK_EX)
+        try:
+            yield
+        finally:
+            fcntl.flock(lock_file.fileno(), fcntl.LOCK_UN)
+
+
+def _materialize_artifact(tmp_path: Path, artifact_path: Path) -> None:
+    try:
+        os.link(tmp_path, artifact_path)
+    except FileExistsError as exc:
+        raise RawArtifactExists(f"raw artifact already exists: {artifact_path}") from exc
+    finally:
+        tmp_path.unlink(missing_ok=True)
 
 
 def _validate_path_segment(value: str, field_name: str) -> None:
@@ -344,7 +383,9 @@ def _manifest_artifacts(manifest: dict[str, Any]) -> list[dict[str, Any]]:
     artifacts = manifest.get("artifacts")
     if isinstance(artifacts, list):
         return [artifact for artifact in artifacts if isinstance(artifact, dict)]
-    return [manifest]
+    if "run_id" in manifest:
+        return [manifest]
+    return []
 
 
 __all__ = [
