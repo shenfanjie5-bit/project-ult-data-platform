@@ -85,10 +85,12 @@ def test_stg_stock_basic_files_match_issue_contract() -> None:
     assert '{{ dp_raw_manifest_path("tushare", "stock_basic") }}' in model_sql
     assert "hive_partitioning=1" in model_sql
     assert "filename=1" in model_sql
+    assert "union_by_name=1" in model_sql
     assert "row_number() over" in model_sql
     assert "order by raw_loaded_at desc, partition_date desc, source_run_id desc" in (
         model_sql
     )
+    assert "select *" not in lowered_model_sql
     assert "trim(cast(ts_code as varchar))" in model_sql
     assert "strptime(nullif(trim(cast(list_date as varchar)), ''), '%Y%m%d')::date" in (
         model_sql
@@ -196,6 +198,71 @@ def test_stg_stock_basic_selects_latest_manifest_artifact_with_duplicate_keys(
     assert {row[0] for row in transformed_rows} == {"000001.SZ", "000002.SZ", "000003.BJ"}
     assert {row[1] for row in transformed_rows} == {"later"}
     assert {row[2] for row in transformed_rows} == {datetime(2026, 4, 15, 2, 0)}
+    assert duplicate_count == 0
+
+
+def test_stg_stock_basic_tolerates_schema_drifted_historical_artifact(
+    tmp_path: Path,
+) -> None:
+    duckdb = pytest.importorskip("duckdb")
+
+    raw_zone_path = tmp_path / "raw"
+    shutil.copytree(DBT_FIXTURE_RAW, raw_zone_path)
+    partition_path = raw_zone_path / "tushare" / "stock_basic" / "dt=20260415"
+    legacy_path = partition_path / "legacy_schema.parquet"
+
+    connection = duckdb.connect(":memory:")
+    try:
+        connection.execute(
+            f"""
+            copy (
+                select
+                    '000001.SZ'::varchar as ts_code,
+                    19910403::integer as list_date
+            )
+            to '{legacy_path}' (format parquet)
+            """
+        )
+    finally:
+        connection.close()
+
+    _write_stock_basic_manifest(
+        partition_path / "_manifest.json",
+        [
+            ("legacy_schema", "2026-04-15T00:00:00+00:00"),
+            ("sample", "2026-04-15T01:00:00+00:00"),
+        ],
+    )
+
+    model_sql = _render_stg_stock_basic_sql_for_raw_path(raw_zone_path)
+    connection = duckdb.connect(":memory:")
+    try:
+        connection.execute(f"create view stg_stock_basic as {model_sql}")
+        transformed_rows = connection.execute(
+            """
+            select ts_code, source_run_id, raw_loaded_at
+            from stg_stock_basic
+            order by ts_code
+            """
+        ).fetchall()
+        duplicate_count = connection.execute(
+            """
+            select count(*)
+            from (
+                select ts_code
+                from stg_stock_basic
+                group by ts_code
+                having count(*) > 1
+            )
+            """
+        ).fetchone()[0]
+    finally:
+        connection.close()
+
+    assert len(transformed_rows) == 3
+    assert {row[0] for row in transformed_rows} == {"000001.SZ", "000002.SZ", "000003.BJ"}
+    assert {row[1] for row in transformed_rows} == {"sample"}
+    assert {row[2] for row in transformed_rows} == {datetime(2026, 4, 15, 1, 0)}
     assert duplicate_count == 0
 
 

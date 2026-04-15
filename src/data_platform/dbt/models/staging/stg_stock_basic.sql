@@ -1,7 +1,10 @@
 {{ config(materialized="view") }}
 
 with raw_manifest_files as (
-    select *
+    select
+        partition_date,
+        artifacts,
+        filename
     from read_json_auto(
         '{{ dp_raw_manifest_path("tushare", "stock_basic") }}',
         hive_partitioning=1,
@@ -42,11 +45,22 @@ latest_raw_artifact as (
 ),
 
 raw_stock_basic as (
-    select *
+    select
+        ts_code,
+        symbol,
+        name,
+        area,
+        industry,
+        market,
+        list_status,
+        list_date,
+        dt,
+        filename
     from read_parquet(
         '{{ dp_raw_path("tushare", "stock_basic") }}',
         hive_partitioning=1,
-        filename=1
+        filename=1,
+        union_by_name=1
     )
 ),
 
