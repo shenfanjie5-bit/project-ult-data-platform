@@ -234,6 +234,41 @@ def test_cli_rejects_pandas_nat_stock_basic_identity_without_artifact(
     assert list(raw_zone_path.rglob("*.parquet")) == []
 
 
+@pytest.mark.parametrize(
+    ("identity_value", "expected_error"),
+    [
+        ("", "blank identity field: ts_code"),
+        ("   ", "blank identity field: ts_code"),
+        ("not-a-code", "malformed identity field: ts_code"),
+        ("000001.SHX", "malformed identity field: ts_code"),
+        (["000001.SZ"], "non-scalar identity field: ts_code"),
+    ],
+)
+def test_cli_rejects_invalid_stock_basic_identity_without_artifact(
+    raw_zone_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+    identity_value: Any,
+    expected_error: str,
+) -> None:
+    frame = _stock_basic_frame(1)
+    frame.at[0, "ts_code"] = identity_value
+    _install_tushare_client(monkeypatch, FakeTushareClient(frame))
+
+    exit_code = tushare_adapter_module.main(
+        ["--asset", "tushare_stock_basic", "--date", "20260415"]
+    )
+
+    captured = capsys.readouterr()
+    payload = json.loads(captured.err)
+
+    assert exit_code == 1
+    assert captured.out == ""
+    assert payload["asset"] == "tushare_stock_basic"
+    assert expected_error in payload["error"]
+    assert list(raw_zone_path.rglob("*.parquet")) == []
+
+
 def test_cli_missing_token_outputs_json_error(
     monkeypatch: pytest.MonkeyPatch,
     capsys: pytest.CaptureFixture[str],

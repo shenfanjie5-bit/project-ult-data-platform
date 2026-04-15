@@ -5,6 +5,7 @@ from __future__ import annotations
 import argparse
 import json
 import os
+import re
 import sys
 import uuid
 from collections.abc import Mapping, Sequence
@@ -26,6 +27,7 @@ from data_platform.raw import RawArtifact, RawWriter
 
 TOKEN_ENV_VAR = "DP_TUSHARE_TOKEN"
 STOCK_BASIC_IDENTITY_FIELDS = ("ts_code",)
+STOCK_BASIC_TS_CODE_PATTERN = re.compile(r"\d{6}\.(?:SH|SZ|BJ)")
 
 
 class AdapterConfigError(RuntimeError):
@@ -230,18 +232,38 @@ def _validate_stock_basic_records(rows: Sequence[Mapping[str, Any]]) -> None:
             raise ValueError(msg)
 
         for field_name in STOCK_BASIC_IDENTITY_FIELDS:
-            if _is_nullish(row[field_name]):
-                msg = f"Tushare stock_basic row {index} has null identity field: {field_name}"
-                raise ValueError(msg)
+            _validate_stock_basic_identity_value(row[field_name], index, field_name)
 
 
 def _validate_stock_basic_identity_columns(table: pa.Table) -> None:
     for field_name in STOCK_BASIC_IDENTITY_FIELDS:
         values = table[field_name].to_pylist()
         for index, value in enumerate(values):
-            if _is_nullish(value):
-                msg = f"Tushare stock_basic row {index} has null identity field: {field_name}"
-                raise ValueError(msg)
+            _validate_stock_basic_identity_value(value, index, field_name)
+
+
+def _validate_stock_basic_identity_value(value: Any, row_index: int, field_name: str) -> None:
+    if _is_nullish(value):
+        msg = f"Tushare stock_basic row {row_index} has null identity field: {field_name}"
+        raise ValueError(msg)
+
+    if not pd.api.types.is_scalar(value):
+        msg = (
+            f"Tushare stock_basic row {row_index} has non-scalar identity field: "
+            f"{field_name}"
+        )
+        raise ValueError(msg)
+
+    normalized_value = str(value)
+    if not normalized_value.strip():
+        msg = f"Tushare stock_basic row {row_index} has blank identity field: {field_name}"
+        raise ValueError(msg)
+
+    if normalized_value != normalized_value.strip() or not STOCK_BASIC_TS_CODE_PATTERN.fullmatch(
+        normalized_value
+    ):
+        msg = f"Tushare stock_basic row {row_index} has malformed identity field: {field_name}"
+        raise ValueError(msg)
 
 
 def _normalize_string(value: Any) -> str | None:
