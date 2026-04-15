@@ -1,3 +1,19 @@
 version: 2
 
-sources: []
+sources:
+  - name: raw
+    description: Raw Zone parquet artifacts exposed to staging models.
+    loader: "Raw Zone path pattern: ${DP_RAW_ZONE_PATH}/tushare/stock_basic/**/*.parquet"
+    tables:
+      - name: tushare_stock_basic
+        description: Tushare stock_basic parquet files written by the Raw Zone adapter.
+
+models:
+  - name: stg_stock_basic
+    description: Staging view over Raw Zone Tushare stock_basic parquet files.
+    columns:
+      - name: ts_code
+        description: Trimmed Tushare security code.
+        tests:
+          - unique
+          - not_null
