@@ -1,3 +1,4 @@
+from collections.abc import Generator
 from pathlib import Path
 from shutil import copyfile
 
@@ -19,7 +20,7 @@ DP_ENV_KEYS = [
 
 
 @pytest.fixture(autouse=True)
-def isolated_settings_cache(monkeypatch: pytest.MonkeyPatch) -> None:
+def isolated_settings_cache(monkeypatch: pytest.MonkeyPatch) -> Generator[None]:
     reset_settings_cache()
     for key in DP_ENV_KEYS:
         monkeypatch.delenv(key, raising=False)
