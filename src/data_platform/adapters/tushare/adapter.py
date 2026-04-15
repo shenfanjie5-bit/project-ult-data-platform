@@ -1,4 +1,4 @@
-"""Tushare adapter for Raw Zone structured market data assets."""
+"""Tushare adapter for Raw Zone structured Tushare assets."""
 
 from __future__ import annotations
 
@@ -11,6 +11,7 @@ import uuid
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 from datetime import date, datetime
+from decimal import Decimal, InvalidOperation
 from typing import Any, Protocol, cast
 
 import pyarrow as pa  # type: ignore[import-untyped]
@@ -21,6 +22,8 @@ from data_platform.adapters.tushare.assets import (
     ALLOW_NULL_IDENTITY_METADATA_KEY,
     ALLOW_NULL_IDENTITY_METADATA_VALUE,
     EVENT_METADATA_FIELDS,
+    FINANCIAL_DATASET_FIELDS,
+    FINANCIAL_VERSION_FIELDS,
     REFERENCE_DATA_IDENTITY_FIELDS,
     TUSHARE_ASSETS,
     TUSHARE_STOCK_BASIC_ASSET_NAME,
@@ -32,6 +35,13 @@ STOCK_BASIC_IDENTITY_FIELDS = ("ts_code",)
 MARKET_DATA_IDENTITY_FIELDS = ("ts_code", "trade_date")
 MARKET_DATASETS = frozenset({"daily", "weekly", "monthly", "adj_factor", "daily_basic"})
 EVENT_DATASETS = frozenset(EVENT_METADATA_FIELDS)
+FINANCIAL_DATASETS = frozenset(FINANCIAL_DATASET_FIELDS)
+FINANCIAL_REQUIRED_FIELDS = (
+    FINANCIAL_VERSION_FIELDS[0],
+    FINANCIAL_VERSION_FIELDS[1],
+    FINANCIAL_VERSION_FIELDS[3],
+)
+FINANCIAL_DATE_FIELDS = frozenset({"ann_date", "f_ann_date", "end_date"})
 STOCK_TS_CODE_DATASETS = frozenset(
     {
         "stock_basic",
@@ -43,6 +53,7 @@ STOCK_TS_CODE_DATASETS = frozenset(
         "stock_company",
         "namechange",
         *EVENT_DATASETS,
+        *FINANCIAL_DATASETS,
     }
 )
 DATE_IDENTITY_FIELDS = frozenset(
@@ -135,6 +146,18 @@ class _TushareClient(Protocol):
     def disclosure_date(self, **kwargs: Any) -> Any:
         """Return disclosure calendar event rows from Tushare Pro."""
 
+    def income(self, **kwargs: Any) -> Any:
+        """Return income statement rows from Tushare Pro."""
+
+    def balancesheet(self, **kwargs: Any) -> Any:
+        """Return balance sheet rows from Tushare Pro."""
+
+    def cashflow(self, **kwargs: Any) -> Any:
+        """Return cash flow statement rows from Tushare Pro."""
+
+    def fina_indicator(self, **kwargs: Any) -> Any:
+        """Return financial indicator rows from Tushare Pro."""
+
 
 class TushareAdapter(BaseAdapter):
     """Tushare reference adapter exposing Raw Zone structured assets."""
@@ -186,6 +209,8 @@ class TushareAdapter(BaseAdapter):
             return _to_reference_table(spec.asset.dataset, result, spec.asset.schema)
         if spec.asset.dataset in EVENT_METADATA_FIELDS:
             return _to_event_table(spec.asset.dataset, result, spec.asset.schema)
+        if spec.asset.dataset in FINANCIAL_DATASET_FIELDS:
+            return _to_financial_table(spec.asset.dataset, result, spec.asset.schema)
         return _to_asset_table(result, spec.asset, spec.identity_fields)
 
     def _get_client(self) -> _TushareClient:
@@ -351,6 +376,37 @@ def _to_event_table(dataset: str, result: Any, schema: pa.Schema) -> pa.Table:
     return table
 
 
+def _to_financial_table(dataset: str, result: Any, schema: pa.Schema) -> pa.Table:
+    try:
+        spec = _FETCH_SPECS_BY_DATASET[dataset]
+    except KeyError as exc:
+        msg = f"unsupported Tushare financial dataset: {dataset!r}"
+        raise ValueError(msg) from exc
+
+    asset = AssetSpec(
+        name=spec.asset.name,
+        dataset=spec.asset.dataset,
+        partition=spec.asset.partition,
+        schema=schema,
+    )
+    field_names = _field_names_from_table_or_result(result)
+    if field_names is not None:
+        _validate_asset_fields(field_names, asset)
+
+    rows = _financial_records_from_result(result, asset)
+    normalized_rows = _normalize_financial_records(rows, asset)
+    _validate_asset_records(normalized_rows, asset, FINANCIAL_REQUIRED_FIELDS)
+    columns = {
+        field.name: [row[field.name] for row in normalized_rows]
+        for field in asset.schema
+    }
+    try:
+        return pa.table(columns, schema=asset.schema)
+    except (pa.ArrowInvalid, pa.ArrowTypeError) as exc:
+        msg = f"Tushare {dataset} response could not be converted to financial schema: {exc}"
+        raise UpstreamSchemaError(msg) from exc
+
+
 def _to_asset_table(
     value: Any,
     asset: AssetSpec,
@@ -408,6 +464,18 @@ def _records_from_result(value: Any, asset: AssetSpec) -> list[Mapping[str, Any]
     raise TypeError(msg)
 
 
+def _field_names_from_table_or_result(value: Any) -> list[str] | None:
+    if isinstance(value, pa.Table):
+        return list(value.column_names)
+    return _field_names_from_result(value)
+
+
+def _financial_records_from_result(value: Any, asset: AssetSpec) -> list[Mapping[str, Any]]:
+    if isinstance(value, pa.Table):
+        return _coerce_record_list(value.to_pylist(), asset)
+    return _records_from_result(value, asset)
+
+
 def _coerce_record_list(rows: list[Any], asset: AssetSpec) -> list[Mapping[str, Any]]:
     records: list[Mapping[str, Any]] = []
     for index, row in enumerate(rows):
@@ -419,6 +487,64 @@ def _coerce_record_list(rows: list[Any], asset: AssetSpec) -> list[Mapping[str, 
             raise TypeError(msg)
         records.append(row)
     return records
+
+
+def _normalize_financial_records(
+    rows: Sequence[Mapping[str, Any]],
+    asset: AssetSpec,
+) -> list[Mapping[str, Any]]:
+    normalized_rows: list[Mapping[str, Any]] = []
+    for index, row in enumerate(rows):
+        missing = [field_name for field_name in asset.schema.names if field_name not in row]
+        if missing:
+            joined = ", ".join(missing)
+            msg = f"Tushare {asset.dataset} row {index} missing required fields: {joined}"
+            raise UpstreamSchemaError(msg)
+
+        normalized_rows.append(
+            {
+                field.name: _normalize_financial_value(row[field.name], field, index, asset)
+                for field in asset.schema
+            }
+        )
+    return normalized_rows
+
+
+def _normalize_financial_value(
+    value: Any,
+    field: pa.Field,
+    row_index: int,
+    asset: AssetSpec,
+) -> Any:
+    if _is_nullish(value):
+        return None
+    if pa.types.is_string(field.type):
+        normalized = _normalize_string(value)
+        if normalized is not None and field.name in FINANCIAL_DATE_FIELDS:
+            return normalized.strip()
+        return normalized
+    if pa.types.is_decimal(field.type):
+        return _normalize_decimal(value, field.name, row_index, asset)
+    return value
+
+
+def _normalize_decimal(
+    value: Any,
+    field_name: str,
+    row_index: int,
+    asset: AssetSpec,
+) -> Decimal | None:
+    text = str(value).strip()
+    if not text:
+        return None
+    try:
+        return Decimal(text)
+    except InvalidOperation as exc:
+        msg = (
+            f"Tushare {asset.dataset} row {row_index} has invalid numeric field: "
+            f"{field_name}"
+        )
+        raise ValueError(msg) from exc
 
 
 def _validate_asset_records(
@@ -654,12 +780,17 @@ _METHOD_BY_DATASET = {
     "share_float": "share_float",
     "stk_holdernumber": "stk_holdernumber",
     "disclosure_date": "disclosure_date",
+    "income": "income",
+    "balancesheet": "balancesheet",
+    "cashflow": "cashflow",
+    "fina_indicator": "fina_indicator",
 }
 _IDENTITY_FIELDS_BY_DATASET = {
     "stock_basic": STOCK_BASIC_IDENTITY_FIELDS,
     **{dataset: MARKET_DATA_IDENTITY_FIELDS for dataset in MARKET_DATASETS},
     **REFERENCE_DATA_IDENTITY_FIELDS,
     **EVENT_IDENTITY_FIELDS,
+    **{dataset: FINANCIAL_REQUIRED_FIELDS for dataset in FINANCIAL_DATASETS},
 }
 _PARTITION_DATE_FIELD_BY_DATASET = {
     **{dataset: "trade_date" for dataset in MARKET_DATASETS},
@@ -674,6 +805,7 @@ _PARTITION_DATE_FIELD_BY_DATASET = {
     "share_float": "ann_date",
     "stk_holdernumber": "ann_date",
     "disclosure_date": "ann_date",
+    **{dataset: "end_date" for dataset in FINANCIAL_DATASETS},
 }
 _PARTITION_REQUEST_PARAMS_BY_DATASET = {
     **{dataset: ("trade_date",) for dataset in MARKET_DATASETS},
@@ -688,6 +820,7 @@ _PARTITION_REQUEST_PARAMS_BY_DATASET = {
     "share_float": ("ann_date",),
     "stk_holdernumber": ("ann_date",),
     "disclosure_date": ("ann_date",),
+    **{dataset: ("period",) for dataset in FINANCIAL_DATASETS},
 }
 _DATE_PARAM_NAMES_BY_DATASET = {
     **{dataset: ("trade_date", "start_date", "end_date") for dataset in MARKET_DATASETS},
@@ -709,6 +842,10 @@ _DATE_PARAM_NAMES_BY_DATASET = {
         "modify_date",
         "start_date",
     ),
+    **{
+        dataset: ("ann_date", "start_date", "end_date", "period")
+        for dataset in FINANCIAL_DATASETS
+    },
 }
 _FETCH_SPECS_BY_ASSET_NAME = {
     _asset.name: _TushareFetchSpec(
@@ -735,6 +872,7 @@ __all__ = [
     "TOKEN_ENV_VAR",
     "TushareAdapter",
     "_to_event_table",
+    "_to_financial_table",
     "_to_reference_table",
     "main",
     "run_stock_basic",
