@@ -1,3 +1,24 @@
 version: 2
 
-sources: []
+sources:
+  - name: raw
+    description: Raw Zone parquet artifacts exposed to staging models.
+    loader: "Raw Zone path pattern: ${DP_RAW_ZONE_PATH}/tushare/stock_basic/**/*.parquet"
+    tables:
+      - name: tushare_stock_basic
+        description: >
+          Tushare stock_basic parquet files written by the Raw Zone adapter.
+          stg_stock_basic consumes this parquet glob through dp_raw_path and
+          selects the latest artifact from _manifest.json rather than dbt
+          source() external-location plumbing. raw_loaded_at is the manifest
+          artifact written_at timestamp.
+
+models:
+  - name: stg_stock_basic
+    description: Staging view over the latest Raw Zone Tushare stock_basic artifact.
+    columns:
+      - name: ts_code
+        description: Trimmed Tushare security code.
+        tests:
+          - unique
+          - not_null

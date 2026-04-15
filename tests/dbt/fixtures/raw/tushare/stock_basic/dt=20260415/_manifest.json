@@ -1,0 +1,16 @@
+{
+  "artifacts": [
+    {
+      "dataset": "stock_basic",
+      "partition_date": "2026-04-15",
+      "path": "tushare/stock_basic/dt=20260415/sample.parquet",
+      "row_count": 3,
+      "run_id": "sample",
+      "source_id": "tushare",
+      "written_at": "2026-04-15T01:00:00+00:00"
+    }
+  ],
+  "dataset": "stock_basic",
+  "partition_date": "2026-04-15",
+  "source_id": "tushare"
+}
