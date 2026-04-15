@@ -14,6 +14,7 @@ pq = pytest.importorskip("pyarrow.parquet")
 
 from data_platform.adapters.base import AdapterRegistry, DataSourceAdapter  # noqa: E402
 from data_platform.adapters.tushare import (  # noqa: E402
+    TUSHARE_ASSETS,
     TUSHARE_STOCK_BASIC_ASSET,
     TushareAdapter,
 )
@@ -81,7 +82,7 @@ def test_tushare_adapter_declares_stock_basic_asset_and_quota() -> None:
     adapter = TushareAdapter(token="test-token", client=FakeTushareClient(_stock_basic_frame(1)))
 
     assert adapter.source_id() == "tushare"
-    assert adapter.get_assets() == [TUSHARE_STOCK_BASIC_ASSET]
+    assert adapter.get_assets() == TUSHARE_ASSETS
     assert adapter.get_assets()[0].dataset == "stock_basic"
     assert adapter.get_assets()[0].partition == "static"
     assert adapter.get_staging_dbt_models() == ["stg_stock_basic"]

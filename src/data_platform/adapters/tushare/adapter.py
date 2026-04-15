@@ -1,4 +1,4 @@
-"""Minimal Tushare adapter for the stock_basic API."""
+"""Tushare adapter for Raw Zone structured market data assets."""
 
 from __future__ import annotations
 
@@ -9,6 +9,7 @@ import re
 import sys
 import uuid
 from collections.abc import Mapping, Sequence
+from dataclasses import dataclass
 from datetime import date, datetime
 from typing import Any, Protocol, cast
 
@@ -17,17 +18,28 @@ import pandas as pd  # type: ignore[import-untyped]
 
 from data_platform.adapters.base import AssetSpec, BaseAdapter, FetchParams
 from data_platform.adapters.tushare.assets import (
+    TUSHARE_ADJ_FACTOR_ASSET_NAME,
     TUSHARE_ASSETS,
+    TUSHARE_DAILY_ASSET_NAME,
+    TUSHARE_DAILY_BASIC_ASSET_NAME,
+    TUSHARE_MONTHLY_ASSET_NAME,
     TUSHARE_STOCK_BASIC_ASSET_NAME,
-    TUSHARE_STOCK_BASIC_FIELDS,
-    TUSHARE_STOCK_BASIC_FIELDS_CSV,
-    TUSHARE_STOCK_BASIC_SCHEMA,
+    TUSHARE_WEEKLY_ASSET_NAME,
 )
 from data_platform.raw import RawArtifact, RawWriter
 
 TOKEN_ENV_VAR = "DP_TUSHARE_TOKEN"
 STOCK_BASIC_IDENTITY_FIELDS = ("ts_code",)
+MARKET_DATA_IDENTITY_FIELDS = ("ts_code", "trade_date")
 STOCK_BASIC_TS_CODE_PATTERN = re.compile(r"\d{6}\.(?:SH|SZ|BJ)")
+TRADE_DATE_PATTERN = re.compile(r"\d{8}")
+
+
+@dataclass(frozen=True, slots=True)
+class _TushareFetchSpec:
+    asset: AssetSpec
+    method_name: str
+    identity_fields: tuple[str, ...]
 
 
 class AdapterConfigError(RuntimeError):
@@ -38,9 +50,24 @@ class _TushareClient(Protocol):
     def stock_basic(self, **kwargs: Any) -> Any:
         """Return stock_basic rows from Tushare Pro."""
 
+    def daily(self, **kwargs: Any) -> Any:
+        """Return daily bar rows from Tushare Pro."""
+
+    def weekly(self, **kwargs: Any) -> Any:
+        """Return weekly bar rows from Tushare Pro."""
+
+    def monthly(self, **kwargs: Any) -> Any:
+        """Return monthly bar rows from Tushare Pro."""
+
+    def adj_factor(self, **kwargs: Any) -> Any:
+        """Return adjustment factor rows from Tushare Pro."""
+
+    def daily_basic(self, **kwargs: Any) -> Any:
+        """Return daily basic rows from Tushare Pro."""
+
 
 class TushareAdapter(BaseAdapter):
-    """Tushare reference adapter exposing only the stock_basic asset."""
+    """Tushare reference adapter exposing Raw Zone structured assets."""
 
     def __init__(
         self,
@@ -78,15 +105,15 @@ class TushareAdapter(BaseAdapter):
         return dict(self._quota_config)
 
     def _fetch(self, asset_id: str, params: FetchParams) -> pa.Table:
-        if asset_id != TUSHARE_STOCK_BASIC_ASSET_NAME:
-            msg = f"unsupported Tushare asset: {asset_id!r}"
-            raise ValueError(msg)
-
+        spec = _fetch_spec_by_asset_name(asset_id)
         request_params = dict(params)
-        request_params["fields"] = TUSHARE_STOCK_BASIC_FIELDS_CSV
+        if spec.asset.partition == "daily":
+            _validate_trade_date_param(spec.asset.dataset, request_params)
+        request_params["fields"] = _fields_csv(spec.asset)
 
-        result = self._get_client().stock_basic(**request_params)
-        return _to_stock_basic_table(result)
+        fetch_method = getattr(self._get_client(), spec.method_name)
+        result = fetch_method(**request_params)
+        return _to_asset_table(result, spec.asset, spec.identity_fields)
 
     def _get_client(self) -> _TushareClient:
         if self._client is not None:
@@ -103,16 +130,23 @@ class TushareAdapter(BaseAdapter):
         return client
 
 
-def run_stock_basic(asset_id: str, partition_date: date) -> RawArtifact:
+def run_tushare_asset(
+    asset_id: str,
+    partition_date: date,
+    params: FetchParams | None = None,
+) -> RawArtifact:
     """Fetch a Tushare asset and write it as a Raw Zone Parquet artifact."""
 
     adapter = TushareAdapter()
     asset = _asset_by_name(adapter, asset_id)
-    table = adapter.fetch(asset.name, {})
+    table = adapter.fetch(asset.name, _fetch_params_for_raw_partition(asset, partition_date, params))
 
     if not isinstance(table, pa.Table):
         msg = f"Tushare fetch returned unsupported result for asset={asset.name!r}"
         raise TypeError(msg)
+
+    if asset.partition == "daily":
+        _validate_raw_partition_trade_date(table, asset, partition_date)
 
     return RawWriter().write_arrow(
         adapter.source_id(),
@@ -123,6 +157,12 @@ def run_stock_basic(asset_id: str, partition_date: date) -> RawArtifact:
     )
 
 
+def run_stock_basic(asset_id: str, partition_date: date) -> RawArtifact:
+    """Compatibility wrapper for the original stock_basic Raw runner."""
+
+    return run_tushare_asset(asset_id, partition_date)
+
+
 def main(argv: Sequence[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description="Fetch Tushare assets into the Raw Zone.")
     parser.add_argument("--asset", required=True)
@@ -131,7 +171,7 @@ def main(argv: Sequence[str] | None = None) -> int:
 
     try:
         partition_date = _parse_partition_date(args.date)
-        artifact = run_stock_basic(args.asset, partition_date)
+        artifact = run_tushare_asset(args.asset, partition_date)
     except Exception as exc:
         _print_error(exc, args.asset)
         return 1
@@ -148,7 +188,40 @@ def _asset_by_name(adapter: TushareAdapter, asset_id: str) -> AssetSpec:
     raise ValueError(msg)
 
 
+def _fetch_spec_by_asset_name(asset_id: str) -> _TushareFetchSpec:
+    try:
+        return _FETCH_SPECS_BY_ASSET_NAME[asset_id]
+    except KeyError as exc:
+        msg = f"unsupported Tushare asset: {asset_id!r}"
+        raise ValueError(msg) from exc
+
+
+def _fetch_params_for_raw_partition(
+    asset: AssetSpec,
+    partition_date: date,
+    params: FetchParams | None,
+) -> dict[str, Any]:
+    fetch_params = dict(params or {})
+    if asset.partition == "daily":
+        expected_trade_date = f"{partition_date:%Y%m%d}"
+        if "trade_date" not in fetch_params:
+            fetch_params["trade_date"] = expected_trade_date
+        else:
+            _validate_trade_date_param(asset.dataset, fetch_params)
+            if str(fetch_params["trade_date"]) != expected_trade_date:
+                msg = (
+                    f"Tushare {asset.dataset} trade_date {fetch_params['trade_date']!r} "
+                    f"does not match Raw partition date {expected_trade_date!r}"
+                )
+                raise ValueError(msg)
+    return fetch_params
+
+
 def _parse_partition_date(value: str) -> date:
+    if not TRADE_DATE_PATTERN.fullmatch(value):
+        msg = f"date must use YYYYMMDD format: {value!r}"
+        raise ValueError(msg)
+
     try:
         return datetime.strptime(value, "%Y%m%d").date()
     except ValueError as exc:
@@ -157,32 +230,39 @@ def _parse_partition_date(value: str) -> date:
 
 
 def _to_stock_basic_table(value: Any) -> pa.Table:
+    spec = _fetch_spec_by_asset_name(TUSHARE_STOCK_BASIC_ASSET_NAME)
+    return _to_asset_table(value, spec.asset, spec.identity_fields)
+
+
+def _to_asset_table(
+    value: Any,
+    asset: AssetSpec,
+    identity_fields: tuple[str, ...],
+) -> pa.Table:
     if isinstance(value, pa.Table):
-        _validate_stock_basic_fields(value.column_names)
-        _validate_stock_basic_identity_columns(value)
-        return value.select(TUSHARE_STOCK_BASIC_FIELDS).cast(TUSHARE_STOCK_BASIC_SCHEMA)
+        _validate_asset_fields(value.column_names, asset)
+        _validate_asset_identity_columns(value, asset, identity_fields)
+        return value.select(asset.schema.names).cast(asset.schema)
 
     field_names = _field_names_from_result(value)
     if field_names is not None:
-        _validate_stock_basic_fields(field_names)
+        _validate_asset_fields(field_names, asset)
 
-    rows = _records_from_result(value)
-    _validate_stock_basic_records(rows)
+    rows = _records_from_result(value, asset)
+    _validate_asset_records(rows, asset, identity_fields)
     columns = {
-        field_name: [_normalize_string(row[field_name]) for row in rows]
-        for field_name in TUSHARE_STOCK_BASIC_FIELDS
+        field.name: [_normalize_value(row[field.name], field.type) for row in rows]
+        for field in asset.schema
     }
-    return pa.table(columns, schema=TUSHARE_STOCK_BASIC_SCHEMA)
+    return pa.table(columns, schema=asset.schema)
 
 
-def _validate_stock_basic_fields(field_names: Sequence[str]) -> None:
+def _validate_asset_fields(field_names: Sequence[str], asset: AssetSpec) -> None:
     available = set(field_names)
-    missing = [
-        field_name for field_name in TUSHARE_STOCK_BASIC_FIELDS if field_name not in available
-    ]
+    missing = [field_name for field_name in asset.schema.names if field_name not in available]
     if missing:
         joined = ", ".join(missing)
-        msg = f"Tushare stock_basic response missing required fields: {joined}"
+        msg = f"Tushare {asset.dataset} response missing required fields: {joined}"
         raise ValueError(msg)
 
 
@@ -197,26 +277,26 @@ def _field_names_from_result(value: Any) -> list[str] | None:
         return None
 
 
-def _records_from_result(value: Any) -> list[Mapping[str, Any]]:
+def _records_from_result(value: Any, asset: AssetSpec) -> list[Mapping[str, Any]]:
     if isinstance(value, list):
-        return _coerce_record_list(value)
+        return _coerce_record_list(value, asset)
 
     to_dict = getattr(value, "to_dict", None)
     if callable(to_dict):
         records = to_dict("records")
         if isinstance(records, list):
-            return _coerce_record_list(records)
+            return _coerce_record_list(records, asset)
 
-    msg = "Tushare stock_basic result must be a pandas DataFrame, Arrow table, or row list"
+    msg = f"Tushare {asset.dataset} result must be a pandas DataFrame, Arrow table, or row list"
     raise TypeError(msg)
 
 
-def _coerce_record_list(rows: list[Any]) -> list[Mapping[str, Any]]:
+def _coerce_record_list(rows: list[Any], asset: AssetSpec) -> list[Mapping[str, Any]]:
     records: list[Mapping[str, Any]] = []
     for index, row in enumerate(rows):
         if not isinstance(row, Mapping):
             msg = (
-                "Tushare stock_basic row "
+                f"Tushare {asset.dataset} row "
                 f"{index} must be a mapping, got {type(row).__name__}"
             )
             raise TypeError(msg)
@@ -224,49 +304,118 @@ def _coerce_record_list(rows: list[Any]) -> list[Mapping[str, Any]]:
     return records
 
 
-def _validate_stock_basic_records(rows: Sequence[Mapping[str, Any]]) -> None:
+def _validate_asset_records(
+    rows: Sequence[Mapping[str, Any]],
+    asset: AssetSpec,
+    identity_fields: tuple[str, ...],
+) -> None:
     for index, row in enumerate(rows):
-        missing = [
-            field_name for field_name in TUSHARE_STOCK_BASIC_FIELDS if field_name not in row
-        ]
+        missing = [field_name for field_name in asset.schema.names if field_name not in row]
         if missing:
             joined = ", ".join(missing)
-            msg = f"Tushare stock_basic row {index} missing required fields: {joined}"
+            msg = f"Tushare {asset.dataset} row {index} missing required fields: {joined}"
             raise ValueError(msg)
 
-        for field_name in STOCK_BASIC_IDENTITY_FIELDS:
-            _validate_stock_basic_identity_value(row[field_name], index, field_name)
+        for field_name in identity_fields:
+            _validate_identity_value(row[field_name], index, field_name, asset)
 
 
-def _validate_stock_basic_identity_columns(table: pa.Table) -> None:
-    for field_name in STOCK_BASIC_IDENTITY_FIELDS:
+def _validate_asset_identity_columns(
+    table: pa.Table,
+    asset: AssetSpec,
+    identity_fields: tuple[str, ...],
+) -> None:
+    for field_name in identity_fields:
         values = table[field_name].to_pylist()
         for index, value in enumerate(values):
-            _validate_stock_basic_identity_value(value, index, field_name)
+            _validate_identity_value(value, index, field_name, asset)
 
 
-def _validate_stock_basic_identity_value(value: Any, row_index: int, field_name: str) -> None:
+def _validate_identity_value(
+    value: Any,
+    row_index: int,
+    field_name: str,
+    asset: AssetSpec,
+) -> None:
     if _is_nullish(value):
-        msg = f"Tushare stock_basic row {row_index} has null identity field: {field_name}"
+        msg = f"Tushare {asset.dataset} row {row_index} has null identity field: {field_name}"
         raise ValueError(msg)
 
     if not pd.api.types.is_scalar(value):
         msg = (
-            f"Tushare stock_basic row {row_index} has non-scalar identity field: "
+            f"Tushare {asset.dataset} row {row_index} has non-scalar identity field: "
             f"{field_name}"
         )
         raise ValueError(msg)
 
     normalized_value = str(value)
     if not normalized_value.strip():
-        msg = f"Tushare stock_basic row {row_index} has blank identity field: {field_name}"
+        msg = f"Tushare {asset.dataset} row {row_index} has blank identity field: {field_name}"
         raise ValueError(msg)
 
-    if normalized_value != normalized_value.strip() or not STOCK_BASIC_TS_CODE_PATTERN.fullmatch(
-        normalized_value
+    if field_name == "ts_code" and (
+        normalized_value != normalized_value.strip()
+        or not STOCK_BASIC_TS_CODE_PATTERN.fullmatch(normalized_value)
     ):
-        msg = f"Tushare stock_basic row {row_index} has malformed identity field: {field_name}"
+        msg = f"Tushare {asset.dataset} row {row_index} has malformed identity field: {field_name}"
         raise ValueError(msg)
+
+    if field_name == "trade_date" and not _is_valid_trade_date(normalized_value):
+        msg = f"Tushare {asset.dataset} row {row_index} has malformed identity field: {field_name}"
+        raise ValueError(msg)
+
+
+def _validate_trade_date_param(dataset: str, params: Mapping[str, Any]) -> None:
+    value = params.get("trade_date")
+    if value is None:
+        return
+    if not pd.api.types.is_scalar(value) or _is_nullish(value):
+        msg = f"Tushare {dataset} trade_date must be a YYYYMMDD string"
+        raise ValueError(msg)
+    if not _is_valid_trade_date(str(value)):
+        msg = f"Tushare {dataset} trade_date must be a valid YYYYMMDD date: {value!r}"
+        raise ValueError(msg)
+
+
+def _validate_raw_partition_trade_date(
+    table: pa.Table,
+    asset: AssetSpec,
+    partition_date: date,
+) -> None:
+    expected_trade_date = f"{partition_date:%Y%m%d}"
+    if "trade_date" not in table.column_names:
+        msg = f"Tushare {asset.dataset} response missing required fields: trade_date"
+        raise ValueError(msg)
+
+    for index, value in enumerate(table["trade_date"].to_pylist()):
+        if str(value) != expected_trade_date:
+            msg = (
+                f"Tushare {asset.dataset} row {index} trade_date {value!r} "
+                f"does not match Raw partition date {expected_trade_date!r}"
+            )
+            raise ValueError(msg)
+
+
+def _is_valid_trade_date(value: str) -> bool:
+    if not TRADE_DATE_PATTERN.fullmatch(value):
+        return False
+    try:
+        parsed = datetime.strptime(value, "%Y%m%d").date()
+    except ValueError:
+        return False
+    return f"{parsed:%Y%m%d}" == value
+
+
+def _fields_csv(asset: AssetSpec) -> str:
+    return ",".join(asset.schema.names)
+
+
+def _normalize_value(value: Any, data_type: pa.DataType) -> Any:
+    if _is_nullish(value):
+        return None
+    if pa.types.is_string(data_type):
+        return _normalize_string(value)
+    return value
 
 
 def _normalize_string(value: Any) -> str | None:
@@ -291,6 +440,28 @@ def _print_error(exc: BaseException, asset_id: str) -> None:
     print(json.dumps(payload, ensure_ascii=False, sort_keys=True), file=sys.stderr)
 
 
+_FETCH_SPECS_BY_ASSET_NAME = {
+    _asset.name: _TushareFetchSpec(
+        asset=_asset,
+        method_name="stock_basic",
+        identity_fields=STOCK_BASIC_IDENTITY_FIELDS,
+    )
+    if _asset.name == TUSHARE_STOCK_BASIC_ASSET_NAME
+    else _TushareFetchSpec(
+        asset=_asset,
+        method_name={
+            TUSHARE_DAILY_ASSET_NAME: "daily",
+            TUSHARE_WEEKLY_ASSET_NAME: "weekly",
+            TUSHARE_MONTHLY_ASSET_NAME: "monthly",
+            TUSHARE_ADJ_FACTOR_ASSET_NAME: "adj_factor",
+            TUSHARE_DAILY_BASIC_ASSET_NAME: "daily_basic",
+        }[_asset.name],
+        identity_fields=MARKET_DATA_IDENTITY_FIELDS,
+    )
+    for _asset in TUSHARE_ASSETS
+}
+
+
 if __name__ == "__main__":
     raise SystemExit(main())
 
@@ -301,4 +472,5 @@ __all__ = [
     "TushareAdapter",
     "main",
     "run_stock_basic",
+    "run_tushare_asset",
 ]
