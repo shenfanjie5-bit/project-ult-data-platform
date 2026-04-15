@@ -72,8 +72,11 @@ def test_staging_sql_uses_raw_manifest_only() -> None:
     assert "hive_partitioning=1" in macro_sql
     assert "filename=1" in macro_sql
     assert "union_by_name=1" in macro_sql
+    assert "union all by name" in macro_sql
     assert "row_number() over" in macro_sql
+    assert "partition by partition_date" in macro_sql
     assert "order by raw_loaded_at desc, partition_date desc, source_run_id desc" in macro_sql
+    assert "select *" not in macro_sql.lower()
 
     for path in sorted(STAGING_DIR.glob("stg_*.sql")):
         model_sql = path.read_text()
@@ -172,6 +175,68 @@ def test_rawwriter_fixtures_execute_all_staging_models_with_duckdb(tmp_path: Pat
     assert income_type == "DECIMAL(38,18)"
 
 
+def test_partitioned_staging_keeps_latest_artifact_per_partition(
+    tmp_path: Path,
+) -> None:
+    duckdb = pytest.importorskip("duckdb")
+
+    raw_zone_path = tmp_path / "raw"
+    writer = RawWriter(
+        raw_zone_path=raw_zone_path,
+        iceberg_warehouse_path=tmp_path / "iceberg" / "warehouse",
+    )
+    daily_asset = _asset_by_dataset("daily")
+    writer.write_arrow(
+        "tushare",
+        "daily",
+        date(2026, 4, 14),
+        str(uuid4()),
+        _sample_table_with_values(
+            daily_asset,
+            {"ts_code": "000000.SZ", "trade_date": "20260414"},
+        ),
+    )
+    first_partition_latest = writer.write_arrow(
+        "tushare",
+        "daily",
+        date(2026, 4, 14),
+        str(uuid4()),
+        _sample_table_with_values(
+            daily_asset,
+            {"ts_code": "000001.SZ", "trade_date": "20260414"},
+        ),
+    )
+    second_partition = writer.write_arrow(
+        "tushare",
+        "daily",
+        date(2026, 4, 15),
+        str(uuid4()),
+        _sample_table_with_values(
+            daily_asset,
+            {"ts_code": "000002.SZ", "trade_date": "20260415"},
+        ),
+    )
+
+    model_sql = _render_staging_model("stg_daily", raw_zone_path)
+    connection = duckdb.connect(":memory:")
+    try:
+        connection.execute(f"create view stg_daily as {model_sql}")
+        rows = connection.execute(
+            """
+            select ts_code, trade_date, source_run_id
+            from stg_daily
+            order by trade_date, ts_code
+            """
+        ).fetchall()
+    finally:
+        connection.close()
+
+    assert rows == [
+        ("000001.SZ", date(2026, 4, 14), first_partition_latest.run_id),
+        ("000002.SZ", date(2026, 4, 15), second_partition.run_id),
+    ]
+
+
 def test_staging_sql_tolerates_schema_drifted_historical_artifact(
     tmp_path: Path,
 ) -> None:
@@ -223,6 +288,47 @@ def test_staging_sql_tolerates_schema_drifted_historical_artifact(
 
     assert result == (1, 1, latest_artifact.run_id)
     assert duplicate_count == 0
+
+
+def test_staging_sql_tolerates_schema_drifted_latest_artifact(
+    tmp_path: Path,
+) -> None:
+    duckdb = pytest.importorskip("duckdb")
+
+    raw_zone_path = tmp_path / "raw"
+    writer = RawWriter(
+        raw_zone_path=raw_zone_path,
+        iceberg_warehouse_path=tmp_path / "iceberg" / "warehouse",
+    )
+    latest_artifact = writer.write_arrow(
+        "tushare",
+        "stock_basic",
+        date(2026, 4, 15),
+        str(uuid4()),
+        pa.table({"ts_code": ["000009.SZ"], "list_date": ["19910403"]}),
+    )
+
+    model_sql = _render_staging_model("stg_stock_basic", raw_zone_path)
+    connection = duckdb.connect(":memory:")
+    try:
+        connection.execute(f"create view stg_stock_basic as {model_sql}")
+        row = connection.execute(
+            """
+            select ts_code, symbol, name, list_date, is_active, source_run_id
+            from stg_stock_basic
+            """
+        ).fetchone()
+    finally:
+        connection.close()
+
+    assert row == (
+        "000009.SZ",
+        None,
+        None,
+        date(1991, 4, 3),
+        None,
+        latest_artifact.run_id,
+    )
 
 
 def test_dbt_run_and_test_staging_with_rawwriter_fixture(tmp_path: Path) -> None:
@@ -308,9 +414,13 @@ def _write_all_tushare_raw_fixtures(raw_zone_path: Path, tmp_path: Path) -> None
 
 
 def _sample_table(asset: Any) -> pa.Table:
+    return _sample_table_with_values(asset, {})
+
+
+def _sample_table_with_values(asset: Any, overrides: dict[str, Any]) -> pa.Table:
     return pa.table(
         {
-            field.name: [_sample_value(asset.dataset, field)]
+            field.name: [overrides.get(field.name, _sample_value(asset.dataset, field))]
             for field in asset.schema
         },
         schema=asset.schema,

@@ -32,6 +32,7 @@ ranked_raw_artifacts as (
         partition_date,
         partition_yyyymmdd,
         row_number() over (
+            partition by partition_date
             order by raw_loaded_at desc, partition_date desc, source_run_id desc
         ) as artifact_rank
     from raw_artifacts
@@ -46,6 +47,26 @@ latest_raw_artifact as (
     where artifact_rank = 1
 ),
 
+raw_{{ dataset }}_expected_columns as (
+    select
+{%- for column_name in source_columns %}
+        null as "{{ column_name }}",
+{%- endfor %}
+        null as dt,
+        null as filename
+    where false
+),
+
+raw_{{ dataset }}_files as (
+    select columns(*)
+    from read_parquet(
+        '{{ dp_raw_path(source_id, dataset) }}',
+        hive_partitioning=1,
+        filename=1,
+        union_by_name=1
+    )
+),
+
 raw_{{ dataset }} as (
     select
 {%- for column_name in source_columns %}
@@ -53,11 +74,12 @@ raw_{{ dataset }} as (
 {%- endfor %}
         dt,
         filename
-    from read_parquet(
-        '{{ dp_raw_path(source_id, dataset) }}',
-        hive_partitioning=1,
-        filename=1,
-        union_by_name=1
+    from (
+        select columns(*)
+        from raw_{{ dataset }}_expected_columns
+        union all by name
+        select columns(*)
+        from raw_{{ dataset }}_files
     )
 ),
 
