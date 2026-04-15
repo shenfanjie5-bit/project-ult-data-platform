@@ -1,10 +1,12 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+from pathlib import Path
 from typing import Any
 
 import pyarrow as pa  # type: ignore[import-untyped]
 import pytest
+from pyiceberg.catalog.memory import InMemoryCatalog
 
 from data_platform.ddl import iceberg_tables
 from data_platform.ddl.iceberg_tables import (
@@ -193,6 +195,17 @@ def test_ensure_tables_rejects_existing_table_schema_drift() -> None:
         ensure_tables(catalog, [spec])  # type: ignore[arg-type]
 
     assert catalog.create_calls == []
+
+
+def test_ensure_tables_accepts_real_pyiceberg_string_schema(tmp_path: Path) -> None:
+    catalog = InMemoryCatalog("test", warehouse=str(tmp_path / "warehouse"))
+
+    tables = ensure_tables(catalog, [CANONICAL_STOCK_BASIC_SPEC])
+
+    assert len(tables) == 1
+    assert catalog.load_table("canonical.stock_basic").schema().as_arrow().names == (
+        CANONICAL_STOCK_BASIC_SPEC.schema.names
+    )
 
 
 def test_cli_ensure_uses_project_catalog_and_default_specs(
