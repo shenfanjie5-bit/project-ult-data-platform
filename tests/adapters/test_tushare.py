@@ -85,7 +85,9 @@ def test_tushare_adapter_declares_stock_basic_asset_and_quota() -> None:
     assert adapter.get_assets() == TUSHARE_ASSETS
     assert adapter.get_assets()[0].dataset == "stock_basic"
     assert adapter.get_assets()[0].partition == "static"
-    assert adapter.get_staging_dbt_models() == ["stg_stock_basic"]
+    assert adapter.get_staging_dbt_models() == [
+        f"stg_{asset.dataset}" for asset in TUSHARE_ASSETS
+    ]
     assert adapter.get_quota_config() == {
         "requests_per_minute": 200,
         "daily_credit_quota": None,

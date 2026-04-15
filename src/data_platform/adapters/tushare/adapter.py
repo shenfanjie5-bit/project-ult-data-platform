@@ -18,19 +18,29 @@ import pandas as pd  # type: ignore[import-untyped]
 
 from data_platform.adapters.base import AssetSpec, BaseAdapter, FetchParams
 from data_platform.adapters.tushare.assets import (
-    TUSHARE_ADJ_FACTOR_ASSET_NAME,
+    REFERENCE_DATA_IDENTITY_FIELDS,
     TUSHARE_ASSETS,
-    TUSHARE_DAILY_ASSET_NAME,
-    TUSHARE_DAILY_BASIC_ASSET_NAME,
-    TUSHARE_MONTHLY_ASSET_NAME,
     TUSHARE_STOCK_BASIC_ASSET_NAME,
-    TUSHARE_WEEKLY_ASSET_NAME,
 )
 from data_platform.raw import RawArtifact, RawWriter
 
 TOKEN_ENV_VAR = "DP_TUSHARE_TOKEN"
 STOCK_BASIC_IDENTITY_FIELDS = ("ts_code",)
 MARKET_DATA_IDENTITY_FIELDS = ("ts_code", "trade_date")
+MARKET_DATASETS = frozenset({"daily", "weekly", "monthly", "adj_factor", "daily_basic"})
+STOCK_TS_CODE_DATASETS = frozenset(
+    {
+        "stock_basic",
+        "daily",
+        "weekly",
+        "monthly",
+        "adj_factor",
+        "daily_basic",
+        "stock_company",
+        "namechange",
+    }
+)
+DATE_IDENTITY_FIELDS = frozenset({"trade_date", "cal_date", "start_date", "in_date"})
 STOCK_BASIC_TS_CODE_PATTERN = re.compile(r"\d{6}\.(?:SH|SZ|BJ)")
 TRADE_DATE_PATTERN = re.compile(r"\d{8}")
 
@@ -40,6 +50,9 @@ class _TushareFetchSpec:
     asset: AssetSpec
     method_name: str
     identity_fields: tuple[str, ...]
+    partition_date_field: str | None = None
+    partition_request_params: tuple[str, ...] = ()
+    date_param_names: tuple[str, ...] = ()
 
 
 class AdapterConfigError(RuntimeError):
@@ -64,6 +77,30 @@ class _TushareClient(Protocol):
 
     def daily_basic(self, **kwargs: Any) -> Any:
         """Return daily basic rows from Tushare Pro."""
+
+    def index_basic(self, **kwargs: Any) -> Any:
+        """Return index_basic rows from Tushare Pro."""
+
+    def index_daily(self, **kwargs: Any) -> Any:
+        """Return index_daily rows from Tushare Pro."""
+
+    def index_weight(self, **kwargs: Any) -> Any:
+        """Return index_weight rows from Tushare Pro."""
+
+    def index_member(self, **kwargs: Any) -> Any:
+        """Return index_member rows from Tushare Pro."""
+
+    def index_classify(self, **kwargs: Any) -> Any:
+        """Return index_classify rows from Tushare Pro."""
+
+    def trade_cal(self, **kwargs: Any) -> Any:
+        """Return trade_cal rows from Tushare Pro."""
+
+    def stock_company(self, **kwargs: Any) -> Any:
+        """Return stock_company rows from Tushare Pro."""
+
+    def namechange(self, **kwargs: Any) -> Any:
+        """Return namechange rows from Tushare Pro."""
 
 
 class TushareAdapter(BaseAdapter):
@@ -99,7 +136,7 @@ class TushareAdapter(BaseAdapter):
         return {"token_env": TOKEN_ENV_VAR}
 
     def get_staging_dbt_models(self) -> list[str]:
-        return ["stg_stock_basic"]
+        return [f"stg_{asset.dataset}" for asset in TUSHARE_ASSETS]
 
     def get_quota_config(self) -> dict[str, Any]:
         return dict(self._quota_config)
@@ -107,12 +144,13 @@ class TushareAdapter(BaseAdapter):
     def _fetch(self, asset_id: str, params: FetchParams) -> pa.Table:
         spec = _fetch_spec_by_asset_name(asset_id)
         request_params = dict(params)
-        if spec.asset.partition == "daily":
-            _validate_trade_date_param(spec.asset.dataset, request_params)
+        _validate_date_params(spec.asset.dataset, request_params, spec.date_param_names)
         request_params["fields"] = _fields_csv(spec.asset)
 
         fetch_method = getattr(self._get_client(), spec.method_name)
         result = fetch_method(**request_params)
+        if spec.asset.dataset in REFERENCE_DATA_IDENTITY_FIELDS:
+            return _to_reference_table(spec.asset.dataset, result, spec.asset.schema)
         return _to_asset_table(result, spec.asset, spec.identity_fields)
 
     def _get_client(self) -> _TushareClient:
@@ -146,7 +184,8 @@ def run_tushare_asset(
         raise TypeError(msg)
 
     if asset.partition == "daily":
-        _validate_raw_partition_trade_date(table, asset, partition_date)
+        spec = _fetch_spec_by_asset_name(asset.name)
+        _validate_raw_partition_date(table, asset, partition_date, spec.partition_date_field)
 
     return RawWriter().write_arrow(
         adapter.source_id(),
@@ -203,14 +242,17 @@ def _fetch_params_for_raw_partition(
 ) -> dict[str, Any]:
     fetch_params = dict(params or {})
     if asset.partition == "daily":
+        spec = _fetch_spec_by_asset_name(asset.name)
         expected_trade_date = f"{partition_date:%Y%m%d}"
-        if "trade_date" not in fetch_params:
-            fetch_params["trade_date"] = expected_trade_date
-        else:
-            _validate_trade_date_param(asset.dataset, fetch_params)
-            if str(fetch_params["trade_date"]) != expected_trade_date:
+        for param_name in spec.partition_request_params:
+            if param_name not in fetch_params:
+                fetch_params[param_name] = expected_trade_date
+                continue
+
+            _validate_date_param(asset.dataset, param_name, fetch_params[param_name])
+            if str(fetch_params[param_name]) != expected_trade_date:
                 msg = (
-                    f"Tushare {asset.dataset} trade_date {fetch_params['trade_date']!r} "
+                    f"Tushare {asset.dataset} {param_name} {fetch_params[param_name]!r} "
                     f"does not match Raw partition date {expected_trade_date!r}"
                 )
                 raise ValueError(msg)
@@ -232,6 +274,23 @@ def _parse_partition_date(value: str) -> date:
 def _to_stock_basic_table(value: Any) -> pa.Table:
     spec = _fetch_spec_by_asset_name(TUSHARE_STOCK_BASIC_ASSET_NAME)
     return _to_asset_table(value, spec.asset, spec.identity_fields)
+
+
+def _to_reference_table(dataset: str, result: Any, schema: pa.Schema) -> pa.Table:
+    try:
+        spec = _FETCH_SPECS_BY_DATASET[dataset]
+        identity_fields = REFERENCE_DATA_IDENTITY_FIELDS[dataset]
+    except KeyError as exc:
+        msg = f"unsupported Tushare reference dataset: {dataset!r}"
+        raise ValueError(msg) from exc
+
+    asset = AssetSpec(
+        name=spec.asset.name,
+        dataset=spec.asset.dataset,
+        partition=spec.asset.partition,
+        schema=schema,
+    )
+    return _to_asset_table(result, asset, identity_fields)
 
 
 def _to_asset_table(
@@ -353,14 +412,14 @@ def _validate_identity_value(
         msg = f"Tushare {asset.dataset} row {row_index} has blank identity field: {field_name}"
         raise ValueError(msg)
 
-    if field_name == "ts_code" and (
+    if field_name == "ts_code" and asset.dataset in STOCK_TS_CODE_DATASETS and (
         normalized_value != normalized_value.strip()
         or not STOCK_BASIC_TS_CODE_PATTERN.fullmatch(normalized_value)
     ):
         msg = f"Tushare {asset.dataset} row {row_index} has malformed identity field: {field_name}"
         raise ValueError(msg)
 
-    if field_name == "trade_date" and not _is_valid_trade_date(normalized_value):
+    if field_name in DATE_IDENTITY_FIELDS and not _is_valid_trade_date(normalized_value):
         msg = f"Tushare {asset.dataset} row {row_index} has malformed identity field: {field_name}"
         raise ValueError(msg)
 
@@ -369,28 +428,49 @@ def _validate_trade_date_param(dataset: str, params: Mapping[str, Any]) -> None:
     value = params.get("trade_date")
     if value is None:
         return
+    _validate_date_param(dataset, "trade_date", value)
+
+
+def _validate_date_params(
+    dataset: str,
+    params: Mapping[str, Any],
+    param_names: tuple[str, ...],
+) -> None:
+    for param_name in param_names:
+        value = params.get(param_name)
+        if value is None:
+            continue
+        _validate_date_param(dataset, param_name, value)
+
+
+def _validate_date_param(dataset: str, param_name: str, value: Any) -> None:
     if not pd.api.types.is_scalar(value) or _is_nullish(value):
-        msg = f"Tushare {dataset} trade_date must be a YYYYMMDD string"
+        msg = f"Tushare {dataset} {param_name} must be a YYYYMMDD string"
         raise ValueError(msg)
     if not _is_valid_trade_date(str(value)):
-        msg = f"Tushare {dataset} trade_date must be a valid YYYYMMDD date: {value!r}"
+        msg = f"Tushare {dataset} {param_name} must be a valid YYYYMMDD date: {value!r}"
         raise ValueError(msg)
 
 
-def _validate_raw_partition_trade_date(
+def _validate_raw_partition_date(
     table: pa.Table,
     asset: AssetSpec,
     partition_date: date,
+    partition_date_field: str | None,
 ) -> None:
-    expected_trade_date = f"{partition_date:%Y%m%d}"
-    if "trade_date" not in table.column_names:
-        msg = f"Tushare {asset.dataset} response missing required fields: trade_date"
+    if partition_date_field is None:
+        msg = f"Tushare {asset.dataset} daily partition date field is not configured"
         raise ValueError(msg)
 
-    for index, value in enumerate(table["trade_date"].to_pylist()):
+    expected_trade_date = f"{partition_date:%Y%m%d}"
+    if partition_date_field not in table.column_names:
+        msg = f"Tushare {asset.dataset} response missing required fields: {partition_date_field}"
+        raise ValueError(msg)
+
+    for index, value in enumerate(table[partition_date_field].to_pylist()):
         if str(value) != expected_trade_date:
             msg = (
-                f"Tushare {asset.dataset} row {index} trade_date {value!r} "
+                f"Tushare {asset.dataset} row {index} {partition_date_field} {value!r} "
                 f"does not match Raw partition date {expected_trade_date!r}"
             )
             raise ValueError(msg)
@@ -440,25 +520,64 @@ def _print_error(exc: BaseException, asset_id: str) -> None:
     print(json.dumps(payload, ensure_ascii=False, sort_keys=True), file=sys.stderr)
 
 
+_METHOD_BY_DATASET = {
+    "stock_basic": "stock_basic",
+    "daily": "daily",
+    "weekly": "weekly",
+    "monthly": "monthly",
+    "adj_factor": "adj_factor",
+    "daily_basic": "daily_basic",
+    "index_basic": "index_basic",
+    "index_daily": "index_daily",
+    "index_weight": "index_weight",
+    "index_member": "index_member",
+    "index_classify": "index_classify",
+    "trade_cal": "trade_cal",
+    "stock_company": "stock_company",
+    "namechange": "namechange",
+}
+_IDENTITY_FIELDS_BY_DATASET = {
+    "stock_basic": STOCK_BASIC_IDENTITY_FIELDS,
+    **{dataset: MARKET_DATA_IDENTITY_FIELDS for dataset in MARKET_DATASETS},
+    **REFERENCE_DATA_IDENTITY_FIELDS,
+}
+_PARTITION_DATE_FIELD_BY_DATASET = {
+    **{dataset: "trade_date" for dataset in MARKET_DATASETS},
+    "index_daily": "trade_date",
+    "index_weight": "trade_date",
+    "index_member": "in_date",
+    "trade_cal": "cal_date",
+    "namechange": "start_date",
+}
+_PARTITION_REQUEST_PARAMS_BY_DATASET = {
+    **{dataset: ("trade_date",) for dataset in MARKET_DATASETS},
+    "index_daily": ("trade_date",),
+    "index_weight": ("trade_date",),
+    "index_member": ("start_date", "end_date"),
+    "trade_cal": ("start_date", "end_date"),
+    "namechange": ("start_date", "end_date"),
+}
+_DATE_PARAM_NAMES_BY_DATASET = {
+    **{dataset: ("trade_date", "start_date", "end_date") for dataset in MARKET_DATASETS},
+    "index_daily": ("trade_date", "start_date", "end_date"),
+    "index_weight": ("trade_date", "start_date", "end_date"),
+    "index_member": ("start_date", "end_date"),
+    "trade_cal": ("start_date", "end_date"),
+    "namechange": ("start_date", "end_date"),
+}
 _FETCH_SPECS_BY_ASSET_NAME = {
     _asset.name: _TushareFetchSpec(
         asset=_asset,
-        method_name="stock_basic",
-        identity_fields=STOCK_BASIC_IDENTITY_FIELDS,
-    )
-    if _asset.name == TUSHARE_STOCK_BASIC_ASSET_NAME
-    else _TushareFetchSpec(
-        asset=_asset,
-        method_name={
-            TUSHARE_DAILY_ASSET_NAME: "daily",
-            TUSHARE_WEEKLY_ASSET_NAME: "weekly",
-            TUSHARE_MONTHLY_ASSET_NAME: "monthly",
-            TUSHARE_ADJ_FACTOR_ASSET_NAME: "adj_factor",
-            TUSHARE_DAILY_BASIC_ASSET_NAME: "daily_basic",
-        }[_asset.name],
-        identity_fields=MARKET_DATA_IDENTITY_FIELDS,
+        method_name=_METHOD_BY_DATASET[_asset.dataset],
+        identity_fields=_IDENTITY_FIELDS_BY_DATASET[_asset.dataset],
+        partition_date_field=_PARTITION_DATE_FIELD_BY_DATASET.get(_asset.dataset),
+        partition_request_params=_PARTITION_REQUEST_PARAMS_BY_DATASET.get(_asset.dataset, ()),
+        date_param_names=_DATE_PARAM_NAMES_BY_DATASET.get(_asset.dataset, ()),
     )
     for _asset in TUSHARE_ASSETS
+}
+_FETCH_SPECS_BY_DATASET = {
+    _fetch_spec.asset.dataset: _fetch_spec for _fetch_spec in _FETCH_SPECS_BY_ASSET_NAME.values()
 }
 
 
@@ -470,6 +589,7 @@ __all__ = [
     "AdapterConfigError",
     "TOKEN_ENV_VAR",
     "TushareAdapter",
+    "_to_reference_table",
     "main",
     "run_stock_basic",
     "run_tushare_asset",
