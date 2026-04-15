@@ -211,6 +211,29 @@ def test_cli_rejects_null_stock_basic_identity_without_artifact(
     assert list(raw_zone_path.rglob("*.parquet")) == []
 
 
+def test_cli_rejects_pandas_nat_stock_basic_identity_without_artifact(
+    raw_zone_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    frame = _stock_basic_frame(1)
+    frame.loc[0, "ts_code"] = pd.NaT
+    _install_tushare_client(monkeypatch, FakeTushareClient(frame))
+
+    exit_code = tushare_adapter_module.main(
+        ["--asset", "tushare_stock_basic", "--date", "20260415"]
+    )
+
+    captured = capsys.readouterr()
+    payload = json.loads(captured.err)
+
+    assert exit_code == 1
+    assert captured.out == ""
+    assert payload["asset"] == "tushare_stock_basic"
+    assert "null identity field: ts_code" in payload["error"]
+    assert list(raw_zone_path.rglob("*.parquet")) == []
+
+
 def test_cli_missing_token_outputs_json_error(
     monkeypatch: pytest.MonkeyPatch,
     capsys: pytest.CaptureFixture[str],

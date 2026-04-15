@@ -4,7 +4,6 @@ from __future__ import annotations
 
 import argparse
 import json
-import math
 import os
 import sys
 import uuid
@@ -13,6 +12,7 @@ from datetime import date, datetime
 from typing import Any, Protocol, cast
 
 import pyarrow as pa  # type: ignore[import-untyped]
+import pandas as pd  # type: ignore[import-untyped]
 
 from data_platform.adapters.base import AssetSpec, BaseAdapter, FetchParams, QuotaConfig
 from data_platform.adapters.tushare.assets import (
@@ -251,7 +251,14 @@ def _normalize_string(value: Any) -> str | None:
 
 
 def _is_nullish(value: Any) -> bool:
-    return value is None or (isinstance(value, float) and math.isnan(value))
+    if value is None:
+        return True
+
+    result = pd.isna(value)
+    try:
+        return bool(result)
+    except (TypeError, ValueError):
+        return False
 
 
 def _print_error(exc: BaseException, asset_id: str) -> None:
