@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import argparse
-import os
 import re
 from dataclasses import dataclass
 from pathlib import Path
@@ -105,7 +104,7 @@ class MigrationRunner:
             engine.dispose()
 
     def _create_engine(self, dsn: str) -> Engine:
-        return create_engine(dsn)
+        return create_engine(_sqlalchemy_postgres_uri(dsn))
 
     def _load_migrations(self) -> list[Migration]:
         if not self.migrations_path.exists():
@@ -189,11 +188,15 @@ class MigrationRunner:
 
 
 def _resolve_dsn() -> str:
-    env_dsn = os.environ.get("DP_PG_DSN")
-    if env_dsn:
-        return env_dsn
-
     return str(get_settings().pg_dsn)
+
+
+def _sqlalchemy_postgres_uri(dsn: str) -> str:
+    if dsn.startswith("postgresql://"):
+        return "postgresql+psycopg://" + dsn.removeprefix("postgresql://")
+    if dsn.startswith("postgres://"):
+        return "postgresql+psycopg://" + dsn.removeprefix("postgres://")
+    return dsn
 
 
 def main(argv: Sequence[str] | None = None) -> int:

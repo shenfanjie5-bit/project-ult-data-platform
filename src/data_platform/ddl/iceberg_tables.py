@@ -231,7 +231,16 @@ def _table_schema_as_pyarrow(table: Table) -> pa.Schema:
 
 
 def _schema_field_contract(schema: pa.Schema) -> list[tuple[str, pa.DataType, bool]]:
-    return [(field.name, field.type, field.nullable) for field in schema]
+    return [
+        (field.name, _normalize_iceberg_arrow_type(field.type), field.nullable)
+        for field in schema
+    ]
+
+
+def _normalize_iceberg_arrow_type(data_type: pa.DataType) -> pa.DataType:
+    if pa.types.is_string(data_type) or pa.types.is_large_string(data_type):
+        return pa.string()
+    return data_type
 
 
 def _format_schema_contract(fields: Sequence[tuple[str, pa.DataType, bool]]) -> str:

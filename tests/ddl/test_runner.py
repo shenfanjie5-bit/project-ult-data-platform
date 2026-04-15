@@ -11,6 +11,7 @@ from sqlalchemy import create_engine, text
 from sqlalchemy.engine import make_url
 from sqlalchemy.exc import SQLAlchemyError
 
+from data_platform.ddl import runner as runner_module
 from data_platform.ddl.runner import MigrationError, MigrationRunner
 
 
@@ -93,6 +94,22 @@ def test_load_migrations_rejects_duplicate_versions(tmp_path: Path) -> None:
 
     with pytest.raises(ValueError, match="duplicate migration version: 0001"):
         runner._load_migrations()
+
+
+def test_create_engine_rewrites_plain_postgres_dsn_to_psycopg(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    seen_dsns: list[str] = []
+    fake_engine = object()
+
+    def fake_create_engine(dsn: str) -> object:
+        seen_dsns.append(dsn)
+        return fake_engine
+
+    monkeypatch.setattr(runner_module, "create_engine", fake_create_engine)
+
+    assert MigrationRunner()._create_engine("postgresql://dp:dp@localhost/db") is fake_engine
+    assert seen_dsns == ["postgresql+psycopg://dp:dp@localhost/db"]
 
 
 def test_apply_pending_is_idempotent_and_creates_schema(postgres_dsn: str) -> None:
