@@ -156,6 +156,33 @@ def test_manifest_failure_removes_artifact_and_allows_retry(
     assert [item.run_id for item in artifacts] == [run_id]
 
 
+def test_orphaned_artifact_without_manifest_allows_retry(
+    raw_zone_path: Path,
+    source_id: str,
+) -> None:
+    writer = RawWriter()
+    run_id = str(uuid.uuid4())
+    artifact_path = (
+        raw_zone_path / source_id / "stock_basic" / "dt=20260415" / f"{run_id}.json.gz"
+    )
+    artifact_path.parent.mkdir(parents=True, exist_ok=True)
+    artifact_path.write_bytes(b"orphaned artifact from interrupted write")
+
+    artifact = writer.write_json(
+        source_id,
+        "stock_basic",
+        PARTITION_DATE,
+        run_id,
+        [{"symbol": "000001.SZ"}],
+    )
+
+    assert artifact.path == artifact_path
+    with gzip.open(artifact.path, "rt", encoding="utf-8") as file:
+        assert json.load(file) == [{"symbol": "000001.SZ"}]
+    artifacts = RawReader().list_artifacts(source_id, "stock_basic", PARTITION_DATE)
+    assert [item.run_id for item in artifacts] == [run_id]
+
+
 def test_raw_zone_rejects_iceberg_warehouse_boundary(tmp_path: Path) -> None:
     warehouse_path = tmp_path / "iceberg" / "warehouse"
 

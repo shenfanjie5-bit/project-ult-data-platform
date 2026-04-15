@@ -186,14 +186,31 @@ class RawWriter:
         run_id: str,
         artifact_path: Path,
     ) -> None:
-        if artifact_path.exists():
-            raise RawArtifactExists(f"raw artifact already exists: {artifact_path}")
-
         self._raise_if_manifest_contains_run_id(partition_path, run_id)
+        self._remove_unmanifested_run_artifacts(partition_path, run_id, artifact_path)
+
+    def _remove_unmanifested_run_artifacts(
+        self,
+        partition_path: Path,
+        run_id: str,
+        artifact_path: Path,
+    ) -> None:
+        existing_paths = {artifact_path}
         for existing_path in partition_path.glob(f"{run_id}.*"):
             if existing_path.name.endswith(".tmp"):
                 continue
-            raise RawArtifactExists(f"raw artifact already exists for run_id={run_id!r}")
+            existing_paths.add(existing_path)
+
+        for existing_path in sorted(existing_paths, key=str):
+            if not existing_path.exists():
+                continue
+            try:
+                existing_path.unlink()
+            except OSError as exc:
+                raise RawArtifactExists(
+                    f"uncommitted raw artifact could not be recovered for run_id={run_id!r}: "
+                    f"{existing_path}"
+                ) from exc
 
     def _raise_if_manifest_contains_run_id(self, partition_path: Path, run_id: str) -> None:
         manifest_path = self._manifest_path(partition_path)
