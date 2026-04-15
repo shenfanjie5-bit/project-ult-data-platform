@@ -20,6 +20,30 @@ TUSHARE_INDEX_CLASSIFY_ASSET_NAME = "tushare_index_classify"
 TUSHARE_TRADE_CAL_ASSET_NAME = "tushare_trade_cal"
 TUSHARE_STOCK_COMPANY_ASSET_NAME = "tushare_stock_company"
 TUSHARE_NAMECHANGE_ASSET_NAME = "tushare_namechange"
+TUSHARE_INCOME_ASSET_NAME = "tushare_income"
+TUSHARE_BALANCESHEET_ASSET_NAME = "tushare_balancesheet"
+TUSHARE_CASHFLOW_ASSET_NAME = "tushare_cashflow"
+TUSHARE_FINA_INDICATOR_ASSET_NAME = "tushare_fina_indicator"
+
+FINANCIAL_VERSION_FIELDS: tuple[str, ...] = (
+    "ts_code",
+    "ann_date",
+    "f_ann_date",
+    "end_date",
+    "report_type",
+    "comp_type",
+    "update_flag",
+)
+
+_FINANCIAL_VERSION_SCHEMA_FIELDS = [
+    ("ts_code", pa.string()),
+    ("ann_date", pa.string()),
+    ("f_ann_date", pa.string()),
+    ("end_date", pa.string()),
+    ("report_type", pa.string()),
+    ("comp_type", pa.string()),
+    ("update_flag", pa.string()),
+]
 
 TUSHARE_STOCK_BASIC_SCHEMA = pa.schema(
     [
@@ -200,6 +224,89 @@ TUSHARE_NAMECHANGE_SCHEMA = pa.schema(
     ]
 )
 
+TUSHARE_INCOME_SCHEMA = pa.schema(
+    [
+        *_FINANCIAL_VERSION_SCHEMA_FIELDS,
+        ("basic_eps", pa.float64()),
+        ("diluted_eps", pa.float64()),
+        ("total_revenue", pa.float64()),
+        ("revenue", pa.float64()),
+        ("total_cogs", pa.float64()),
+        ("operate_profit", pa.float64()),
+        ("total_profit", pa.float64()),
+        ("income_tax", pa.float64()),
+        ("n_income", pa.float64()),
+        ("n_income_attr_p", pa.float64()),
+        ("minority_gain", pa.float64()),
+        ("ebit", pa.float64()),
+        ("ebitda", pa.float64()),
+    ]
+)
+
+TUSHARE_BALANCESHEET_SCHEMA = pa.schema(
+    [
+        *_FINANCIAL_VERSION_SCHEMA_FIELDS,
+        ("total_share", pa.float64()),
+        ("money_cap", pa.float64()),
+        ("accounts_receiv", pa.float64()),
+        ("inventories", pa.float64()),
+        ("fixed_assets", pa.float64()),
+        ("total_cur_assets", pa.float64()),
+        ("total_nca", pa.float64()),
+        ("total_assets", pa.float64()),
+        ("total_cur_liab", pa.float64()),
+        ("total_ncl", pa.float64()),
+        ("total_liab", pa.float64()),
+        ("total_hldr_eqy_exc_min_int", pa.float64()),
+        ("total_hldr_eqy_inc_min_int", pa.float64()),
+        ("total_liab_hldr_eqy", pa.float64()),
+    ]
+)
+
+TUSHARE_CASHFLOW_SCHEMA = pa.schema(
+    [
+        *_FINANCIAL_VERSION_SCHEMA_FIELDS,
+        ("net_profit", pa.float64()),
+        ("c_fr_sale_sg", pa.float64()),
+        ("c_inf_fr_operate_a", pa.float64()),
+        ("c_paid_goods_s", pa.float64()),
+        ("c_paid_to_for_empl", pa.float64()),
+        ("c_paid_for_taxes", pa.float64()),
+        ("n_cashflow_act", pa.float64()),
+        ("n_cashflow_inv_act", pa.float64()),
+        ("n_cash_flows_fnc_act", pa.float64()),
+        ("n_incr_cash_cash_equ", pa.float64()),
+        ("c_cash_equ_beg_period", pa.float64()),
+        ("c_cash_equ_end_period", pa.float64()),
+        ("free_cashflow", pa.float64()),
+    ]
+)
+
+TUSHARE_FINA_INDICATOR_SCHEMA = pa.schema(
+    [
+        *_FINANCIAL_VERSION_SCHEMA_FIELDS,
+        ("eps", pa.float64()),
+        ("dt_eps", pa.float64()),
+        ("total_revenue_ps", pa.float64()),
+        ("revenue_ps", pa.float64()),
+        ("bps", pa.float64()),
+        ("ocfps", pa.float64()),
+        ("roe", pa.float64()),
+        ("roe_waa", pa.float64()),
+        ("roa", pa.float64()),
+        ("netprofit_margin", pa.float64()),
+        ("grossprofit_margin", pa.float64()),
+        ("current_ratio", pa.float64()),
+        ("quick_ratio", pa.float64()),
+        ("debt_to_assets", pa.float64()),
+        ("assets_turn", pa.float64()),
+        ("op_yoy", pa.float64()),
+        ("netprofit_yoy", pa.float64()),
+        ("tr_yoy", pa.float64()),
+        ("or_yoy", pa.float64()),
+    ]
+)
+
 TUSHARE_STOCK_BASIC_FIELDS = tuple(TUSHARE_STOCK_BASIC_SCHEMA.names)
 TUSHARE_STOCK_BASIC_FIELDS_CSV = ",".join(TUSHARE_STOCK_BASIC_FIELDS)
 TUSHARE_BAR_FIELDS = tuple(TUSHARE_BAR_SCHEMA.names)
@@ -224,6 +331,14 @@ TUSHARE_STOCK_COMPANY_FIELDS = tuple(TUSHARE_STOCK_COMPANY_SCHEMA.names)
 TUSHARE_STOCK_COMPANY_FIELDS_CSV = ",".join(TUSHARE_STOCK_COMPANY_FIELDS)
 TUSHARE_NAMECHANGE_FIELDS = tuple(TUSHARE_NAMECHANGE_SCHEMA.names)
 TUSHARE_NAMECHANGE_FIELDS_CSV = ",".join(TUSHARE_NAMECHANGE_FIELDS)
+TUSHARE_INCOME_FIELDS = tuple(TUSHARE_INCOME_SCHEMA.names)
+TUSHARE_INCOME_FIELDS_CSV = ",".join(TUSHARE_INCOME_FIELDS)
+TUSHARE_BALANCESHEET_FIELDS = tuple(TUSHARE_BALANCESHEET_SCHEMA.names)
+TUSHARE_BALANCESHEET_FIELDS_CSV = ",".join(TUSHARE_BALANCESHEET_FIELDS)
+TUSHARE_CASHFLOW_FIELDS = tuple(TUSHARE_CASHFLOW_SCHEMA.names)
+TUSHARE_CASHFLOW_FIELDS_CSV = ",".join(TUSHARE_CASHFLOW_FIELDS)
+TUSHARE_FINA_INDICATOR_FIELDS = tuple(TUSHARE_FINA_INDICATOR_SCHEMA.names)
+TUSHARE_FINA_INDICATOR_FIELDS_CSV = ",".join(TUSHARE_FINA_INDICATOR_FIELDS)
 
 REFERENCE_DATA_IDENTITY_FIELDS: dict[str, tuple[str, ...]] = {
     "index_basic": ("ts_code",),
@@ -334,6 +449,34 @@ TUSHARE_NAMECHANGE_ASSET = AssetSpec(
     schema=TUSHARE_NAMECHANGE_SCHEMA,
 )
 
+TUSHARE_INCOME_ASSET = AssetSpec(
+    name=TUSHARE_INCOME_ASSET_NAME,
+    dataset="income",
+    partition="daily",
+    schema=TUSHARE_INCOME_SCHEMA,
+)
+
+TUSHARE_BALANCESHEET_ASSET = AssetSpec(
+    name=TUSHARE_BALANCESHEET_ASSET_NAME,
+    dataset="balancesheet",
+    partition="daily",
+    schema=TUSHARE_BALANCESHEET_SCHEMA,
+)
+
+TUSHARE_CASHFLOW_ASSET = AssetSpec(
+    name=TUSHARE_CASHFLOW_ASSET_NAME,
+    dataset="cashflow",
+    partition="daily",
+    schema=TUSHARE_CASHFLOW_SCHEMA,
+)
+
+TUSHARE_FINA_INDICATOR_ASSET = AssetSpec(
+    name=TUSHARE_FINA_INDICATOR_ASSET_NAME,
+    dataset="fina_indicator",
+    partition="daily",
+    schema=TUSHARE_FINA_INDICATOR_SCHEMA,
+)
+
 TUSHARE_ASSETS = [
     TUSHARE_STOCK_BASIC_ASSET,
     TUSHARE_DAILY_ASSET,
@@ -349,9 +492,14 @@ TUSHARE_ASSETS = [
     TUSHARE_TRADE_CAL_ASSET,
     TUSHARE_STOCK_COMPANY_ASSET,
     TUSHARE_NAMECHANGE_ASSET,
+    TUSHARE_INCOME_ASSET,
+    TUSHARE_BALANCESHEET_ASSET,
+    TUSHARE_CASHFLOW_ASSET,
+    TUSHARE_FINA_INDICATOR_ASSET,
 ]
 
 __all__ = [
+    "FINANCIAL_VERSION_FIELDS",
     "REFERENCE_DATA_IDENTITY_FIELDS",
     "TUSHARE_ADJ_FACTOR_ASSET",
     "TUSHARE_ADJ_FACTOR_ASSET_NAME",
@@ -359,9 +507,19 @@ __all__ = [
     "TUSHARE_ADJ_FACTOR_FIELDS_CSV",
     "TUSHARE_ADJ_FACTOR_SCHEMA",
     "TUSHARE_ASSETS",
+    "TUSHARE_BALANCESHEET_ASSET",
+    "TUSHARE_BALANCESHEET_ASSET_NAME",
+    "TUSHARE_BALANCESHEET_FIELDS",
+    "TUSHARE_BALANCESHEET_FIELDS_CSV",
+    "TUSHARE_BALANCESHEET_SCHEMA",
     "TUSHARE_BAR_FIELDS",
     "TUSHARE_BAR_FIELDS_CSV",
     "TUSHARE_BAR_SCHEMA",
+    "TUSHARE_CASHFLOW_ASSET",
+    "TUSHARE_CASHFLOW_ASSET_NAME",
+    "TUSHARE_CASHFLOW_FIELDS",
+    "TUSHARE_CASHFLOW_FIELDS_CSV",
+    "TUSHARE_CASHFLOW_SCHEMA",
     "TUSHARE_DAILY_ASSET",
     "TUSHARE_DAILY_ASSET_NAME",
     "TUSHARE_DAILY_BASIC_ASSET",
@@ -369,6 +527,11 @@ __all__ = [
     "TUSHARE_DAILY_BASIC_FIELDS",
     "TUSHARE_DAILY_BASIC_FIELDS_CSV",
     "TUSHARE_DAILY_BASIC_SCHEMA",
+    "TUSHARE_FINA_INDICATOR_ASSET",
+    "TUSHARE_FINA_INDICATOR_ASSET_NAME",
+    "TUSHARE_FINA_INDICATOR_FIELDS",
+    "TUSHARE_FINA_INDICATOR_FIELDS_CSV",
+    "TUSHARE_FINA_INDICATOR_SCHEMA",
     "TUSHARE_INDEX_BASIC_ASSET",
     "TUSHARE_INDEX_BASIC_ASSET_NAME",
     "TUSHARE_INDEX_BASIC_FIELDS",
@@ -394,6 +557,11 @@ __all__ = [
     "TUSHARE_INDEX_WEIGHT_FIELDS",
     "TUSHARE_INDEX_WEIGHT_FIELDS_CSV",
     "TUSHARE_INDEX_WEIGHT_SCHEMA",
+    "TUSHARE_INCOME_ASSET",
+    "TUSHARE_INCOME_ASSET_NAME",
+    "TUSHARE_INCOME_FIELDS",
+    "TUSHARE_INCOME_FIELDS_CSV",
+    "TUSHARE_INCOME_SCHEMA",
     "TUSHARE_MONTHLY_ASSET",
     "TUSHARE_MONTHLY_ASSET_NAME",
     "TUSHARE_NAMECHANGE_ASSET",
