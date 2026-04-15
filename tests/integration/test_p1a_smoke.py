@@ -14,6 +14,8 @@ from sqlalchemy import create_engine, text
 from sqlalchemy.engine import make_url
 from sqlalchemy.exc import SQLAlchemyError
 
+from data_platform.ddl.runner import _sqlalchemy_postgres_uri
+
 
 PROJECT_ROOT = Path(__file__).resolve().parents[2]
 FIXTURE_ROW_COUNT = 3
@@ -84,9 +86,71 @@ def test_p1a_smoke_pipeline_is_repeatable(
     assert payload["duckdb_columns"] == EXPECTED_COLUMNS
 
 
+def test_p1a_smoke_requires_dp_pg_dsn(tmp_path: Path) -> None:
+    env = _base_script_env(tmp_path)
+    env["DATABASE_URL"] = "postgresql://dp:dp@localhost/data_platform"
+
+    result = _run_smoke_raw(env)
+
+    assert result.returncode == 2
+    assert "DP_PG_DSN is required" in result.stderr
+    assert "DATABASE_URL is not used" in result.stderr
+
+
+def test_p1a_smoke_allows_explicit_skip_without_dp_pg_dsn(tmp_path: Path) -> None:
+    env = _base_script_env(tmp_path)
+    env["DP_SMOKE_P1A_ALLOW_SKIP"] = "1"
+
+    result = _run_smoke_raw(env)
+
+    assert result.returncode == 0
+    assert "P1a smoke skipped" in result.stdout
+
+
+def test_p1a_smoke_refuses_non_smoke_database(tmp_path: Path) -> None:
+    env = _base_script_env(tmp_path)
+    env.update(
+        {
+            "DP_PG_DSN": "postgresql://dp:dp@localhost/data_platform",
+            "DP_SMOKE_P1A_CONFIRM_DESTRUCTIVE": "1",
+        }
+    )
+
+    result = _run_smoke_raw(env)
+
+    assert result.returncode == 2
+    assert "database must match dp_p1a_smoke" in result.stderr
+
+
+def test_p1a_smoke_requires_destructive_confirmation(tmp_path: Path) -> None:
+    env = _base_script_env(tmp_path)
+    env["DP_PG_DSN"] = "postgresql://dp:dp@localhost/dp_p1a_smoke_local"
+
+    result = _run_smoke_raw(env)
+
+    assert result.returncode == 2
+    assert "DP_SMOKE_P1A_CONFIRM_DESTRUCTIVE=1" in result.stderr
+
+
+def test_p1a_smoke_requires_test_env(tmp_path: Path) -> None:
+    env = _base_script_env(tmp_path)
+    env.update(
+        {
+            "DP_PG_DSN": "postgresql://dp:dp@localhost/dp_p1a_smoke_local",
+            "DP_SMOKE_P1A_CONFIRM_DESTRUCTIVE": "1",
+        }
+    )
+    env.pop("DP_ENV")
+
+    result = _run_smoke_raw(env)
+
+    assert result.returncode == 2
+    assert "DP_ENV must be test" in result.stderr
+
+
 def _smoke_env(tmp_path: Path, postgres_dsn: str) -> dict[str, str]:
-    smoke_dir = tmp_path / "smoke"
-    env = os.environ.copy()
+    smoke_dir = tmp_path / "p1a-smoke"
+    env = _base_script_env(tmp_path)
     env.update(
         {
             "DP_PG_DSN": postgres_dsn,
@@ -94,8 +158,9 @@ def _smoke_env(tmp_path: Path, postgres_dsn: str) -> dict[str, str]:
             "DP_RAW_ZONE_PATH": str(smoke_dir / "raw"),
             "DP_ICEBERG_WAREHOUSE_PATH": str(smoke_dir / "warehouse"),
             "DP_DUCKDB_PATH": str(smoke_dir / "data_platform.duckdb"),
-            "DP_ICEBERG_CATALOG_NAME": "data_platform_p1a_test",
+            "DP_ICEBERG_CATALOG_NAME": "data_platform_p1a_smoke",
             "DP_ENV": "test",
+            "DP_SMOKE_P1A_CONFIRM_DESTRUCTIVE": "1",
             "PYTHON": sys.executable,
             "PYTHONPATH": str(PROJECT_ROOT / "src"),
         }
@@ -104,8 +169,31 @@ def _smoke_env(tmp_path: Path, postgres_dsn: str) -> dict[str, str]:
     return env
 
 
-def _run_smoke(env: dict[str, str]) -> subprocess.CompletedProcess[str]:
-    result = subprocess.run(
+def _base_script_env(tmp_path: Path) -> dict[str, str]:
+    smoke_dir = tmp_path / "p1a-smoke"
+    env = os.environ.copy()
+    env.update(
+        {
+            "DP_SMOKE_WORK_DIR": str(smoke_dir),
+            "DP_RAW_ZONE_PATH": str(smoke_dir / "raw"),
+            "DP_ICEBERG_WAREHOUSE_PATH": str(smoke_dir / "warehouse"),
+            "DP_DUCKDB_PATH": str(smoke_dir / "data_platform.duckdb"),
+            "DP_ICEBERG_CATALOG_NAME": "data_platform_p1a_smoke",
+            "DP_ENV": "test",
+            "PYTHON": sys.executable,
+            "PYTHONPATH": str(PROJECT_ROOT / "src"),
+        }
+    )
+    env.pop("DP_PG_DSN", None)
+    env.pop("DATABASE_URL", None)
+    env.pop("DP_SMOKE_P1A_ALLOW_SKIP", None)
+    env.pop("DP_SMOKE_P1A_CONFIRM_DESTRUCTIVE", None)
+    env["PATH"] = f"{Path(sys.executable).parent}{os.pathsep}{env.get('PATH', '')}"
+    return env
+
+
+def _run_smoke_raw(env: dict[str, str]) -> subprocess.CompletedProcess[str]:
+    return subprocess.run(
         ["bash", str(PROJECT_ROOT / "scripts" / "smoke_p1a.sh")],
         cwd=PROJECT_ROOT,
         env=env,
@@ -114,6 +202,10 @@ def _run_smoke(env: dict[str, str]) -> subprocess.CompletedProcess[str]:
         check=False,
         timeout=300,
     )
+
+
+def _run_smoke(env: dict[str, str]) -> subprocess.CompletedProcess[str]:
+    result = _run_smoke_raw(env)
 
     assert result.returncode == 0, result.stdout + result.stderr
     assert "skipped" not in result.stdout.lower()
@@ -163,11 +255,3 @@ def _duration_seconds(output: str) -> int:
     match = re.search(r"duration_s=(\d+)", output)
     assert match is not None, output
     return int(match.group(1))
-
-
-def _sqlalchemy_postgres_uri(dsn: str) -> str:
-    if dsn.startswith("postgresql://"):
-        return "postgresql+psycopg://" + dsn.removeprefix("postgresql://")
-    if dsn.startswith("postgres://"):
-        return "postgresql+psycopg://" + dsn.removeprefix("postgres://")
-    return dsn
