@@ -2,10 +2,13 @@ from __future__ import annotations
 
 import importlib.util
 from collections.abc import Generator
+from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
+from threading import Barrier, Lock
 
 import pytest
 from sqlalchemy.exc import SQLAlchemyError
+from sqlalchemy.exc import IntegrityError
 
 from data_platform.config import reset_settings_cache
 from data_platform.serving import catalog as catalog_module
@@ -30,16 +33,16 @@ DP_ENV_KEYS = [
 
 class FakeCatalog:
     def __init__(self) -> None:
-        self.namespaces: list[str] = []
-        self.create_calls: list[str] = []
+        self.namespaces: list[tuple[str, ...]] = []
+        self.create_calls: list[tuple[str, ...]] = []
 
-    def create_namespace_if_not_exists(self, namespace: str) -> None:
+    def create_namespace_if_not_exists(self, namespace: tuple[str, ...]) -> None:
         self.create_calls.append(namespace)
         if namespace not in self.namespaces:
             self.namespaces.append(namespace)
 
     def list_namespaces(self) -> list[tuple[str, ...]]:
-        return [(namespace,) for namespace in self.namespaces]
+        return self.namespaces
 
 
 @pytest.fixture(autouse=True)
@@ -67,12 +70,12 @@ def test_ensure_namespaces_is_idempotent_and_does_not_create_raw() -> None:
     assert catalog.list_namespaces() == [("canonical",), ("formal",), ("analytical",)]
     assert "raw" not in [namespace[0] for namespace in catalog.list_namespaces()]
     assert catalog.create_calls == [
-        "canonical",
-        "formal",
-        "analytical",
-        "canonical",
-        "formal",
-        "analytical",
+        ("canonical",),
+        ("formal",),
+        ("analytical",),
+        ("canonical",),
+        ("formal",),
+        ("analytical",),
     ]
 
 
@@ -83,6 +86,65 @@ def test_ensure_namespaces_rejects_raw_namespace() -> None:
         ensure_namespaces(catalog, ["raw"])  # type: ignore[arg-type]
 
     assert catalog.list_namespaces() == []
+
+
+@pytest.mark.parametrize(
+    "namespace",
+    [
+        " raw ",
+        "raw.child",
+        ("raw", "child"),
+        (" raw ", "child"),
+    ],
+)
+def test_ensure_namespaces_rejects_normalized_raw_namespace(
+    namespace: str | tuple[str, ...],
+) -> None:
+    catalog = FakeCatalog()
+
+    with pytest.raises(ValueError, match="raw namespace"):
+        ensure_namespaces(catalog, [namespace])  # type: ignore[arg-type]
+
+    assert catalog.list_namespaces() == []
+
+
+def test_ensure_namespaces_suppresses_concurrent_duplicate_create() -> None:
+    barrier = Barrier(2)
+    lock = Lock()
+    shared_namespaces: set[tuple[str, ...]] = set()
+
+    class RacingCatalog:
+        def __init__(self) -> None:
+            self.create_calls: list[tuple[str, ...]] = []
+
+        def create_namespace_if_not_exists(self, namespace: tuple[str, ...]) -> None:
+            self.create_calls.append(namespace)
+            if namespace in shared_namespaces:
+                return
+            barrier.wait(timeout=5)
+            with lock:
+                if namespace in shared_namespaces:
+                    raise IntegrityError("insert namespace", {}, Exception("duplicate"))
+                shared_namespaces.add(namespace)
+
+        def namespace_exists(self, namespace: tuple[str, ...]) -> bool:
+            return namespace in shared_namespaces
+
+    catalogs = [RacingCatalog(), RacingCatalog()]
+
+    with ThreadPoolExecutor(max_workers=2) as executor:
+        futures = [
+            executor.submit(ensure_namespaces, racing_catalog, ["canonical"])
+            for racing_catalog in catalogs
+        ]
+        for future in futures:
+            future.result(timeout=5)
+
+    assert shared_namespaces == {("canonical",)}
+    assert [catalog.create_calls for catalog in catalogs] == [
+        [("canonical",)],
+        [("canonical",)],
+    ]
 
 
 def test_load_catalog_uses_configured_name_uri_and_warehouse(
@@ -109,6 +171,35 @@ def test_load_catalog_uses_configured_name_uri_and_warehouse(
             "configured_catalog",
             {
                 "uri": "postgresql+psycopg://user:pass@localhost/data_platform",
+                "warehouse": str(tmp_path / "warehouse"),
+                "pool_pre_ping": "true",
+                "init_catalog_tables": "true",
+            },
+        )
+    ]
+
+
+def test_load_catalog_accepts_jdbc_dsn_from_dp_pg_dsn(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    set_required_env(monkeypatch, tmp_path)
+    monkeypatch.setenv("DP_PG_DSN", "jdbc:postgresql://user:pass@host:5432/data_platform")
+    calls: list[tuple[str, dict[str, str]]] = []
+
+    class CapturingCatalog:
+        def __init__(self, name: str, **properties: str) -> None:
+            calls.append((name, properties))
+
+    monkeypatch.setattr(catalog_module, "SQL_CATALOG_CLASS", CapturingCatalog)
+
+    load_catalog()
+
+    assert calls == [
+        (
+            "data_platform",
+            {
+                "uri": "postgresql+psycopg://user:pass@host:5432/data_platform",
                 "warehouse": str(tmp_path / "warehouse"),
                 "pool_pre_ping": "true",
                 "init_catalog_tables": "true",

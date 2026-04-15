@@ -3,9 +3,12 @@
 from __future__ import annotations
 
 from collections.abc import Iterable
+import os
 from pathlib import Path
 from typing import Final
 
+from pydantic import ValidationError
+from pyiceberg.catalog import Catalog
 from pyiceberg.catalog.sql import SqlCatalog
 from pyiceberg.typedef import Identifier
 from sqlalchemy.exc import SQLAlchemyError
@@ -43,11 +46,11 @@ SQL_CATALOG_CLASS: type[SqlCatalog] = DataPlatformSqlCatalog
 def load_catalog(name: str | None = None) -> SqlCatalog:
     """Load the project PG-backed PyIceberg SQL catalog."""
 
-    settings = get_settings()
-    catalog_name = name or settings.iceberg_catalog_name
+    pg_dsn, configured_catalog_name, warehouse_path = _catalog_config()
+    catalog_name = name or configured_catalog_name
     properties = {
-        "uri": _sqlalchemy_postgres_uri(str(settings.pg_dsn)),
-        "warehouse": _warehouse_location(settings.iceberg_warehouse_path),
+        "uri": _sqlalchemy_postgres_uri(pg_dsn),
+        "warehouse": _warehouse_location(warehouse_path),
         "pool_pre_ping": "true",
         "init_catalog_tables": "true",
     }
@@ -58,14 +61,74 @@ def load_catalog(name: str | None = None) -> SqlCatalog:
         raise CatalogConnectError(str(exc)) from exc
 
 
-def ensure_namespaces(catalog: SqlCatalog, names: Iterable[str]) -> None:
+def ensure_namespaces(catalog: SqlCatalog, names: Iterable[str | Identifier]) -> None:
     """Create Iceberg namespaces idempotently, excluding Raw Zone by contract."""
 
     for namespace in names:
-        if namespace == RAW_NAMESPACE:
+        normalized_namespace = _normalize_namespace_identifier(namespace)
+        if normalized_namespace[0].lower() == RAW_NAMESPACE:
             msg = "raw namespace must not be created in the Iceberg catalog"
             raise ValueError(msg)
-        catalog.create_namespace_if_not_exists(namespace)
+        try:
+            catalog.create_namespace_if_not_exists(normalized_namespace)
+        except SQLAlchemyError as exc:
+            if _namespace_exists_after_create_error(catalog, normalized_namespace, exc):
+                continue
+            raise
+
+
+def _catalog_config() -> tuple[str, str, Path]:
+    try:
+        settings = get_settings()
+    except ValidationError as exc:
+        jdbc_config = _jdbc_catalog_config_from_env(exc)
+        if jdbc_config is None:
+            raise
+        return jdbc_config
+
+    return (
+        str(settings.pg_dsn),
+        settings.iceberg_catalog_name,
+        settings.iceberg_warehouse_path,
+    )
+
+
+def _jdbc_catalog_config_from_env(
+    validation_error: ValidationError,
+) -> tuple[str, str, Path] | None:
+    raw_pg_dsn = os.environ.get("DP_PG_DSN")
+    warehouse_path = os.environ.get("DP_ICEBERG_WAREHOUSE_PATH")
+    if not raw_pg_dsn or not raw_pg_dsn.startswith("jdbc:postgresql://"):
+        return None
+    if not warehouse_path:
+        return None
+    if not _validation_error_includes_field(validation_error, "pg_dsn"):
+        return None
+
+    catalog_name = os.environ.get("DP_ICEBERG_CATALOG_NAME", "data_platform")
+    return raw_pg_dsn, catalog_name, Path(warehouse_path)
+
+
+def _validation_error_includes_field(error: ValidationError, field_name: str) -> bool:
+    return any(
+        error_detail.get("loc") == (field_name,) for error_detail in error.errors()
+    )
+
+
+def _normalize_namespace_identifier(namespace: str | Identifier) -> Identifier:
+    namespace_string = Catalog.namespace_to_string(namespace)
+    return tuple(namespace_string.split("."))
+
+
+def _namespace_exists_after_create_error(
+    catalog: SqlCatalog,
+    namespace: Identifier,
+    create_error: SQLAlchemyError,
+) -> bool:
+    try:
+        return catalog.namespace_exists(namespace)
+    except SQLAlchemyError as lookup_error:
+        raise create_error from lookup_error
 
 
 def _sqlalchemy_postgres_uri(dsn: str) -> str:
