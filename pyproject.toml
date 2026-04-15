@@ -1,5 +1,5 @@
 [build-system]
-requires = ["setuptools>=69", "wheel"]
+requires = ["setuptools>=69,<90", "wheel>=0.42,<1"]
 build-backend = "setuptools.build_meta"
 
 [project]
@@ -7,12 +7,52 @@ name = "project-ult-data-platform"
 version = "0.1.0"
 description = "Scaffold workspace for data-platform."
 readme = "README.md"
-requires-python = ">=3.11"
-dependencies = []
+requires-python = ">=3.12"
+dependencies = [
+    "pyiceberg[sql-postgres,pyarrow]>=0.8,<2",
+    "duckdb>=1.0,<2",
+    "dbt-core>=1.7,<2",
+    "dbt-duckdb>=1.7,<2",
+    "sqlalchemy>=2.0,<3",
+    "psycopg[binary]>=3.1,<4",
+    "pydantic>=2,<3",
+    "pandas>=2,<3",
+    "pyarrow>=15,<30",
+]
+
+[project.optional-dependencies]
+dev = [
+    "pytest>=8,<10",
+    "pytest-cov>=5,<8",
+    "ruff>=0.6,<1",
+    "mypy>=1.10,<2",
+    "pre-commit>=3.7,<5",
+]
 
 [tool.setuptools]
-packages = []
+package-dir = {"" = "src"}
+
+[tool.setuptools.packages.find]
+where = ["src"]
+include = ["data_platform*"]
+
+[tool.ruff]
+line-length = 100
+target-version = "py312"
+src = ["src", "tests"]
+
+[tool.mypy]
+python_version = "3.12"
+strict = true
+mypy_path = "src"
+packages = ["data_platform"]
+exclude = ["^src/data_platform/dbt/"]
+
+[[tool.mypy.overrides]]
+module = ["dbt", "dbt.*", "pyiceberg.cli", "pyiceberg.cli.*"]
+ignore_missing_imports = true
 
 [tool.pytest.ini_options]
 addopts = "-q"
 testpaths = ["tests"]
+pythonpath = ["src"]
