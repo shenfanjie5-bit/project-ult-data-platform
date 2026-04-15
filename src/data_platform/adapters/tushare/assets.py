@@ -20,6 +20,23 @@ TUSHARE_INDEX_CLASSIFY_ASSET_NAME = "tushare_index_classify"
 TUSHARE_TRADE_CAL_ASSET_NAME = "tushare_trade_cal"
 TUSHARE_STOCK_COMPANY_ASSET_NAME = "tushare_stock_company"
 TUSHARE_NAMECHANGE_ASSET_NAME = "tushare_namechange"
+TUSHARE_ANNS_ASSET_NAME = "tushare_anns"
+TUSHARE_SUSPEND_D_ASSET_NAME = "tushare_suspend_d"
+TUSHARE_DIVIDEND_ASSET_NAME = "tushare_dividend"
+TUSHARE_SHARE_FLOAT_ASSET_NAME = "tushare_share_float"
+TUSHARE_STK_HOLDERNUMBER_ASSET_NAME = "tushare_stk_holdernumber"
+TUSHARE_DISCLOSURE_DATE_ASSET_NAME = "tushare_disclosure_date"
+
+ALLOW_NULL_IDENTITY_METADATA_KEY = b"data_platform.allow_null_identity"
+ALLOW_NULL_IDENTITY_METADATA_VALUE = b"true"
+
+
+def _string_field(name: str, *, allow_null_identity: bool = False) -> pa.Field:
+    metadata = None
+    if allow_null_identity:
+        metadata = {ALLOW_NULL_IDENTITY_METADATA_KEY: ALLOW_NULL_IDENTITY_METADATA_VALUE}
+    return pa.field(name, pa.string(), metadata=metadata)
+
 
 TUSHARE_STOCK_BASIC_SCHEMA = pa.schema(
     [
@@ -200,6 +217,79 @@ TUSHARE_NAMECHANGE_SCHEMA = pa.schema(
     ]
 )
 
+TUSHARE_ANNS_SCHEMA = pa.schema(
+    [
+        _string_field("ts_code", allow_null_identity=True),
+        ("ann_date", pa.string()),
+        ("name", pa.string()),
+        ("title", pa.string()),
+        ("url", pa.string()),
+        ("rec_time", pa.string()),
+    ]
+)
+
+TUSHARE_SUSPEND_D_SCHEMA = pa.schema(
+    [
+        ("ts_code", pa.string()),
+        ("trade_date", pa.string()),
+        ("suspend_timing", pa.string()),
+        ("suspend_type", pa.string()),
+    ]
+)
+
+TUSHARE_DIVIDEND_SCHEMA = pa.schema(
+    [
+        ("ts_code", pa.string()),
+        ("end_date", pa.string()),
+        ("ann_date", pa.string()),
+        ("div_proc", pa.string()),
+        ("stk_div", TUSHARE_RAW_NUMERIC_TYPE),
+        ("stk_bo_rate", TUSHARE_RAW_NUMERIC_TYPE),
+        ("stk_co_rate", TUSHARE_RAW_NUMERIC_TYPE),
+        ("cash_div", TUSHARE_RAW_NUMERIC_TYPE),
+        ("cash_div_tax", TUSHARE_RAW_NUMERIC_TYPE),
+        ("record_date", pa.string()),
+        ("ex_date", pa.string()),
+        ("pay_date", pa.string()),
+        ("div_listdate", pa.string()),
+        ("imp_ann_date", pa.string()),
+        ("base_date", pa.string()),
+        ("base_share", TUSHARE_RAW_NUMERIC_TYPE),
+    ]
+)
+
+TUSHARE_SHARE_FLOAT_SCHEMA = pa.schema(
+    [
+        ("ts_code", pa.string()),
+        ("ann_date", pa.string()),
+        ("float_date", pa.string()),
+        ("float_share", TUSHARE_RAW_NUMERIC_TYPE),
+        ("float_ratio", TUSHARE_RAW_NUMERIC_TYPE),
+        ("holder_name", pa.string()),
+        ("share_type", pa.string()),
+    ]
+)
+
+TUSHARE_STK_HOLDERNUMBER_SCHEMA = pa.schema(
+    [
+        ("ts_code", pa.string()),
+        ("ann_date", pa.string()),
+        ("end_date", pa.string()),
+        ("holder_num", TUSHARE_RAW_NUMERIC_TYPE),
+    ]
+)
+
+TUSHARE_DISCLOSURE_DATE_SCHEMA = pa.schema(
+    [
+        ("ts_code", pa.string()),
+        ("ann_date", pa.string()),
+        ("end_date", pa.string()),
+        ("pre_date", pa.string()),
+        ("actual_date", pa.string()),
+        ("modify_date", pa.string()),
+    ]
+)
+
 TUSHARE_STOCK_BASIC_FIELDS = tuple(TUSHARE_STOCK_BASIC_SCHEMA.names)
 TUSHARE_STOCK_BASIC_FIELDS_CSV = ",".join(TUSHARE_STOCK_BASIC_FIELDS)
 TUSHARE_BAR_FIELDS = tuple(TUSHARE_BAR_SCHEMA.names)
@@ -224,6 +314,18 @@ TUSHARE_STOCK_COMPANY_FIELDS = tuple(TUSHARE_STOCK_COMPANY_SCHEMA.names)
 TUSHARE_STOCK_COMPANY_FIELDS_CSV = ",".join(TUSHARE_STOCK_COMPANY_FIELDS)
 TUSHARE_NAMECHANGE_FIELDS = tuple(TUSHARE_NAMECHANGE_SCHEMA.names)
 TUSHARE_NAMECHANGE_FIELDS_CSV = ",".join(TUSHARE_NAMECHANGE_FIELDS)
+TUSHARE_ANNS_FIELDS = tuple(TUSHARE_ANNS_SCHEMA.names)
+TUSHARE_ANNS_FIELDS_CSV = ",".join(TUSHARE_ANNS_FIELDS)
+TUSHARE_SUSPEND_D_FIELDS = tuple(TUSHARE_SUSPEND_D_SCHEMA.names)
+TUSHARE_SUSPEND_D_FIELDS_CSV = ",".join(TUSHARE_SUSPEND_D_FIELDS)
+TUSHARE_DIVIDEND_FIELDS = tuple(TUSHARE_DIVIDEND_SCHEMA.names)
+TUSHARE_DIVIDEND_FIELDS_CSV = ",".join(TUSHARE_DIVIDEND_FIELDS)
+TUSHARE_SHARE_FLOAT_FIELDS = tuple(TUSHARE_SHARE_FLOAT_SCHEMA.names)
+TUSHARE_SHARE_FLOAT_FIELDS_CSV = ",".join(TUSHARE_SHARE_FLOAT_FIELDS)
+TUSHARE_STK_HOLDERNUMBER_FIELDS = tuple(TUSHARE_STK_HOLDERNUMBER_SCHEMA.names)
+TUSHARE_STK_HOLDERNUMBER_FIELDS_CSV = ",".join(TUSHARE_STK_HOLDERNUMBER_FIELDS)
+TUSHARE_DISCLOSURE_DATE_FIELDS = tuple(TUSHARE_DISCLOSURE_DATE_SCHEMA.names)
+TUSHARE_DISCLOSURE_DATE_FIELDS_CSV = ",".join(TUSHARE_DISCLOSURE_DATE_FIELDS)
 
 REFERENCE_DATA_IDENTITY_FIELDS: dict[str, tuple[str, ...]] = {
     "index_basic": ("ts_code",),
@@ -234,6 +336,15 @@ REFERENCE_DATA_IDENTITY_FIELDS: dict[str, tuple[str, ...]] = {
     "trade_cal": ("cal_date", "is_open"),
     "stock_company": ("ts_code",),
     "namechange": ("ts_code", "start_date"),
+}
+
+EVENT_METADATA_FIELDS: dict[str, tuple[str, ...]] = {
+    "anns": TUSHARE_ANNS_FIELDS,
+    "suspend_d": TUSHARE_SUSPEND_D_FIELDS,
+    "dividend": TUSHARE_DIVIDEND_FIELDS,
+    "share_float": TUSHARE_SHARE_FLOAT_FIELDS,
+    "stk_holdernumber": TUSHARE_STK_HOLDERNUMBER_FIELDS,
+    "disclosure_date": TUSHARE_DISCLOSURE_DATE_FIELDS,
 }
 
 TUSHARE_STOCK_BASIC_ASSET = AssetSpec(
@@ -334,6 +445,48 @@ TUSHARE_NAMECHANGE_ASSET = AssetSpec(
     schema=TUSHARE_NAMECHANGE_SCHEMA,
 )
 
+TUSHARE_ANNS_ASSET = AssetSpec(
+    name=TUSHARE_ANNS_ASSET_NAME,
+    dataset="anns",
+    partition="daily",
+    schema=TUSHARE_ANNS_SCHEMA,
+)
+
+TUSHARE_SUSPEND_D_ASSET = AssetSpec(
+    name=TUSHARE_SUSPEND_D_ASSET_NAME,
+    dataset="suspend_d",
+    partition="daily",
+    schema=TUSHARE_SUSPEND_D_SCHEMA,
+)
+
+TUSHARE_DIVIDEND_ASSET = AssetSpec(
+    name=TUSHARE_DIVIDEND_ASSET_NAME,
+    dataset="dividend",
+    partition="daily",
+    schema=TUSHARE_DIVIDEND_SCHEMA,
+)
+
+TUSHARE_SHARE_FLOAT_ASSET = AssetSpec(
+    name=TUSHARE_SHARE_FLOAT_ASSET_NAME,
+    dataset="share_float",
+    partition="daily",
+    schema=TUSHARE_SHARE_FLOAT_SCHEMA,
+)
+
+TUSHARE_STK_HOLDERNUMBER_ASSET = AssetSpec(
+    name=TUSHARE_STK_HOLDERNUMBER_ASSET_NAME,
+    dataset="stk_holdernumber",
+    partition="daily",
+    schema=TUSHARE_STK_HOLDERNUMBER_SCHEMA,
+)
+
+TUSHARE_DISCLOSURE_DATE_ASSET = AssetSpec(
+    name=TUSHARE_DISCLOSURE_DATE_ASSET_NAME,
+    dataset="disclosure_date",
+    partition="daily",
+    schema=TUSHARE_DISCLOSURE_DATE_SCHEMA,
+)
+
 TUSHARE_ASSETS = [
     TUSHARE_STOCK_BASIC_ASSET,
     TUSHARE_DAILY_ASSET,
@@ -349,15 +502,29 @@ TUSHARE_ASSETS = [
     TUSHARE_TRADE_CAL_ASSET,
     TUSHARE_STOCK_COMPANY_ASSET,
     TUSHARE_NAMECHANGE_ASSET,
+    TUSHARE_ANNS_ASSET,
+    TUSHARE_SUSPEND_D_ASSET,
+    TUSHARE_DIVIDEND_ASSET,
+    TUSHARE_SHARE_FLOAT_ASSET,
+    TUSHARE_STK_HOLDERNUMBER_ASSET,
+    TUSHARE_DISCLOSURE_DATE_ASSET,
 ]
 
 __all__ = [
+    "ALLOW_NULL_IDENTITY_METADATA_KEY",
+    "ALLOW_NULL_IDENTITY_METADATA_VALUE",
+    "EVENT_METADATA_FIELDS",
     "REFERENCE_DATA_IDENTITY_FIELDS",
     "TUSHARE_ADJ_FACTOR_ASSET",
     "TUSHARE_ADJ_FACTOR_ASSET_NAME",
     "TUSHARE_ADJ_FACTOR_FIELDS",
     "TUSHARE_ADJ_FACTOR_FIELDS_CSV",
     "TUSHARE_ADJ_FACTOR_SCHEMA",
+    "TUSHARE_ANNS_ASSET",
+    "TUSHARE_ANNS_ASSET_NAME",
+    "TUSHARE_ANNS_FIELDS",
+    "TUSHARE_ANNS_FIELDS_CSV",
+    "TUSHARE_ANNS_SCHEMA",
     "TUSHARE_ASSETS",
     "TUSHARE_BAR_FIELDS",
     "TUSHARE_BAR_FIELDS_CSV",
@@ -369,6 +536,16 @@ __all__ = [
     "TUSHARE_DAILY_BASIC_FIELDS",
     "TUSHARE_DAILY_BASIC_FIELDS_CSV",
     "TUSHARE_DAILY_BASIC_SCHEMA",
+    "TUSHARE_DISCLOSURE_DATE_ASSET",
+    "TUSHARE_DISCLOSURE_DATE_ASSET_NAME",
+    "TUSHARE_DISCLOSURE_DATE_FIELDS",
+    "TUSHARE_DISCLOSURE_DATE_FIELDS_CSV",
+    "TUSHARE_DISCLOSURE_DATE_SCHEMA",
+    "TUSHARE_DIVIDEND_ASSET",
+    "TUSHARE_DIVIDEND_ASSET_NAME",
+    "TUSHARE_DIVIDEND_FIELDS",
+    "TUSHARE_DIVIDEND_FIELDS_CSV",
+    "TUSHARE_DIVIDEND_SCHEMA",
     "TUSHARE_INDEX_BASIC_ASSET",
     "TUSHARE_INDEX_BASIC_ASSET_NAME",
     "TUSHARE_INDEX_BASIC_FIELDS",
@@ -401,6 +578,11 @@ __all__ = [
     "TUSHARE_NAMECHANGE_FIELDS",
     "TUSHARE_NAMECHANGE_FIELDS_CSV",
     "TUSHARE_NAMECHANGE_SCHEMA",
+    "TUSHARE_SHARE_FLOAT_ASSET",
+    "TUSHARE_SHARE_FLOAT_ASSET_NAME",
+    "TUSHARE_SHARE_FLOAT_FIELDS",
+    "TUSHARE_SHARE_FLOAT_FIELDS_CSV",
+    "TUSHARE_SHARE_FLOAT_SCHEMA",
     "TUSHARE_STOCK_BASIC_ASSET",
     "TUSHARE_STOCK_BASIC_ASSET_NAME",
     "TUSHARE_STOCK_BASIC_FIELDS",
@@ -411,6 +593,16 @@ __all__ = [
     "TUSHARE_STOCK_COMPANY_FIELDS",
     "TUSHARE_STOCK_COMPANY_FIELDS_CSV",
     "TUSHARE_STOCK_COMPANY_SCHEMA",
+    "TUSHARE_STK_HOLDERNUMBER_ASSET",
+    "TUSHARE_STK_HOLDERNUMBER_ASSET_NAME",
+    "TUSHARE_STK_HOLDERNUMBER_FIELDS",
+    "TUSHARE_STK_HOLDERNUMBER_FIELDS_CSV",
+    "TUSHARE_STK_HOLDERNUMBER_SCHEMA",
+    "TUSHARE_SUSPEND_D_ASSET",
+    "TUSHARE_SUSPEND_D_ASSET_NAME",
+    "TUSHARE_SUSPEND_D_FIELDS",
+    "TUSHARE_SUSPEND_D_FIELDS_CSV",
+    "TUSHARE_SUSPEND_D_SCHEMA",
     "TUSHARE_TRADE_CAL_ASSET",
     "TUSHARE_TRADE_CAL_ASSET_NAME",
     "TUSHARE_TRADE_CAL_FIELDS",

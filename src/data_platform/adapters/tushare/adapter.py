@@ -16,8 +16,11 @@ from typing import Any, Protocol, cast
 import pyarrow as pa  # type: ignore[import-untyped]
 import pandas as pd  # type: ignore[import-untyped]
 
-from data_platform.adapters.base import AssetSpec, BaseAdapter, FetchParams
+from data_platform.adapters.base import AdapterFetchError, AssetSpec, BaseAdapter, FetchParams
 from data_platform.adapters.tushare.assets import (
+    ALLOW_NULL_IDENTITY_METADATA_KEY,
+    ALLOW_NULL_IDENTITY_METADATA_VALUE,
+    EVENT_METADATA_FIELDS,
     REFERENCE_DATA_IDENTITY_FIELDS,
     TUSHARE_ASSETS,
     TUSHARE_STOCK_BASIC_ASSET_NAME,
@@ -28,6 +31,7 @@ TOKEN_ENV_VAR = "DP_TUSHARE_TOKEN"
 STOCK_BASIC_IDENTITY_FIELDS = ("ts_code",)
 MARKET_DATA_IDENTITY_FIELDS = ("ts_code", "trade_date")
 MARKET_DATASETS = frozenset({"daily", "weekly", "monthly", "adj_factor", "daily_basic"})
+EVENT_DATASETS = frozenset(EVENT_METADATA_FIELDS)
 STOCK_TS_CODE_DATASETS = frozenset(
     {
         "stock_basic",
@@ -38,9 +42,12 @@ STOCK_TS_CODE_DATASETS = frozenset(
         "daily_basic",
         "stock_company",
         "namechange",
+        *EVENT_DATASETS,
     }
 )
-DATE_IDENTITY_FIELDS = frozenset({"trade_date", "cal_date", "start_date", "in_date"})
+DATE_IDENTITY_FIELDS = frozenset(
+    {"trade_date", "cal_date", "start_date", "in_date", "ann_date", "end_date", "float_date"}
+)
 STOCK_BASIC_TS_CODE_PATTERN = re.compile(r"\d{6}\.(?:SH|SZ|BJ)")
 TRADE_DATE_PATTERN = re.compile(r"\d{8}")
 
@@ -57,6 +64,14 @@ class _TushareFetchSpec:
 
 class AdapterConfigError(RuntimeError):
     """Raised when an adapter is missing required runtime configuration."""
+
+
+class UpstreamSchemaError(ValueError):
+    """Raised when an upstream Tushare response does not match the declared schema."""
+
+
+class UpstreamEmptyResult(ValueError):
+    """Raised when Tushare returns no rows for a Raw Zone event partition."""
 
 
 class _TushareClient(Protocol):
@@ -101,6 +116,24 @@ class _TushareClient(Protocol):
 
     def namechange(self, **kwargs: Any) -> Any:
         """Return namechange rows from Tushare Pro."""
+
+    def anns(self, **kwargs: Any) -> Any:
+        """Return announcement metadata rows from Tushare Pro."""
+
+    def suspend_d(self, **kwargs: Any) -> Any:
+        """Return suspend/resume event rows from Tushare Pro."""
+
+    def dividend(self, **kwargs: Any) -> Any:
+        """Return dividend event rows from Tushare Pro."""
+
+    def share_float(self, **kwargs: Any) -> Any:
+        """Return restricted-share unlock event rows from Tushare Pro."""
+
+    def stk_holdernumber(self, **kwargs: Any) -> Any:
+        """Return shareholder count event rows from Tushare Pro."""
+
+    def disclosure_date(self, **kwargs: Any) -> Any:
+        """Return disclosure calendar event rows from Tushare Pro."""
 
 
 class TushareAdapter(BaseAdapter):
@@ -151,6 +184,8 @@ class TushareAdapter(BaseAdapter):
         result = fetch_method(**request_params)
         if spec.asset.dataset in REFERENCE_DATA_IDENTITY_FIELDS:
             return _to_reference_table(spec.asset.dataset, result, spec.asset.schema)
+        if spec.asset.dataset in EVENT_METADATA_FIELDS:
+            return _to_event_table(spec.asset.dataset, result, spec.asset.schema)
         return _to_asset_table(result, spec.asset, spec.identity_fields)
 
     def _get_client(self) -> _TushareClient:
@@ -293,6 +328,29 @@ def _to_reference_table(dataset: str, result: Any, schema: pa.Schema) -> pa.Tabl
     return _to_asset_table(result, asset, identity_fields)
 
 
+def _to_event_table(dataset: str, result: Any, schema: pa.Schema) -> pa.Table:
+    try:
+        spec = _FETCH_SPECS_BY_DATASET[dataset]
+        identity_fields = EVENT_IDENTITY_FIELDS[dataset]
+        event_date_fields = EVENT_DATE_FIELDS[dataset]
+    except KeyError as exc:
+        msg = f"unsupported Tushare event dataset: {dataset!r}"
+        raise ValueError(msg) from exc
+
+    asset = AssetSpec(
+        name=spec.asset.name,
+        dataset=spec.asset.dataset,
+        partition=spec.asset.partition,
+        schema=schema,
+    )
+    table = _to_asset_table(result, asset, identity_fields)
+    if table.num_rows == 0:
+        msg = f"Tushare {asset.dataset} response returned an empty table"
+        raise UpstreamEmptyResult(msg)
+    _validate_event_date_columns(table, asset, event_date_fields)
+    return table
+
+
 def _to_asset_table(
     value: Any,
     asset: AssetSpec,
@@ -322,7 +380,7 @@ def _validate_asset_fields(field_names: Sequence[str], asset: AssetSpec) -> None
     if missing:
         joined = ", ".join(missing)
         msg = f"Tushare {asset.dataset} response missing required fields: {joined}"
-        raise ValueError(msg)
+        raise UpstreamSchemaError(msg)
 
 
 def _field_names_from_result(value: Any) -> list[str] | None:
@@ -373,7 +431,7 @@ def _validate_asset_records(
         if missing:
             joined = ", ".join(missing)
             msg = f"Tushare {asset.dataset} row {index} missing required fields: {joined}"
-            raise ValueError(msg)
+            raise UpstreamSchemaError(msg)
 
         for field_name in identity_fields:
             _validate_identity_value(row[field_name], index, field_name, asset)
@@ -397,6 +455,8 @@ def _validate_identity_value(
     asset: AssetSpec,
 ) -> None:
     if _is_nullish(value):
+        if _allows_null_identity(asset.schema, field_name):
+            return
         msg = f"Tushare {asset.dataset} row {row_index} has null identity field: {field_name}"
         raise ValueError(msg)
 
@@ -409,6 +469,8 @@ def _validate_identity_value(
 
     normalized_value = str(value)
     if not normalized_value.strip():
+        if _allows_null_identity(asset.schema, field_name):
+            return
         msg = f"Tushare {asset.dataset} row {row_index} has blank identity field: {field_name}"
         raise ValueError(msg)
 
@@ -422,13 +484,6 @@ def _validate_identity_value(
     if field_name in DATE_IDENTITY_FIELDS and not _is_valid_trade_date(normalized_value):
         msg = f"Tushare {asset.dataset} row {row_index} has malformed identity field: {field_name}"
         raise ValueError(msg)
-
-
-def _validate_trade_date_param(dataset: str, params: Mapping[str, Any]) -> None:
-    value = params.get("trade_date")
-    if value is None:
-        return
-    _validate_date_param(dataset, "trade_date", value)
 
 
 def _validate_date_params(
@@ -476,6 +531,37 @@ def _validate_raw_partition_date(
             raise ValueError(msg)
 
 
+def _validate_event_date_columns(
+    table: pa.Table,
+    asset: AssetSpec,
+    event_date_fields: tuple[str, ...],
+) -> None:
+    for field_name in event_date_fields:
+        if field_name not in table.column_names:
+            msg = f"Tushare {asset.dataset} response missing required fields: {field_name}"
+            raise UpstreamSchemaError(msg)
+
+        for index, value in enumerate(table[field_name].to_pylist()):
+            if not pd.api.types.is_scalar(value) or _is_nullish(value):
+                msg = (
+                    f"Tushare {asset.dataset} row {index} has null event date field: "
+                    f"{field_name}"
+                )
+                raise ValueError(msg)
+            if not _is_valid_trade_date(str(value)):
+                msg = (
+                    f"Tushare {asset.dataset} row {index} has malformed event date field: "
+                    f"{field_name}"
+                )
+                raise ValueError(msg)
+
+
+def _allows_null_identity(schema: pa.Schema, field_name: str) -> bool:
+    field = schema.field(field_name)
+    metadata = field.metadata or {}
+    return metadata.get(ALLOW_NULL_IDENTITY_METADATA_KEY) == ALLOW_NULL_IDENTITY_METADATA_VALUE
+
+
 def _is_valid_trade_date(value: str) -> bool:
     if not TRADE_DATE_PATTERN.fullmatch(value):
         return False
@@ -516,10 +602,37 @@ def _is_nullish(value: Any) -> bool:
 
 
 def _print_error(exc: BaseException, asset_id: str) -> None:
-    payload = {"error": str(exc), "asset": asset_id}
+    payload = {"error": str(exc), "asset": asset_id, "error_type": _error_type(exc)}
     print(json.dumps(payload, ensure_ascii=False, sort_keys=True), file=sys.stderr)
 
 
+def _error_type(exc: BaseException) -> str:
+    cause = exc.cause if isinstance(exc, AdapterFetchError) else exc
+    if isinstance(cause, AdapterConfigError):
+        return "config_error"
+    if isinstance(cause, UpstreamSchemaError):
+        return "upstream_missing_columns"
+    if isinstance(cause, UpstreamEmptyResult):
+        return "upstream_empty_table"
+    return "runtime_error"
+
+
+EVENT_IDENTITY_FIELDS: dict[str, tuple[str, ...]] = {
+    "anns": ("ts_code", "ann_date", "title", "url"),
+    "suspend_d": ("ts_code", "trade_date"),
+    "dividend": ("ts_code", "ann_date", "end_date"),
+    "share_float": ("ts_code", "ann_date", "float_date"),
+    "stk_holdernumber": ("ts_code", "ann_date", "end_date"),
+    "disclosure_date": ("ts_code", "ann_date", "end_date"),
+}
+EVENT_DATE_FIELDS: dict[str, tuple[str, ...]] = {
+    "anns": ("ann_date",),
+    "suspend_d": ("trade_date",),
+    "dividend": ("ann_date",),
+    "share_float": ("ann_date", "float_date"),
+    "stk_holdernumber": ("ann_date", "end_date"),
+    "disclosure_date": ("ann_date", "end_date"),
+}
 _METHOD_BY_DATASET = {
     "stock_basic": "stock_basic",
     "daily": "daily",
@@ -535,11 +648,18 @@ _METHOD_BY_DATASET = {
     "trade_cal": "trade_cal",
     "stock_company": "stock_company",
     "namechange": "namechange",
+    "anns": "anns",
+    "suspend_d": "suspend_d",
+    "dividend": "dividend",
+    "share_float": "share_float",
+    "stk_holdernumber": "stk_holdernumber",
+    "disclosure_date": "disclosure_date",
 }
 _IDENTITY_FIELDS_BY_DATASET = {
     "stock_basic": STOCK_BASIC_IDENTITY_FIELDS,
     **{dataset: MARKET_DATA_IDENTITY_FIELDS for dataset in MARKET_DATASETS},
     **REFERENCE_DATA_IDENTITY_FIELDS,
+    **EVENT_IDENTITY_FIELDS,
 }
 _PARTITION_DATE_FIELD_BY_DATASET = {
     **{dataset: "trade_date" for dataset in MARKET_DATASETS},
@@ -548,6 +668,12 @@ _PARTITION_DATE_FIELD_BY_DATASET = {
     "index_member": "in_date",
     "trade_cal": "cal_date",
     "namechange": "start_date",
+    "anns": "ann_date",
+    "suspend_d": "trade_date",
+    "dividend": "ann_date",
+    "share_float": "ann_date",
+    "stk_holdernumber": "ann_date",
+    "disclosure_date": "ann_date",
 }
 _PARTITION_REQUEST_PARAMS_BY_DATASET = {
     **{dataset: ("trade_date",) for dataset in MARKET_DATASETS},
@@ -556,6 +682,12 @@ _PARTITION_REQUEST_PARAMS_BY_DATASET = {
     "index_member": ("start_date", "end_date"),
     "trade_cal": ("start_date", "end_date"),
     "namechange": ("start_date", "end_date"),
+    "anns": ("ann_date",),
+    "suspend_d": ("trade_date",),
+    "dividend": ("ann_date",),
+    "share_float": ("ann_date",),
+    "stk_holdernumber": ("ann_date",),
+    "disclosure_date": ("ann_date",),
 }
 _DATE_PARAM_NAMES_BY_DATASET = {
     **{dataset: ("trade_date", "start_date", "end_date") for dataset in MARKET_DATASETS},
@@ -564,6 +696,19 @@ _DATE_PARAM_NAMES_BY_DATASET = {
     "index_member": ("start_date", "end_date"),
     "trade_cal": ("start_date", "end_date"),
     "namechange": ("start_date", "end_date"),
+    "anns": ("ann_date", "start_date", "end_date"),
+    "suspend_d": ("trade_date", "start_date", "end_date"),
+    "dividend": ("ann_date", "record_date", "ex_date", "pay_date", "start_date", "end_date"),
+    "share_float": ("ann_date", "float_date", "start_date", "end_date"),
+    "stk_holdernumber": ("ann_date", "end_date", "start_date"),
+    "disclosure_date": (
+        "ann_date",
+        "end_date",
+        "pre_date",
+        "actual_date",
+        "modify_date",
+        "start_date",
+    ),
 }
 _FETCH_SPECS_BY_ASSET_NAME = {
     _asset.name: _TushareFetchSpec(
@@ -589,6 +734,7 @@ __all__ = [
     "AdapterConfigError",
     "TOKEN_ENV_VAR",
     "TushareAdapter",
+    "_to_event_table",
     "_to_reference_table",
     "main",
     "run_stock_basic",
