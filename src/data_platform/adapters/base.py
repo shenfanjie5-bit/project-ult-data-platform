@@ -5,63 +5,24 @@ from __future__ import annotations
 import time
 from abc import ABC, abstractmethod
 from dataclasses import dataclass
+from datetime import UTC, date, datetime
 from threading import Lock
 from typing import (
-    TYPE_CHECKING,
     Any,
     Callable,
     Literal,
     Mapping,
-    Protocol,
-    Sequence,
     TypeAlias,
-    runtime_checkable,
+    cast,
 )
 
-
-@runtime_checkable
-class _ArrowTable(Protocol):
-    num_rows: int
-
-
-if TYPE_CHECKING:
-    Schema: TypeAlias = Any
-    Table: TypeAlias = _ArrowTable
-else:
-    try:
-        from pyarrow import Schema, Table
-        import pyarrow as pa
-    except ModuleNotFoundError:
-
-        class Schema:
-            """Minimal fallback used only when pyarrow is unavailable locally."""
-
-            def __init__(self, fields: Sequence[tuple[str, Any]] | None = None) -> None:
-                self.fields = tuple(fields or ())
-
-        class Table:
-            """Minimal fallback used only when pyarrow is unavailable locally."""
-
-            def __init__(self, rows: Sequence[Mapping[str, Any]] | None = None) -> None:
-                self.num_rows = len(rows or ())
-
-        class _PyArrowFallback:
-            Schema = Schema
-            Table = Table
-
-            @staticmethod
-            def schema(fields: Sequence[tuple[str, Any]]) -> Schema:
-                return Schema(fields)
-
-            @staticmethod
-            def table(rows: Sequence[Mapping[str, Any]]) -> Table:
-                return Table(rows)
-
-        pa = _PyArrowFallback()
+import pyarrow as pa  # type: ignore[import-untyped]
+from pyarrow import Schema, Table
 
 FetchParams: TypeAlias = Mapping[str, Any]
 FetchResult: TypeAlias = Table | list[dict[str, Any]]
 PartitionType: TypeAlias = Literal["daily", "static"]
+_ARROW_TABLE_TYPE: type[Any] = pa.Table
 
 
 @dataclass(frozen=True, slots=True)
@@ -93,6 +54,16 @@ class QuotaConfig:
             msg = "backoff_seconds must be non-negative"
             raise ValueError(msg)
 
+    @classmethod
+    def from_mapping(cls, value: Mapping[str, Any]) -> QuotaConfig:
+        """Build the internal quota config from the external adapter contract dict."""
+
+        return cls(
+            requests_per_minute=int(value["requests_per_minute"]),
+            daily_credit_quota=_optional_int(value.get("daily_credit_quota")),
+            backoff_seconds=float(value.get("backoff_seconds", 1.0)),
+        )
+
 
 class AdapterQuotaExceeded(RuntimeError):
     """Raised when an adapter-level quota is exhausted."""
@@ -118,10 +89,6 @@ class DataSourceAdapter(ABC):
     """Contract implemented by data source adapters."""
 
     @abstractmethod
-    def source_id(self) -> str:
-        """Return the unique source identifier for this adapter."""
-
-    @abstractmethod
     def get_assets(self) -> list[AssetSpec]:
         """Return data assets exposed by this adapter."""
 
@@ -134,15 +101,23 @@ class DataSourceAdapter(ABC):
         """Return staging dbt model names required for this adapter."""
 
     @abstractmethod
-    def get_quota_config(self) -> QuotaConfig:
+    def get_quota_config(self) -> dict[str, Any]:
         """Return quota configuration for this adapter."""
+
+
+class FetchableAdapter(DataSourceAdapter):
+    """Runtime adapter layer with source identity and fetch behavior."""
+
+    @abstractmethod
+    def source_id(self) -> str:
+        """Return the unique source identifier for this adapter."""
 
     @abstractmethod
     def fetch(self, asset_id: str, params: FetchParams) -> FetchResult:
         """Fetch one asset from the source."""
 
 
-class BaseAdapter(DataSourceAdapter):
+class BaseAdapter(FetchableAdapter):
     """Base adapter with shared throttling, retry, and fetch error handling."""
 
     def __init__(
@@ -163,6 +138,7 @@ class BaseAdapter(DataSourceAdapter):
         self._tokens = 0.0
         self._last_token_refill = self._clock()
         self._daily_credits_used = 0
+        self._daily_credit_date = self._utc_today()
 
     def fetch(self, asset_id: str, params: FetchParams) -> FetchResult:
         """Fetch with quota throttling, retry-on-429, and error wrapping."""
@@ -177,7 +153,7 @@ class BaseAdapter(DataSourceAdapter):
             except Exception as exc:
                 if self._is_rate_limit_error(exc) and attempt < self._max_retries:
                     attempt += 1
-                    self._sleep(self.get_quota_config().backoff_seconds)
+                    self._sleep(self._runtime_quota_config().backoff_seconds)
                     continue
                 raise AdapterFetchError(self.source_id(), asset_id, exc) from exc
 
@@ -188,21 +164,22 @@ class BaseAdapter(DataSourceAdapter):
     def _throttle(self) -> None:
         """Block until this adapter has a request token available."""
 
-        quota = self.get_quota_config()
+        quota = self._runtime_quota_config()
         seconds_per_token = 60.0 / quota.requests_per_minute
-        with self._quota_lock:
-            while self._tokens < 1.0:
+        while True:
+            with self._quota_lock:
                 now = self._clock()
                 elapsed = max(0.0, now - self._last_token_refill)
                 self._tokens = min(1.0, self._tokens + (elapsed / seconds_per_token))
                 self._last_token_refill = now
+
                 if self._tokens >= 1.0:
-                    break
+                    self._tokens -= 1.0
+                    return
 
                 wait_seconds = (1.0 - self._tokens) * seconds_per_token
-                self._sleep(wait_seconds)
 
-            self._tokens -= 1.0
+            self._sleep(wait_seconds)
 
     def on_fetch_complete(self, asset_id: str, row_count: int, duration_s: float) -> None:
         """Hook called after successful fetch completion."""
@@ -212,20 +189,32 @@ class BaseAdapter(DataSourceAdapter):
         """Fetch one asset without shared BaseAdapter error handling."""
 
     def _reserve_daily_credit(self) -> None:
-        quota = self.get_quota_config()
+        quota = self._runtime_quota_config()
         if quota.daily_credit_quota is None:
             return
 
         with self._daily_credit_lock:
+            today = self._utc_today()
+            if today != self._daily_credit_date:
+                self._daily_credits_used = 0
+                self._daily_credit_date = today
+
             if self._daily_credits_used >= quota.daily_credit_quota:
                 msg = f"daily credit quota exceeded for source_id={self.source_id()!r}"
                 raise AdapterQuotaExceeded(msg)
             self._daily_credits_used += 1
 
+    def _runtime_quota_config(self) -> QuotaConfig:
+        return QuotaConfig.from_mapping(self.get_quota_config())
+
+    @staticmethod
+    def _utc_today() -> date:
+        return datetime.now(UTC).date()
+
     @staticmethod
     def _row_count(result: FetchResult) -> int:
-        if isinstance(result, Table):
-            return int(result.num_rows)
+        if isinstance(result, _ARROW_TABLE_TYPE):
+            return int(cast(Any, result).num_rows)
         return len(result)
 
     @staticmethod
@@ -247,10 +236,10 @@ class AdapterRegistry:
     """Thread-safe registry for source adapters."""
 
     def __init__(self) -> None:
-        self._adapters: dict[str, DataSourceAdapter] = {}
+        self._adapters: dict[str, FetchableAdapter] = {}
         self._lock = Lock()
 
-    def register(self, adapter: DataSourceAdapter) -> None:
+    def register(self, adapter: FetchableAdapter) -> None:
         source_id = adapter.source_id()
         with self._lock:
             if source_id in self._adapters:
@@ -258,7 +247,7 @@ class AdapterRegistry:
                 raise AdapterAlreadyRegistered(msg)
             self._adapters[source_id] = adapter
 
-    def get(self, source_id: str) -> DataSourceAdapter:
+    def get(self, source_id: str) -> FetchableAdapter:
         with self._lock:
             return self._adapters[source_id]
 
@@ -267,7 +256,14 @@ class AdapterRegistry:
             return list(self._adapters)
 
 
-_REGISTRY = AdapterRegistry()
+def _optional_int(value: Any) -> int | None:
+    if value is None:
+        return None
+    return int(value)
+
+
+REGISTRY = AdapterRegistry()
+"""Process-global adapter registry for orchestrator assembly."""
 
 __all__ = [
     "AdapterAlreadyRegistered",
@@ -277,9 +273,10 @@ __all__ = [
     "AssetSpec",
     "BaseAdapter",
     "DataSourceAdapter",
+    "FetchableAdapter",
     "FetchParams",
     "FetchResult",
     "PartitionType",
     "QuotaConfig",
-    "_REGISTRY",
+    "REGISTRY",
 ]

@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from datetime import date
 from typing import Any, Mapping
 
 import pytest
@@ -13,6 +14,7 @@ from data_platform.adapters.base import (
     AssetSpec,
     BaseAdapter,
     DataSourceAdapter,
+    FetchableAdapter,
     FetchParams,
     FetchResult,
     QuotaConfig,
@@ -38,13 +40,13 @@ class ExampleAdapter(BaseAdapter):
         self,
         *,
         source: str = "example",
-        quota: QuotaConfig | None = None,
+        quota: dict[str, Any] | None = None,
         side_effects: list[FetchResult | BaseException] | None = None,
         clock: FakeClock | None = None,
         max_retries: int = 3,
     ) -> None:
         self._source = source
-        self._quota = quota or QuotaConfig(requests_per_minute=60_000, daily_credit_quota=None)
+        self._quota = quota or {"requests_per_minute": 60_000, "daily_credit_quota": None}
         self._side_effects = side_effects or [[{"id": 1}]]
         self.fetch_calls: list[tuple[str, FetchParams]] = []
         self.completed: list[tuple[str, int, float]] = []
@@ -66,8 +68,8 @@ class ExampleAdapter(BaseAdapter):
     def get_staging_dbt_models(self) -> list[str]:
         return []
 
-    def get_quota_config(self) -> QuotaConfig:
-        return self._quota
+    def get_quota_config(self) -> dict[str, Any]:
+        return dict(self._quota)
 
     def on_fetch_complete(self, asset_id: str, row_count: int, duration_s: float) -> None:
         self.completed.append((asset_id, row_count, duration_s))
@@ -81,11 +83,33 @@ class ExampleAdapter(BaseAdapter):
 
 
 def test_data_source_adapter_requires_all_methods() -> None:
+    assert DataSourceAdapter.__abstractmethods__ == frozenset(
+        {
+            "get_assets",
+            "get_resources",
+            "get_staging_dbt_models",
+            "get_quota_config",
+        }
+    )
+
     class MissingMethods(DataSourceAdapter):
         pass
 
     with pytest.raises(TypeError):
         MissingMethods()
+
+
+def test_fetchable_adapter_adds_runtime_fetch_methods() -> None:
+    assert FetchableAdapter.__abstractmethods__ == frozenset(
+        {
+            "get_assets",
+            "get_resources",
+            "get_staging_dbt_models",
+            "get_quota_config",
+            "source_id",
+            "fetch",
+        }
+    )
 
 
 def test_asset_spec_and_quota_config_validate() -> None:
@@ -115,7 +139,7 @@ def test_asset_spec_and_quota_config_validate() -> None:
 def test_throttle_waits_sixty_seconds_for_sixty_requests_at_sixty_rpm() -> None:
     clock = FakeClock()
     adapter = ExampleAdapter(
-        quota=QuotaConfig(requests_per_minute=60, daily_credit_quota=None),
+        quota={"requests_per_minute": 60, "daily_credit_quota": None},
         clock=clock,
     )
 
@@ -146,11 +170,11 @@ def test_fetch_retries_429_and_calls_completion_hook() -> None:
     clock = FakeClock()
     rows = [{"id": 1}, {"id": 2}]
     adapter = ExampleAdapter(
-        quota=QuotaConfig(
-            requests_per_minute=60_000,
-            daily_credit_quota=None,
-            backoff_seconds=2.0,
-        ),
+        quota={
+            "requests_per_minute": 60_000,
+            "daily_credit_quota": None,
+            "backoff_seconds": 2.0,
+        },
         side_effects=[RateLimitError("too many requests"), rows],
         clock=clock,
     )
@@ -168,7 +192,7 @@ def test_fetch_retries_429_and_calls_completion_hook() -> None:
 def test_daily_quota_exceeded() -> None:
     clock = FakeClock()
     adapter = ExampleAdapter(
-        quota=QuotaConfig(requests_per_minute=60_000, daily_credit_quota=1),
+        quota={"requests_per_minute": 60_000, "daily_credit_quota": 1},
         side_effects=[[{"id": 1}], [{"id": 2}]],
         clock=clock,
     )
@@ -179,6 +203,20 @@ def test_daily_quota_exceeded() -> None:
         adapter.fetch("asset-a", {})
 
 
+def test_daily_quota_resets_when_utc_day_changes() -> None:
+    clock = FakeClock()
+    adapter = ExampleAdapter(
+        quota={"requests_per_minute": 60_000, "daily_credit_quota": 1},
+        side_effects=[[{"id": 1}], [{"id": 2}]],
+        clock=clock,
+    )
+
+    assert adapter.fetch("asset-a", {}) == [{"id": 1}]
+    adapter._daily_credit_date = date.min
+
+    assert adapter.fetch("asset-a", {}) == [{"id": 2}]
+
+
 def test_adapter_registry_register_get_list_and_duplicate() -> None:
     registry = AdapterRegistry()
     adapter = ExampleAdapter(source="source-a")
@@ -187,7 +225,7 @@ def test_adapter_registry_register_get_list_and_duplicate() -> None:
 
     assert registry.get("source-a") is adapter
     assert registry.list_sources() == ["source-a"]
-    assert isinstance(base._REGISTRY, AdapterRegistry)
+    assert isinstance(base.REGISTRY, AdapterRegistry)
 
     with pytest.raises(AdapterAlreadyRegistered):
         registry.register(adapter)

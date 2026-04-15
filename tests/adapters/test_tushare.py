@@ -12,7 +12,7 @@ pd = pytest.importorskip("pandas")
 pa = pytest.importorskip("pyarrow")
 pq = pytest.importorskip("pyarrow.parquet")
 
-from data_platform.adapters.base import AdapterRegistry, QuotaConfig  # noqa: E402
+from data_platform.adapters.base import AdapterRegistry, DataSourceAdapter  # noqa: E402
 from data_platform.adapters.tushare import (  # noqa: E402
     TUSHARE_STOCK_BASIC_ASSET,
     TushareAdapter,
@@ -85,10 +85,25 @@ def test_tushare_adapter_declares_stock_basic_asset_and_quota() -> None:
     assert adapter.get_assets()[0].dataset == "stock_basic"
     assert adapter.get_assets()[0].partition == "static"
     assert adapter.get_staging_dbt_models() == ["stg_stock_basic"]
-    assert adapter.get_quota_config() == QuotaConfig(
-        requests_per_minute=200,
-        daily_credit_quota=None,
+    assert adapter.get_quota_config() == {
+        "requests_per_minute": 200,
+        "daily_credit_quota": None,
+    }
+
+
+def test_tushare_adapter_matches_documented_datasource_protocol() -> None:
+    adapter = TushareAdapter(token="test-token", client=FakeTushareClient(_stock_basic_frame(1)))
+
+    assert isinstance(adapter, DataSourceAdapter)
+    assert DataSourceAdapter.__abstractmethods__ == frozenset(
+        {
+            "get_assets",
+            "get_resources",
+            "get_staging_dbt_models",
+            "get_quota_config",
+        }
     )
+    assert type(adapter.get_quota_config()) is dict
 
 
 def test_fetch_stock_basic_returns_declared_schema() -> None:
