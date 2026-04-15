@@ -140,7 +140,17 @@ class RawWriter:
                     row_count=row_count,
                     written_at=datetime.now(tz=UTC),
                 )
-                self._write_manifest(artifact)
+                try:
+                    self._write_manifest(artifact)
+                except Exception as exc:
+                    try:
+                        artifact_path.unlink(missing_ok=True)
+                    except OSError as cleanup_exc:
+                        exc.add_note(
+                            f"failed to remove uncommitted raw artifact {artifact_path}: "
+                            f"{cleanup_exc}"
+                        )
+                    raise
                 return artifact
         except Exception:
             tmp_path.unlink(missing_ok=True)

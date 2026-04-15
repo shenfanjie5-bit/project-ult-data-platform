@@ -107,6 +107,55 @@ def test_repeated_run_id_raises_raw_artifact_exists(
         )
 
 
+def test_manifest_failure_removes_artifact_and_allows_retry(
+    raw_zone_path: Path,
+    source_id: str,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    writer = RawWriter()
+    run_id = str(uuid.uuid4())
+    artifact_path = (
+        raw_zone_path / source_id / "stock_basic" / "dt=20260415" / f"{run_id}.json.gz"
+    )
+    original_write_manifest = writer._write_manifest
+    attempts = 0
+
+    def fail_once_then_write_manifest(artifact: object) -> None:
+        nonlocal attempts
+        attempts += 1
+        if attempts == 1:
+            assert artifact_path.exists()
+            raise RuntimeError("manifest write failed")
+        original_write_manifest(artifact)  # type: ignore[arg-type]
+
+    monkeypatch.setattr(writer, "_write_manifest", fail_once_then_write_manifest)
+
+    with pytest.raises(RuntimeError, match="manifest write failed"):
+        writer.write_json(
+            source_id,
+            "stock_basic",
+            PARTITION_DATE,
+            run_id,
+            [{"symbol": "000001.SZ"}],
+        )
+
+    assert not artifact_path.exists()
+    assert RawReader().list_artifacts(source_id, "stock_basic", PARTITION_DATE) == []
+
+    artifact = writer.write_json(
+        source_id,
+        "stock_basic",
+        PARTITION_DATE,
+        run_id,
+        [{"symbol": "000001.SZ"}],
+    )
+
+    assert artifact.path == artifact_path
+    assert artifact.path.exists()
+    artifacts = RawReader().list_artifacts(source_id, "stock_basic", PARTITION_DATE)
+    assert [item.run_id for item in artifacts] == [run_id]
+
+
 def test_raw_zone_rejects_iceberg_warehouse_boundary(tmp_path: Path) -> None:
     warehouse_path = tmp_path / "iceberg" / "warehouse"
 
