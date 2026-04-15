@@ -3,9 +3,9 @@
     {
       "dataset": "stock_basic",
       "partition_date": "2026-04-15",
-      "path": "tushare/stock_basic/dt=20260415/sample.parquet",
+      "path": "tushare/stock_basic/dt=20260415/123e4567-e89b-42d3-a456-426614174000.parquet",
       "row_count": 3,
-      "run_id": "sample",
+      "run_id": "123e4567-e89b-42d3-a456-426614174000",
       "source_id": "tushare",
       "written_at": "2026-04-15T01:00:00+00:00"
     }
