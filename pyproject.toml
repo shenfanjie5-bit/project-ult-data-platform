@@ -37,6 +37,9 @@ package-dir = {"" = "src"}
 where = ["src"]
 include = ["data_platform*"]
 
+[tool.setuptools.package-data]
+data_platform = ["ddl/migrations/*.sql"]
+
 [tool.ruff]
 line-length = 100
 target-version = "py312"
