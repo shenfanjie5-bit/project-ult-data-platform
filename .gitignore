@@ -13,3 +13,7 @@ build/
 dist/
 .coverage
 htmlcov/
+src/data_platform/dbt/profiles.yml
+src/data_platform/dbt/target/
+src/data_platform/dbt/logs/
+src/data_platform/dbt/dbt_packages/
