@@ -9,7 +9,7 @@ import logging
 from pathlib import Path
 import sys
 from time import perf_counter
-from typing import Sequence
+from typing import NoReturn, Sequence
 
 import duckdb
 import pyarrow as pa  # type: ignore[import-untyped]
@@ -52,7 +52,17 @@ class WriteResult:
     duration_ms: int
 
 
-def load_canonical_stock_basic(catalog: SqlCatalog, duckdb_path: Path) -> WriteResult:
+class _JsonErrorArgumentParser(argparse.ArgumentParser):
+    def error(self, message: str) -> NoReturn:
+        raise ValueError(message)
+
+
+def load_canonical_stock_basic(
+    catalog: SqlCatalog,
+    duckdb_path: Path,
+    *,
+    allow_empty: bool = False,
+) -> WriteResult:
     """Load DuckDB stg_stock_basic into canonical.stock_basic via full overwrite."""
 
     start = perf_counter()
@@ -60,6 +70,7 @@ def load_canonical_stock_basic(catalog: SqlCatalog, duckdb_path: Path) -> WriteR
     table_arrow = _read_stg_stock_basic(duckdb_path)
     _validate_no_forbidden_payload_fields(table_arrow)
     _validate_payload_fields_match_target(CANONICAL_STOCK_BASIC_IDENTIFIER, table, table_arrow)
+    _validate_non_empty_staging(table_arrow, allow_empty=allow_empty)
 
     table.overwrite(table_arrow)
     refreshed_table = table.refresh()
@@ -83,15 +94,25 @@ def load_canonical_stock_basic(catalog: SqlCatalog, duckdb_path: Path) -> WriteR
 
 
 def main(argv: Sequence[str] | None = None) -> int:
-    parser = argparse.ArgumentParser(description="Load staging data into canonical Iceberg tables.")
-    parser.add_argument("--table", required=True, help="canonical table to load")
-    args = parser.parse_args(argv)
-
     try:
+        parser = _JsonErrorArgumentParser(
+            description="Load staging data into canonical Iceberg tables."
+        )
+        parser.add_argument("--table", required=True, help="canonical table to load")
+        parser.add_argument(
+            "--allow-empty",
+            action="store_true",
+            help="intentionally publish an empty canonical table",
+        )
+        args = parser.parse_args(argv)
         if args.table != TABLE_STOCK_BASIC:
             msg = f"unsupported canonical table: {args.table}"
             raise ValueError(msg)
-        result = load_canonical_stock_basic(load_catalog(), get_settings().duckdb_path)
+        result = load_canonical_stock_basic(
+            load_catalog(),
+            get_settings().duckdb_path,
+            allow_empty=args.allow_empty,
+        )
     except Exception as exc:
         error_payload = {"error": type(exc).__name__, "detail": str(exc)}
         print(json.dumps(error_payload, sort_keys=True), file=sys.stderr)
@@ -104,7 +125,7 @@ def main(argv: Sequence[str] | None = None) -> int:
 def _read_stg_stock_basic(duckdb_path: Path) -> pa.Table:
     connection = duckdb.connect(str(duckdb_path))
     try:
-        return connection.execute(STOCK_BASIC_SELECT).arrow().read_all()
+        return connection.execute(STOCK_BASIC_SELECT).to_arrow_table()
     finally:
         connection.close()
 
@@ -142,6 +163,17 @@ def _validate_payload_fields_match_target(
     msg = f"{identifier} payload field set does not match target schema"
     if details:
         msg = msg + " (" + "; ".join(details) + ")"
+    raise ValueError(msg)
+
+
+def _validate_non_empty_staging(table_arrow: pa.Table, *, allow_empty: bool) -> None:
+    if table_arrow.num_rows > 0 or allow_empty:
+        return
+
+    msg = (
+        "stg_stock_basic produced zero rows; refusing to overwrite "
+        "canonical.stock_basic without allow_empty=True"
+    )
     raise ValueError(msg)
 
 

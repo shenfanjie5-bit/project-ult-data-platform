@@ -103,6 +103,49 @@ def test_load_canonical_stock_basic_rejects_target_payload_field_mismatch(
     assert catalog.load_table(CANONICAL_STOCK_BASIC_IDENTIFIER).current_snapshot() is None
 
 
+def test_load_canonical_stock_basic_rejects_empty_staging_before_overwrite(
+    tmp_path: Path,
+) -> None:
+    catalog = create_stock_basic_catalog(tmp_path)
+    duckdb_path = tmp_path / "staging.duckdb"
+    rows = stock_basic_rows()
+    write_staging_stock_basic(duckdb_path, rows)
+    first = load_canonical_stock_basic(catalog, duckdb_path)  # type: ignore[arg-type]
+    write_staging_stock_basic(duckdb_path, [])
+
+    with pytest.raises(ValueError, match="zero rows"):
+        load_canonical_stock_basic(catalog, duckdb_path)  # type: ignore[arg-type]
+
+    table = catalog.load_table(CANONICAL_STOCK_BASIC_IDENTIFIER)
+    current_snapshot = table.current_snapshot()
+    assert current_snapshot is not None
+    assert current_snapshot.snapshot_id == first.snapshot_id
+    assert table.scan().to_arrow().num_rows == len(rows)
+
+
+def test_load_canonical_stock_basic_allows_empty_staging_with_explicit_flag(
+    tmp_path: Path,
+) -> None:
+    catalog = create_stock_basic_catalog(tmp_path)
+    duckdb_path = tmp_path / "staging.duckdb"
+    rows = stock_basic_rows()
+    write_staging_stock_basic(duckdb_path, rows)
+    first = load_canonical_stock_basic(catalog, duckdb_path)  # type: ignore[arg-type]
+    write_staging_stock_basic(duckdb_path, [])
+
+    second = load_canonical_stock_basic(  # type: ignore[arg-type]
+        catalog,
+        duckdb_path,
+        allow_empty=True,
+    )
+
+    table = catalog.load_table(CANONICAL_STOCK_BASIC_IDENTIFIER)
+    assert second.row_count == 0
+    assert second.snapshot_id != first.snapshot_id
+    assert table.scan().to_arrow().num_rows == 0
+    assert table.scan(snapshot_id=first.snapshot_id).to_arrow().num_rows == len(rows)
+
+
 def test_overwrite_failure_does_not_refresh_or_report_snapshot(tmp_path: Path) -> None:
     duckdb_path = tmp_path / "staging.duckdb"
     rows = stock_basic_rows()
@@ -173,6 +216,28 @@ def test_cli_reports_failure_as_json(
     payload = json.loads(captured.err)
     assert payload["error"] == "ValueError"
     assert "unsupported canonical table" in payload["detail"]
+
+
+@pytest.mark.parametrize(
+    "argv, expected_detail",
+    [
+        ([], "the following arguments are required: --table"),
+        (["--table", "stock_basic", "--unknown"], "unrecognized arguments: --unknown"),
+    ],
+)
+def test_cli_reports_argument_failures_as_json(
+    argv: list[str],
+    expected_detail: str,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    exit_code = canonical_writer.main(argv)
+
+    captured = capsys.readouterr()
+    assert exit_code == 1
+    assert captured.out == ""
+    payload = json.loads(captured.err)
+    assert payload["error"] == "ValueError"
+    assert expected_detail in payload["detail"]
 
 
 def create_stock_basic_catalog(
