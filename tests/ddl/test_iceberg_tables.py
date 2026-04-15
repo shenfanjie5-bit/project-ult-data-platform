@@ -3,7 +3,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import Any
 
-import pyarrow as pa
+import pyarrow as pa  # type: ignore[import-untyped]
 import pytest
 
 from data_platform.ddl import iceberg_tables
@@ -125,7 +125,7 @@ def test_register_table_creates_namespace_and_table() -> None:
 
     table = register_table(catalog, spec)  # type: ignore[arg-type]
 
-    assert table.identifier == "canonical.sample"
+    assert getattr(table, "identifier") == "canonical.sample"
     assert catalog.namespaces == [("canonical",)]
     assert catalog.create_calls == [
         (
@@ -157,7 +157,7 @@ def test_ensure_tables_is_idempotent() -> None:
     ]
 
 
-def test_register_table_replace_drops_existing_table_first() -> None:
+def test_register_table_replace_is_disabled_before_catalog_mutation() -> None:
     catalog = FakeCatalog()
     spec = TableSpec(
         namespace="canonical",
@@ -166,14 +166,33 @@ def test_register_table_replace_drops_existing_table_first() -> None:
     )
     register_table(catalog, spec)  # type: ignore[arg-type]
 
-    replaced = register_table(catalog, spec, replace=True)  # type: ignore[arg-type]
+    with pytest.raises(NotImplementedError, match="replace=True is disabled"):
+        register_table(catalog, spec, replace=True)  # type: ignore[arg-type]
 
-    assert replaced.identifier == "canonical.sample"
-    assert catalog.drop_calls == ["canonical.sample"]
+    assert catalog.drop_calls == []
     assert [identifier for identifier, _ in catalog.create_calls] == [
         "canonical.sample",
-        "canonical.sample",
     ]
+    assert catalog.tables["canonical.sample"].schema == spec.schema
+
+
+def test_ensure_tables_rejects_existing_table_schema_drift() -> None:
+    catalog = FakeCatalog()
+    spec = TableSpec(
+        namespace="canonical",
+        name="sample",
+        schema=pa.schema([("id", pa.string())]),
+    )
+    catalog.tables["canonical.sample"] = FakeTable(
+        identifier="canonical.sample",
+        schema=pa.schema([("id", pa.int64())]),
+        properties={},
+    )
+
+    with pytest.raises(ValueError, match="canonical\\.sample schema drift"):
+        ensure_tables(catalog, [spec])  # type: ignore[arg-type]
+
+    assert catalog.create_calls == []
 
 
 def test_cli_ensure_uses_project_catalog_and_default_specs(

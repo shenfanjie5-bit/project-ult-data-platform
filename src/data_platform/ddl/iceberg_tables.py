@@ -9,7 +9,6 @@ from typing import Final, Sequence
 
 import pyarrow as pa  # type: ignore[import-untyped]
 from pyiceberg.catalog.sql import SqlCatalog
-from pyiceberg.exceptions import NoSuchTableError
 from pyiceberg.partitioning import PartitionSpec
 from pyiceberg.table import Table
 
@@ -119,15 +118,15 @@ DEFAULT_TABLE_SPECS: Final[tuple[TableSpec, ...]] = (
 def register_table(catalog: SqlCatalog, spec: TableSpec, replace: bool = False) -> Table:
     """Register one Iceberg table, creating its namespace first."""
 
+    if replace:
+        msg = (
+            "replace=True is disabled for Iceberg table registration; use an "
+            "atomic catalog replacement or an explicit migration tool instead"
+        )
+        raise NotImplementedError(msg)
+
     ensure_namespaces(catalog, [spec.namespace])
     identifier = _table_identifier(spec)
-
-    if replace:
-        try:
-            catalog.drop_table(identifier)
-        except NoSuchTableError:
-            pass
-        return _create_table(catalog, identifier, spec)
 
     return _create_table_if_not_exists(catalog, identifier, spec)
 
@@ -172,25 +171,74 @@ def _table_identifier(spec: TableSpec) -> str:
 def _create_table(catalog: SqlCatalog, identifier: str, spec: TableSpec) -> Table:
     properties = spec.properties or {}
     if spec.partition_by:
-        return catalog.create_table(
+        table = catalog.create_table(
             identifier,
             schema=spec.schema,
             partition_spec=_identity_partition_spec(spec.schema, spec.partition_by),
             properties=properties,
         )
-    return catalog.create_table(identifier, schema=spec.schema, properties=properties)
+    else:
+        table = catalog.create_table(identifier, schema=spec.schema, properties=properties)
+    _validate_table_schema(identifier, table, spec)
+    return table
 
 
 def _create_table_if_not_exists(catalog: SqlCatalog, identifier: str, spec: TableSpec) -> Table:
     properties = spec.properties or {}
     if spec.partition_by:
-        return catalog.create_table_if_not_exists(
+        table = catalog.create_table_if_not_exists(
             identifier,
             schema=spec.schema,
             partition_spec=_identity_partition_spec(spec.schema, spec.partition_by),
             properties=properties,
         )
-    return catalog.create_table_if_not_exists(identifier, schema=spec.schema, properties=properties)
+    else:
+        table = catalog.create_table_if_not_exists(
+            identifier, schema=spec.schema, properties=properties
+        )
+    _validate_table_schema(identifier, table, spec)
+    return table
+
+
+def _validate_table_schema(identifier: str, table: Table, spec: TableSpec) -> None:
+    actual_schema = _table_schema_as_pyarrow(table)
+    expected_fields = _schema_field_contract(spec.schema)
+    actual_fields = _schema_field_contract(actual_schema)
+    if actual_fields == expected_fields:
+        return
+
+    msg = (
+        f"Iceberg table {identifier} schema drift: expected "
+        f"{_format_schema_contract(expected_fields)}, found "
+        f"{_format_schema_contract(actual_fields)}"
+    )
+    raise ValueError(msg)
+
+
+def _table_schema_as_pyarrow(table: Table) -> pa.Schema:
+    table_schema = table.schema
+    schema = table_schema() if callable(table_schema) else table_schema
+    if isinstance(schema, pa.Schema):
+        return schema
+    as_arrow = getattr(schema, "as_arrow", None)
+    if callable(as_arrow):
+        arrow_schema = as_arrow()
+        if isinstance(arrow_schema, pa.Schema):
+            return arrow_schema
+
+    msg = "Iceberg table schema cannot be converted to a PyArrow schema"
+    raise TypeError(msg)
+
+
+def _schema_field_contract(schema: pa.Schema) -> list[tuple[str, pa.DataType, bool]]:
+    return [(field.name, field.type, field.nullable) for field in schema]
+
+
+def _format_schema_contract(fields: Sequence[tuple[str, pa.DataType, bool]]) -> str:
+    return ", ".join(
+        f"{name}: {field_type}{'' if nullable else ' not null'}"
+        for name, field_type, nullable in fields
+    )
 
 
 def _identity_partition_spec(schema: pa.Schema, partition_by: Sequence[str]) -> PartitionSpec:
