@@ -99,14 +99,7 @@ class TushareAdapter(BaseAdapter):
         return {"token_env": TOKEN_ENV_VAR}
 
     def get_staging_dbt_models(self) -> list[str]:
-        return [
-            "stg_stock_basic",
-            "stg_daily",
-            "stg_weekly",
-            "stg_monthly",
-            "stg_adj_factor",
-            "stg_daily_basic",
-        ]
+        return ["stg_stock_basic"]
 
     def get_quota_config(self) -> dict[str, Any]:
         return dict(self._quota_config)
@@ -151,6 +144,9 @@ def run_tushare_asset(
     if not isinstance(table, pa.Table):
         msg = f"Tushare fetch returned unsupported result for asset={asset.name!r}"
         raise TypeError(msg)
+
+    if asset.partition == "daily":
+        _validate_raw_partition_trade_date(table, asset, partition_date)
 
     return RawWriter().write_arrow(
         adapter.source_id(),
@@ -206,8 +202,18 @@ def _fetch_params_for_raw_partition(
     params: FetchParams | None,
 ) -> dict[str, Any]:
     fetch_params = dict(params or {})
-    if asset.partition == "daily" and "trade_date" not in fetch_params:
-        fetch_params["trade_date"] = f"{partition_date:%Y%m%d}"
+    if asset.partition == "daily":
+        expected_trade_date = f"{partition_date:%Y%m%d}"
+        if "trade_date" not in fetch_params:
+            fetch_params["trade_date"] = expected_trade_date
+        else:
+            _validate_trade_date_param(asset.dataset, fetch_params)
+            if str(fetch_params["trade_date"]) != expected_trade_date:
+                msg = (
+                    f"Tushare {asset.dataset} trade_date {fetch_params['trade_date']!r} "
+                    f"does not match Raw partition date {expected_trade_date!r}"
+                )
+                raise ValueError(msg)
     return fetch_params
 
 
@@ -369,6 +375,25 @@ def _validate_trade_date_param(dataset: str, params: Mapping[str, Any]) -> None:
     if not _is_valid_trade_date(str(value)):
         msg = f"Tushare {dataset} trade_date must be a valid YYYYMMDD date: {value!r}"
         raise ValueError(msg)
+
+
+def _validate_raw_partition_trade_date(
+    table: pa.Table,
+    asset: AssetSpec,
+    partition_date: date,
+) -> None:
+    expected_trade_date = f"{partition_date:%Y%m%d}"
+    if "trade_date" not in table.column_names:
+        msg = f"Tushare {asset.dataset} response missing required fields: trade_date"
+        raise ValueError(msg)
+
+    for index, value in enumerate(table["trade_date"].to_pylist()):
+        if str(value) != expected_trade_date:
+            msg = (
+                f"Tushare {asset.dataset} row {index} trade_date {value!r} "
+                f"does not match Raw partition date {expected_trade_date!r}"
+            )
+            raise ValueError(msg)
 
 
 def _is_valid_trade_date(value: str) -> bool:

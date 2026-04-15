@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import sys
+from datetime import date
 from pathlib import Path
 from types import SimpleNamespace
 from typing import Any
@@ -182,6 +183,52 @@ def test_cli_writes_daily_raw_artifact_and_manifest(
             },
         )
     ]
+
+
+def test_run_tushare_asset_rejects_param_trade_date_mismatch_without_artifact(
+    raw_zone_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    client = _client_for_asset(TUSHARE_DAILY_ASSET, _market_frame(TUSHARE_DAILY_ASSET, 1))
+    _install_tushare_client(monkeypatch, client)
+
+    with pytest.raises(ValueError, match="does not match Raw partition date"):
+        tushare_adapter_module.run_tushare_asset(
+            TUSHARE_DAILY_ASSET.name,
+            date(2026, 4, 15),
+            {"trade_date": "20260414"},
+        )
+
+    assert client.calls == []
+    assert list(raw_zone_path.rglob("*.parquet")) == []
+
+
+def test_run_tushare_asset_rejects_returned_trade_date_mismatch_without_artifact(
+    raw_zone_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    client = _client_for_asset(
+        TUSHARE_DAILY_ASSET,
+        _market_frame(TUSHARE_DAILY_ASSET, 1, trade_date="20260414"),
+    )
+    _install_tushare_client(monkeypatch, client)
+
+    with pytest.raises(ValueError, match="does not match Raw partition date"):
+        tushare_adapter_module.run_tushare_asset(
+            TUSHARE_DAILY_ASSET.name,
+            date(2026, 4, 15),
+        )
+
+    assert client.calls == [
+        (
+            "daily",
+            {
+                "trade_date": "20260415",
+                "fields": TUSHARE_BAR_FIELDS_CSV,
+            },
+        )
+    ]
+    assert list(raw_zone_path.rglob("*.parquet")) == []
 
 
 @pytest.mark.parametrize("missing_field", ["ts_code", "trade_date"])
