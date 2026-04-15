@@ -25,6 +25,7 @@ from data_platform.adapters.tushare.assets import (
 from data_platform.raw import RawArtifact, RawWriter
 
 TOKEN_ENV_VAR = "DP_TUSHARE_TOKEN"
+STOCK_BASIC_IDENTITY_FIELDS = ("ts_code",)
 
 
 class AdapterConfigError(RuntimeError):
@@ -87,7 +88,7 @@ class TushareAdapter(BaseAdapter):
             return self._client
 
         try:
-            import tushare as ts  # type: ignore[import-not-found]
+            import tushare as ts  # type: ignore[import-untyped]
         except ModuleNotFoundError as exc:
             msg = "tushare>=1.4 is required to fetch Tushare assets"
             raise AdapterConfigError(msg) from exc
@@ -152,48 +153,105 @@ def _parse_partition_date(value: str) -> date:
 
 def _to_stock_basic_table(value: Any) -> pa.Table:
     if isinstance(value, pa.Table):
-        table = _ensure_stock_basic_columns(value)
-        return table.select(TUSHARE_STOCK_BASIC_FIELDS).cast(TUSHARE_STOCK_BASIC_SCHEMA)
+        _validate_stock_basic_fields(value.column_names)
+        _validate_stock_basic_identity_columns(value)
+        return value.select(TUSHARE_STOCK_BASIC_FIELDS).cast(TUSHARE_STOCK_BASIC_SCHEMA)
+
+    field_names = _field_names_from_result(value)
+    if field_names is not None:
+        _validate_stock_basic_fields(field_names)
 
     rows = _records_from_result(value)
+    _validate_stock_basic_records(rows)
     columns = {
-        field_name: [_normalize_string(row.get(field_name)) for row in rows]
+        field_name: [_normalize_string(row[field_name]) for row in rows]
         for field_name in TUSHARE_STOCK_BASIC_FIELDS
     }
     return pa.table(columns, schema=TUSHARE_STOCK_BASIC_SCHEMA)
 
 
-def _ensure_stock_basic_columns(table: pa.Table) -> pa.Table:
-    result = table
-    for field in TUSHARE_STOCK_BASIC_SCHEMA:
-        if field.name not in result.column_names:
-            result = result.append_column(
-                field.name,
-                pa.nulls(result.num_rows, type=field.type),
-            )
-    return result
+def _validate_stock_basic_fields(field_names: Sequence[str]) -> None:
+    available = set(field_names)
+    missing = [
+        field_name for field_name in TUSHARE_STOCK_BASIC_FIELDS if field_name not in available
+    ]
+    if missing:
+        joined = ", ".join(missing)
+        msg = f"Tushare stock_basic response missing required fields: {joined}"
+        raise ValueError(msg)
+
+
+def _field_names_from_result(value: Any) -> list[str] | None:
+    columns = getattr(value, "columns", None)
+    if columns is None:
+        return None
+
+    try:
+        return [str(field_name) for field_name in columns]
+    except TypeError:
+        return None
 
 
 def _records_from_result(value: Any) -> list[Mapping[str, Any]]:
     if isinstance(value, list):
-        return [row for row in value if isinstance(row, Mapping)]
+        return _coerce_record_list(value)
 
     to_dict = getattr(value, "to_dict", None)
     if callable(to_dict):
         records = to_dict("records")
         if isinstance(records, list):
-            return [row for row in records if isinstance(row, Mapping)]
+            return _coerce_record_list(records)
 
     msg = "Tushare stock_basic result must be a pandas DataFrame, Arrow table, or row list"
     raise TypeError(msg)
 
 
+def _coerce_record_list(rows: list[Any]) -> list[Mapping[str, Any]]:
+    records: list[Mapping[str, Any]] = []
+    for index, row in enumerate(rows):
+        if not isinstance(row, Mapping):
+            msg = (
+                "Tushare stock_basic row "
+                f"{index} must be a mapping, got {type(row).__name__}"
+            )
+            raise TypeError(msg)
+        records.append(row)
+    return records
+
+
+def _validate_stock_basic_records(rows: Sequence[Mapping[str, Any]]) -> None:
+    for index, row in enumerate(rows):
+        missing = [
+            field_name for field_name in TUSHARE_STOCK_BASIC_FIELDS if field_name not in row
+        ]
+        if missing:
+            joined = ", ".join(missing)
+            msg = f"Tushare stock_basic row {index} missing required fields: {joined}"
+            raise ValueError(msg)
+
+        for field_name in STOCK_BASIC_IDENTITY_FIELDS:
+            if _is_nullish(row[field_name]):
+                msg = f"Tushare stock_basic row {index} has null identity field: {field_name}"
+                raise ValueError(msg)
+
+
+def _validate_stock_basic_identity_columns(table: pa.Table) -> None:
+    for field_name in STOCK_BASIC_IDENTITY_FIELDS:
+        values = table[field_name].to_pylist()
+        for index, value in enumerate(values):
+            if _is_nullish(value):
+                msg = f"Tushare stock_basic row {index} has null identity field: {field_name}"
+                raise ValueError(msg)
+
+
 def _normalize_string(value: Any) -> str | None:
-    if value is None:
-        return None
-    if isinstance(value, float) and math.isnan(value):
+    if _is_nullish(value):
         return None
     return str(value)
+
+
+def _is_nullish(value: Any) -> bool:
+    return value is None or (isinstance(value, float) and math.isnan(value))
 
 
 def _print_error(exc: BaseException, asset_id: str) -> None:

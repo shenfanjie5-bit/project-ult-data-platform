@@ -19,6 +19,7 @@ from data_platform.adapters.tushare import (  # noqa: E402
 )
 from data_platform.adapters.tushare import adapter as tushare_adapter_module  # noqa: E402
 from data_platform.adapters.tushare.assets import (  # noqa: E402
+    TUSHARE_STOCK_BASIC_FIELDS,
     TUSHARE_STOCK_BASIC_FIELDS_CSV,
 )
 
@@ -33,16 +34,39 @@ class FakeTushareClient:
         return self.frame
 
 
-def _stock_basic_frame(row_count: int) -> Any:
-    return pd.DataFrame(
+def _stock_basic_row(index: int) -> dict[str, Any]:
+    row: dict[str, Any] = {field: f"{field}-{index}" for field in TUSHARE_STOCK_BASIC_FIELDS}
+    row.update(
         {
-            "ts_code": [f"{index:06d}.SZ" for index in range(row_count)],
-            "symbol": [f"{index:06d}" for index in range(row_count)],
-            "name": [f"stock-{index}" for index in range(row_count)],
-            "list_date": ["20260415"] * row_count,
-            "extra_column": ["ignored"] * row_count,
+            "ts_code": f"{index:06d}.SZ",
+            "symbol": f"{index:06d}",
+            "name": f"stock-{index}",
+            "list_date": "20260415",
+            "delist_date": None,
         }
     )
+    return row
+
+
+def _stock_basic_frame(row_count: int) -> Any:
+    frame = pd.DataFrame([_stock_basic_row(index) for index in range(row_count)])
+    frame["extra_column"] = ["ignored"] * row_count
+    return frame
+
+
+def _install_tushare_client(
+    monkeypatch: pytest.MonkeyPatch,
+    client: FakeTushareClient,
+) -> list[str]:
+    tokens: list[str] = []
+
+    def pro_api(token: str) -> FakeTushareClient:
+        tokens.append(token)
+        return client
+
+    monkeypatch.setenv("DP_TUSHARE_TOKEN", "test-token")
+    monkeypatch.setitem(sys.modules, "tushare", SimpleNamespace(pro_api=pro_api))
+    return tokens
 
 
 @pytest.fixture
@@ -99,14 +123,7 @@ def test_cli_writes_stock_basic_parquet_artifact(
     capsys: pytest.CaptureFixture[str],
 ) -> None:
     client = FakeTushareClient(_stock_basic_frame(5_000))
-    tokens: list[str] = []
-
-    def pro_api(token: str) -> FakeTushareClient:
-        tokens.append(token)
-        return client
-
-    monkeypatch.setenv("DP_TUSHARE_TOKEN", "test-token")
-    monkeypatch.setitem(sys.modules, "tushare", SimpleNamespace(pro_api=pro_api))
+    tokens = _install_tushare_client(monkeypatch, client)
 
     exit_code = tushare_adapter_module.main(
         ["--asset", "tushare_stock_basic", "--date", "20260415"]
@@ -122,6 +139,76 @@ def test_cli_writes_stock_basic_parquet_artifact(
     assert artifact_path.suffix == ".parquet"
     assert len(list(artifact_path.parent.glob("*.parquet"))) == 1
     assert pq.read_table(artifact_path).num_rows == 5_000
+
+
+def test_cli_rejects_missing_required_stock_basic_columns_without_artifact(
+    raw_zone_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    frame = _stock_basic_frame(1).drop(columns=["list_date"])
+    _install_tushare_client(monkeypatch, FakeTushareClient(frame))
+
+    exit_code = tushare_adapter_module.main(
+        ["--asset", "tushare_stock_basic", "--date", "20260415"]
+    )
+
+    captured = capsys.readouterr()
+    payload = json.loads(captured.err)
+
+    assert exit_code == 1
+    assert captured.out == ""
+    assert payload["asset"] == "tushare_stock_basic"
+    assert "missing required fields" in payload["error"]
+    assert "list_date" in payload["error"]
+    assert list(raw_zone_path.rglob("*.parquet")) == []
+
+
+def test_cli_rejects_malformed_stock_basic_rows_without_artifact(
+    raw_zone_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    _install_tushare_client(
+        monkeypatch,
+        FakeTushareClient([_stock_basic_row(0), ["not", "a", "mapping"]]),
+    )
+
+    exit_code = tushare_adapter_module.main(
+        ["--asset", "tushare_stock_basic", "--date", "20260415"]
+    )
+
+    captured = capsys.readouterr()
+    payload = json.loads(captured.err)
+
+    assert exit_code == 1
+    assert captured.out == ""
+    assert payload["asset"] == "tushare_stock_basic"
+    assert "row 1 must be a mapping" in payload["error"]
+    assert list(raw_zone_path.rglob("*.parquet")) == []
+
+
+def test_cli_rejects_null_stock_basic_identity_without_artifact(
+    raw_zone_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    frame = _stock_basic_frame(1)
+    frame.loc[0, "ts_code"] = None
+    _install_tushare_client(monkeypatch, FakeTushareClient(frame))
+
+    exit_code = tushare_adapter_module.main(
+        ["--asset", "tushare_stock_basic", "--date", "20260415"]
+    )
+
+    captured = capsys.readouterr()
+    payload = json.loads(captured.err)
+
+    assert exit_code == 1
+    assert captured.out == ""
+    assert payload["asset"] == "tushare_stock_basic"
+    assert "null identity field: ts_code" in payload["error"]
+    assert list(raw_zone_path.rglob("*.parquet")) == []
 
 
 def test_cli_missing_token_outputs_json_error(
