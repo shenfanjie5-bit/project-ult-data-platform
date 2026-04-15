@@ -23,11 +23,14 @@ from data_platform.adapters.tushare import (  # noqa: E402
     TushareAdapter,
 )
 from data_platform.adapters.tushare import adapter as tushare_adapter_module  # noqa: E402
-from data_platform.adapters.tushare.assets import TUSHARE_BAR_FIELDS_CSV  # noqa: E402
-from data_platform.adapters.tushare.assets import TUSHARE_DAILY_BASIC_FIELDS_CSV  # noqa: E402
-from data_platform.adapters.tushare.assets import TUSHARE_ADJ_FACTOR_FIELDS_CSV  # noqa: E402
+from data_platform.adapters.tushare.assets import (  # noqa: E402
+    TUSHARE_ADJ_FACTOR_FIELDS_CSV,
+    TUSHARE_BAR_FIELDS_CSV,
+    TUSHARE_DAILY_BASIC_FIELDS_CSV,
+)
 
 
+HIGH_PRECISION_VENDOR_VALUE = "12345678901234567890.123456789012345678"
 MARKET_ASSETS = [
     TUSHARE_DAILY_ASSET,
     TUSHARE_WEEKLY_ASSET,
@@ -93,8 +96,6 @@ def _market_row(asset: Any, index: int = 0, trade_date: str = "20260415") -> dic
             row[field.name] = f"{index:06d}.SZ"
         elif field.name == "trade_date":
             row[field.name] = trade_date
-        elif pa.types.is_floating(field.type):
-            row[field.name] = float(index + 1)
         else:
             row[field.name] = f"{field.name}-{index}"
     return row
@@ -183,6 +184,31 @@ def test_cli_writes_daily_raw_artifact_and_manifest(
             },
         )
     ]
+
+
+def test_cli_preserves_high_precision_market_numeric_value(
+    raw_zone_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    row = _market_row(TUSHARE_DAILY_ASSET)
+    row["amount"] = HIGH_PRECISION_VENDOR_VALUE
+    client = _client_for_asset(TUSHARE_DAILY_ASSET, pd.DataFrame([row]))
+    _install_tushare_client(monkeypatch, client)
+
+    exit_code = tushare_adapter_module.main(
+        ["--asset", TUSHARE_DAILY_ASSET.name, "--date", "20260415"]
+    )
+
+    captured = capsys.readouterr()
+    artifact_path = Path(captured.out.strip())
+    table = pq.read_table(artifact_path)
+
+    assert exit_code == 0
+    assert captured.err == ""
+    assert artifact_path.parent == raw_zone_path / "tushare" / "daily" / "dt=20260415"
+    assert table.schema.field("amount").type == pa.string()
+    assert table["amount"].to_pylist() == [HIGH_PRECISION_VENDOR_VALUE]
 
 
 def test_run_tushare_asset_rejects_param_trade_date_mismatch_without_artifact(

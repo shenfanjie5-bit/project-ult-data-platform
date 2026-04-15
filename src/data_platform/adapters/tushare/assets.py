@@ -35,19 +35,21 @@ TUSHARE_STOCK_BASIC_SCHEMA = pa.schema(
     ]
 )
 
+TUSHARE_RAW_NUMERIC_TYPE = pa.string()
+
 TUSHARE_BAR_SCHEMA = pa.schema(
     [
         ("ts_code", pa.string()),
         ("trade_date", pa.string()),
-        ("open", pa.float64()),
-        ("high", pa.float64()),
-        ("low", pa.float64()),
-        ("close", pa.float64()),
-        ("pre_close", pa.float64()),
-        ("change", pa.float64()),
-        ("pct_chg", pa.float64()),
-        ("vol", pa.float64()),
-        ("amount", pa.float64()),
+        ("open", TUSHARE_RAW_NUMERIC_TYPE),
+        ("high", TUSHARE_RAW_NUMERIC_TYPE),
+        ("low", TUSHARE_RAW_NUMERIC_TYPE),
+        ("close", TUSHARE_RAW_NUMERIC_TYPE),
+        ("pre_close", TUSHARE_RAW_NUMERIC_TYPE),
+        ("change", TUSHARE_RAW_NUMERIC_TYPE),
+        ("pct_chg", TUSHARE_RAW_NUMERIC_TYPE),
+        ("vol", TUSHARE_RAW_NUMERIC_TYPE),
+        ("amount", TUSHARE_RAW_NUMERIC_TYPE),
     ]
 )
 
@@ -55,7 +57,7 @@ TUSHARE_ADJ_FACTOR_SCHEMA = pa.schema(
     [
         ("ts_code", pa.string()),
         ("trade_date", pa.string()),
-        ("adj_factor", pa.float64()),
+        ("adj_factor", TUSHARE_RAW_NUMERIC_TYPE),
     ]
 )
 
@@ -63,22 +65,22 @@ TUSHARE_DAILY_BASIC_SCHEMA = pa.schema(
     [
         ("ts_code", pa.string()),
         ("trade_date", pa.string()),
-        ("close", pa.float64()),
-        ("turnover_rate", pa.float64()),
-        ("turnover_rate_f", pa.float64()),
-        ("volume_ratio", pa.float64()),
-        ("pe", pa.float64()),
-        ("pe_ttm", pa.float64()),
-        ("pb", pa.float64()),
-        ("ps", pa.float64()),
-        ("ps_ttm", pa.float64()),
-        ("dv_ratio", pa.float64()),
-        ("dv_ttm", pa.float64()),
-        ("total_share", pa.float64()),
-        ("float_share", pa.float64()),
-        ("free_share", pa.float64()),
-        ("total_mv", pa.float64()),
-        ("circ_mv", pa.float64()),
+        ("close", TUSHARE_RAW_NUMERIC_TYPE),
+        ("turnover_rate", TUSHARE_RAW_NUMERIC_TYPE),
+        ("turnover_rate_f", TUSHARE_RAW_NUMERIC_TYPE),
+        ("volume_ratio", TUSHARE_RAW_NUMERIC_TYPE),
+        ("pe", TUSHARE_RAW_NUMERIC_TYPE),
+        ("pe_ttm", TUSHARE_RAW_NUMERIC_TYPE),
+        ("pb", TUSHARE_RAW_NUMERIC_TYPE),
+        ("ps", TUSHARE_RAW_NUMERIC_TYPE),
+        ("ps_ttm", TUSHARE_RAW_NUMERIC_TYPE),
+        ("dv_ratio", TUSHARE_RAW_NUMERIC_TYPE),
+        ("dv_ttm", TUSHARE_RAW_NUMERIC_TYPE),
+        ("total_share", TUSHARE_RAW_NUMERIC_TYPE),
+        ("float_share", TUSHARE_RAW_NUMERIC_TYPE),
+        ("free_share", TUSHARE_RAW_NUMERIC_TYPE),
+        ("total_mv", TUSHARE_RAW_NUMERIC_TYPE),
+        ("circ_mv", TUSHARE_RAW_NUMERIC_TYPE),
     ]
 )
 

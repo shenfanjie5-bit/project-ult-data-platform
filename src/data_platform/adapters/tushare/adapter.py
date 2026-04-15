@@ -414,9 +414,7 @@ def _normalize_value(value: Any, data_type: pa.DataType) -> Any:
     if _is_nullish(value):
         return None
     if pa.types.is_string(data_type):
-        return str(value)
-    if pa.types.is_floating(data_type):
-        return float(value)
+        return _normalize_string(value)
     return value
 
 
