@@ -1,9 +1,11 @@
 from __future__ import annotations
 
+import json
 import os
 import shutil
 import subprocess
-from datetime import date
+import sys
+from datetime import date, datetime
 from pathlib import Path
 
 import pytest
@@ -27,6 +29,7 @@ def test_dbt_skeleton_files_are_present() -> None:
         DBT_PROJECT_DIR / "macros" / ".gitkeep",
         PROJECT_ROOT / "scripts" / "dbt.sh",
         DBT_FIXTURE_RAW / "tushare" / "stock_basic" / "dt=20260415" / "sample.parquet",
+        DBT_FIXTURE_RAW / "tushare" / "stock_basic" / "dt=20260415" / "_manifest.json",
     ]
 
     missing_paths = [path for path in required_paths if not path.exists()]
@@ -71,21 +74,48 @@ def test_stg_stock_basic_files_match_issue_contract() -> None:
     assert "- not_null" in sources_yml
 
     assert "DP_RAW_ZONE_PATH" in macro_sql
+    assert '.rstrip("/")' in macro_sql
     assert '"/" ~ source_id ~ "/" ~ dataset ~ "/**/*.parquet"' in macro_sql
+    assert '"/" ~ source_id ~ "/" ~ dataset ~ "/**/_manifest.json"' in macro_sql
 
     assert '{{ config(materialized="view") }}' in model_sql
     assert "read_parquet" in model_sql
+    assert "read_json_auto" in model_sql
     assert '{{ dp_raw_path("tushare", "stock_basic") }}' in model_sql
+    assert '{{ dp_raw_manifest_path("tushare", "stock_basic") }}' in model_sql
     assert "hive_partitioning=1" in model_sql
     assert "filename=1" in model_sql
+    assert "row_number() over" in model_sql
+    assert "order by raw_loaded_at desc, partition_date desc, source_run_id desc" in (
+        model_sql
+    )
     assert "trim(cast(ts_code as varchar))" in model_sql
     assert "strptime(nullif(trim(cast(list_date as varchar)), ''), '%Y%m%d')::date" in (
         model_sql
     )
     assert "source_run_id" in model_sql
     assert "raw_loaded_at" in model_sql
+    assert "current_timestamp" not in lowered_model_sql
     assert "canonical." not in lowered_model_sql
     assert "iceberg_scan" not in lowered_model_sql
+
+
+def test_dp_raw_path_macros_strip_trailing_slash() -> None:
+    jinja2 = pytest.importorskip("jinja2")
+
+    environment = jinja2.Environment()
+    environment.globals["env_var"] = lambda _name, _default=None: "/tmp/dp_raw/"
+    template = environment.from_string(
+        (DBT_PROJECT_DIR / "macros" / "dp_raw_path.sql").read_text()
+    )
+    module = template.make_module({})
+
+    assert module.dp_raw_path("tushare", "stock_basic") == (
+        "/tmp/dp_raw/tushare/stock_basic/**/*.parquet"
+    )
+    assert module.dp_raw_manifest_path("tushare", "stock_basic") == (
+        "/tmp/dp_raw/tushare/stock_basic/**/_manifest.json"
+    )
 
 
 def test_stg_stock_basic_sql_transforms_fixture_with_duckdb(tmp_path: Path) -> None:
@@ -115,9 +145,58 @@ def test_stg_stock_basic_sql_transforms_fixture_with_duckdb(tmp_path: Path) -> N
     assert transformed_rows[0][0] == "000001.SZ"
     assert transformed_rows[0][1] == date(1991, 4, 3)
     assert transformed_rows[0][2] == "sample"
-    assert transformed_rows[0][3] is not None
+    assert transformed_rows[0][3] == datetime(2026, 4, 15, 1, 0)
     assert transformed_rows[2][4] is False
     assert type_row == ("VARCHAR", "DATE")
+
+
+def test_stg_stock_basic_selects_latest_manifest_artifact_with_duplicate_keys(
+    tmp_path: Path,
+) -> None:
+    duckdb = pytest.importorskip("duckdb")
+
+    raw_zone_path = tmp_path / "raw"
+    shutil.copytree(DBT_FIXTURE_RAW, raw_zone_path)
+    partition_path = raw_zone_path / "tushare" / "stock_basic" / "dt=20260415"
+    shutil.copyfile(partition_path / "sample.parquet", partition_path / "later.parquet")
+    _write_stock_basic_manifest(
+        partition_path / "_manifest.json",
+        [
+            ("sample", "2026-04-15T01:00:00+00:00"),
+            ("later", "2026-04-15T02:00:00+00:00"),
+        ],
+    )
+
+    model_sql = _render_stg_stock_basic_sql_for_raw_path(raw_zone_path)
+    connection = duckdb.connect(":memory:")
+    try:
+        connection.execute(f"create view stg_stock_basic as {model_sql}")
+        transformed_rows = connection.execute(
+            """
+            select ts_code, source_run_id, raw_loaded_at
+            from stg_stock_basic
+            order by ts_code
+            """
+        ).fetchall()
+        duplicate_count = connection.execute(
+            """
+            select count(*)
+            from (
+                select ts_code
+                from stg_stock_basic
+                group by ts_code
+                having count(*) > 1
+            )
+            """
+        ).fetchone()[0]
+    finally:
+        connection.close()
+
+    assert len(transformed_rows) == 3
+    assert {row[0] for row in transformed_rows} == {"000001.SZ", "000002.SZ", "000003.BJ"}
+    assert {row[1] for row in transformed_rows} == {"later"}
+    assert {row[2] for row in transformed_rows} == {datetime(2026, 4, 15, 2, 0)}
+    assert duplicate_count == 0
 
 
 def resolve_dbt_executable() -> str | None:
@@ -150,6 +229,12 @@ def require_working_dbt() -> str:
             pytest.skip(
                 "dbt runtime is explicitly optional in this environment; "
                 f"startup failed:\n{version_output}"
+            )
+        if _is_python_314_mashumaro_startup_failure(version_output):
+            pytest.skip(
+                "dbt runtime is installed, but this sandbox is running Python 3.14 "
+                "and the installed dbt dependency stack crashes in mashumaro during "
+                f"startup:\n{version_output}"
             )
         pytest.fail(f"dbt --version failed:\n{version_output}")
 
@@ -263,7 +348,7 @@ def test_stg_stock_basic_run_and_test_with_fixture(tmp_path: Path) -> None:
     assert transformed_rows[0][0] == "000001.SZ"
     assert transformed_rows[0][1] == date(1991, 4, 3)
     assert transformed_rows[0][2] == "sample"
-    assert transformed_rows[0][3] is not None
+    assert transformed_rows[0][3] == datetime(2026, 4, 15, 1, 0)
     assert transformed_rows[2][4] is False
     assert type_row == ("VARCHAR", "DATE")
 
@@ -287,10 +372,53 @@ def _render_stg_stock_basic_sql_for_raw_path(raw_zone_path: Path) -> str:
         DBT_PROJECT_DIR / "models" / "staging" / "stg_stock_basic.sql"
     ).read_text()
     raw_glob = raw_zone_path / "tushare" / "stock_basic" / "**" / "*.parquet"
+    manifest_glob = raw_zone_path / "tushare" / "stock_basic" / "**" / "_manifest.json"
     return (
         model_sql.replace('{{ config(materialized="view") }}', "")
         .replace("'{{ dp_raw_path(\"tushare\", \"stock_basic\") }}'", f"'{raw_glob}'")
+        .replace(
+            "'{{ dp_raw_manifest_path(\"tushare\", \"stock_basic\") }}'",
+            f"'{manifest_glob}'",
+        )
         .strip()
+    )
+
+
+def _write_stock_basic_manifest(
+    path: Path,
+    artifacts: list[tuple[str, str]],
+) -> None:
+    path.write_text(
+        json.dumps(
+            {
+                "source_id": "tushare",
+                "dataset": "stock_basic",
+                "partition_date": "2026-04-15",
+                "artifacts": [
+                    {
+                        "source_id": "tushare",
+                        "dataset": "stock_basic",
+                        "partition_date": "2026-04-15",
+                        "run_id": run_id,
+                        "path": f"tushare/stock_basic/dt=20260415/{run_id}.parquet",
+                        "row_count": 3,
+                        "written_at": written_at,
+                    }
+                    for run_id, written_at in artifacts
+                ],
+            },
+            indent=2,
+            sort_keys=True,
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+
+
+def _is_python_314_mashumaro_startup_failure(version_output: str) -> bool:
+    return (
+        sys.version_info >= (3, 14)
+        and "mashumaro.exceptions.UnserializableField" in version_output
     )
 
 
