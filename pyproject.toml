@@ -7,12 +7,52 @@ name = "project-ult-data-platform"
 version = "0.1.0"
 description = "Scaffold workspace for data-platform."
 readme = "README.md"
-requires-python = ">=3.11"
-dependencies = []
+requires-python = ">=3.12"
+dependencies = [
+    "pyiceberg[sql-postgres,pyarrow]",
+    "duckdb>=1.0",
+    "dbt-core>=1.7",
+    "dbt-duckdb>=1.7",
+    "sqlalchemy>=2.0",
+    "psycopg[binary]>=3.1",
+    "pydantic>=2",
+    "pandas",
+    "pyarrow",
+]
+
+[project.optional-dependencies]
+dev = [
+    "pytest>=8",
+    "pytest-cov",
+    "ruff",
+    "mypy",
+    "pre-commit",
+]
 
 [tool.setuptools]
-packages = []
+package-dir = {"" = "src"}
+
+[tool.setuptools.packages.find]
+where = ["src"]
+include = ["data_platform*"]
+
+[tool.ruff]
+line-length = 100
+target-version = "py312"
+src = ["src", "tests"]
+
+[tool.mypy]
+python_version = "3.12"
+strict = true
+mypy_path = "src"
+packages = ["data_platform"]
+exclude = ["^src/data_platform/dbt/"]
+
+[[tool.mypy.overrides]]
+module = ["dbt", "dbt.*", "pyiceberg.cli", "pyiceberg.cli.*"]
+ignore_missing_imports = true
 
 [tool.pytest.ini_options]
 addopts = "-q"
 testpaths = ["tests"]
+pythonpath = ["src"]
