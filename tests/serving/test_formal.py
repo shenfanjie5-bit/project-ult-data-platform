@@ -5,7 +5,6 @@ from collections.abc import Generator, Mapping
 from dataclasses import FrozenInstanceError, fields, is_dataclass
 from datetime import UTC, date, datetime
 import importlib.util
-from pathlib import Path
 from typing import Any
 from uuid import uuid4
 
@@ -17,13 +16,10 @@ from data_platform.cycle.manifest import (
     PublishManifestNotFound,
 )
 
-FORMAL_DEPS_MISSING = (
-    importlib.util.find_spec("pyarrow") is None
-    or importlib.util.find_spec("pyiceberg") is None
-)
+FORMAL_DEPS_MISSING = importlib.util.find_spec("pyarrow") is None
 pytestmark = pytest.mark.skipif(
     FORMAL_DEPS_MISSING,
-    reason="formal serving tests require PyArrow and PyIceberg",
+    reason="formal serving tests require PyArrow",
 )
 
 
@@ -33,15 +29,6 @@ FORMAL_IDENTIFIER = "formal.recommendation_set"
 @pytest.fixture()
 def pa_module() -> Any:
     return pytest.importorskip("pyarrow", reason="formal serving tests require PyArrow")
-
-
-@pytest.fixture()
-def memory_catalog_class() -> Any:
-    module = pytest.importorskip(
-        "pyiceberg.catalog.memory",
-        reason="formal serving tests require PyIceberg",
-    )
-    return module.InMemoryCatalog
 
 
 @pytest.fixture()
@@ -93,30 +80,32 @@ def test_formal_table_identifier_validates_object_type(formal_module: Any) -> No
 
 
 def test_latest_and_by_id_read_manifest_snapshots_not_formal_head(
-    tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
     formal_module: Any,
-    memory_catalog_class: Any,
     pa_module: Any,
 ) -> None:
-    catalog = create_formal_catalog(tmp_path, memory_catalog_class, pa_module)
-    old_snapshot_id = write_formal_snapshot(catalog, pa_module, version="old", score=1)
-    latest_snapshot_id = write_formal_snapshot(
-        catalog,
-        pa_module,
-        version="latest",
-        score=2,
-    )
-    unpublished_head_snapshot_id = write_formal_snapshot(
-        catalog,
-        pa_module,
-        version="unpublished-head",
-        score=3,
-    )
+    old_snapshot_id = 101
+    latest_snapshot_id = 202
+    unpublished_head_snapshot_id = 303
     old_manifest = make_manifest("CYCLE_20260416", old_snapshot_id)
     latest_manifest = make_manifest("CYCLE_20260417", latest_snapshot_id)
+    payloads = {
+        old_snapshot_id: formal_payload(pa_module, version="old", score=1),
+        latest_snapshot_id: formal_payload(pa_module, version="latest", score=2),
+    }
+    read_calls: list[tuple[str, int]] = []
 
-    monkeypatch.setattr(formal_module, "load_catalog", lambda: catalog)
+    def read_iceberg_snapshot(table_identifier: str, snapshot_id: int) -> Any:
+        assert table_identifier == FORMAL_IDENTIFIER
+        assert snapshot_id != unpublished_head_snapshot_id
+        read_calls.append((table_identifier, snapshot_id))
+        return payloads[snapshot_id]
+
+    monkeypatch.setattr(
+        formal_module.serving_reader,
+        "read_iceberg_snapshot",
+        read_iceberg_snapshot,
+    )
     monkeypatch.setattr(
         formal_module,
         "get_latest_publish_manifest",
@@ -144,23 +133,20 @@ def test_latest_and_by_id_read_manifest_snapshots_not_formal_head(
     assert old.snapshot_id == old_snapshot_id
     assert old.payload.column("version").to_pylist() == ["old"]
     assert old.payload.column("score").to_pylist() == [1]
+    assert read_calls == [
+        (FORMAL_IDENTIFIER, latest_snapshot_id),
+        (FORMAL_IDENTIFIER, old_snapshot_id),
+    ]
 
 
 def test_by_snapshot_reads_only_published_snapshot(
-    tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
     formal_module: Any,
-    memory_catalog_class: Any,
     pa_module: Any,
 ) -> None:
-    catalog = create_formal_catalog(tmp_path, memory_catalog_class, pa_module)
-    published_snapshot_id = write_formal_snapshot(
-        catalog,
-        pa_module,
-        version="published",
-        score=10,
-    )
+    published_snapshot_id = 404
     published_manifest = make_manifest("CYCLE_20260416", published_snapshot_id)
+    read_calls: list[tuple[str, int]] = []
 
     def published_lookup(snapshot_id: int, table_identifier: str) -> CyclePublishManifest:
         assert table_identifier == FORMAL_IDENTIFIER
@@ -168,7 +154,15 @@ def test_by_snapshot_reads_only_published_snapshot(
             return published_manifest
         raise formal_module.FormalSnapshotNotPublished(snapshot_id, table_identifier)
 
-    monkeypatch.setattr(formal_module, "load_catalog", lambda: catalog)
+    def read_iceberg_snapshot(table_identifier: str, snapshot_id: int) -> Any:
+        read_calls.append((table_identifier, snapshot_id))
+        return formal_payload(pa_module, version="published", score=10)
+
+    monkeypatch.setattr(
+        formal_module.serving_reader,
+        "read_iceberg_snapshot",
+        read_iceberg_snapshot,
+    )
     monkeypatch.setattr(
         formal_module,
         "get_publish_manifest_for_snapshot",
@@ -184,31 +178,27 @@ def test_by_snapshot_reads_only_published_snapshot(
     assert formal_object.snapshot_id == published_snapshot_id
     assert formal_object.payload.column("version").to_pylist() == ["published"]
     assert formal_object.payload.column("score").to_pylist() == [10]
+    assert read_calls == [(FORMAL_IDENTIFIER, published_snapshot_id)]
 
 
 def test_by_snapshot_rejects_unpublished_current_head_before_reading_table(
-    tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
     formal_module: Any,
-    memory_catalog_class: Any,
-    pa_module: Any,
 ) -> None:
-    catalog = create_formal_catalog(tmp_path, memory_catalog_class, pa_module)
-    unpublished_snapshot_id = write_formal_snapshot(
-        catalog,
-        pa_module,
-        version="head",
-        score=99,
-    )
+    unpublished_snapshot_id = 505
 
     def unpublished_lookup(snapshot_id: int, table_identifier: str) -> CyclePublishManifest:
         assert snapshot_id == unpublished_snapshot_id
         raise formal_module.FormalSnapshotNotPublished(snapshot_id, table_identifier)
 
-    def fail_load_catalog() -> object:
-        pytest.fail("unpublished snapshot must be rejected before Iceberg read")
+    def fail_read_iceberg_snapshot(table_identifier: str, snapshot_id: int) -> object:
+        pytest.fail("unpublished snapshot must be rejected before DuckDB Iceberg read")
 
-    monkeypatch.setattr(formal_module, "load_catalog", fail_load_catalog)
+    monkeypatch.setattr(
+        formal_module.serving_reader,
+        "read_iceberg_snapshot",
+        fail_read_iceberg_snapshot,
+    )
     monkeypatch.setattr(
         formal_module,
         "get_publish_manifest_for_snapshot",
@@ -244,13 +234,22 @@ def test_by_snapshot_uses_db_backed_manifest_lookup(
             {"formal.other_object": 80000 + day},
         )
 
-    monkeypatch.setattr(
-        formal_module,
-        "load_catalog",
-        lambda: _fake_snapshot_catalog(
+    read_calls: list[tuple[str, int]] = []
+
+    def read_iceberg_snapshot(table_identifier: str, snapshot_id: int) -> Any:
+        assert table_identifier == FORMAL_IDENTIFIER
+        assert snapshot_id == target_snapshot_id
+        read_calls.append((table_identifier, snapshot_id))
+        return formal_payload(
             pa_module,
-            expected_snapshot_id=target_snapshot_id,
-        ),
+            version=f"snapshot-{target_snapshot_id}",
+            score=target_snapshot_id,
+        )
+
+    monkeypatch.setattr(
+        formal_module.serving_reader,
+        "read_iceberg_snapshot",
+        read_iceberg_snapshot,
     )
 
     formal_object = formal_module.get_formal_by_snapshot(
@@ -264,11 +263,14 @@ def test_by_snapshot_uses_db_backed_manifest_lookup(
         f"snapshot-{target_snapshot_id}"
     ]
     assert formal_object.payload.column("score").to_pylist() == [target_snapshot_id]
+    assert read_calls == [(FORMAL_IDENTIFIER, target_snapshot_id)]
 
     monkeypatch.setattr(
-        formal_module,
-        "load_catalog",
-        lambda: pytest.fail("unpublished snapshot must not read formal table head"),
+        formal_module.serving_reader,
+        "read_iceberg_snapshot",
+        lambda table_identifier, snapshot_id: pytest.fail(
+            "unpublished snapshot must not read formal table head"
+        ),
     )
     with pytest.raises(formal_module.FormalSnapshotNotPublished):
         formal_module.get_formal_by_snapshot(
@@ -306,11 +308,15 @@ def test_manifest_without_object_type_raises_table_snapshot_not_found(
         table_identifier="formal.other_object",
     )
 
-    def fail_load_catalog() -> object:
-        pytest.fail("missing manifest entry must be rejected before Iceberg read")
+    def fail_read_iceberg_snapshot(table_identifier: str, snapshot_id: int) -> object:
+        pytest.fail("missing manifest entry must be rejected before DuckDB Iceberg read")
 
     monkeypatch.setattr(formal_module, "get_latest_publish_manifest", lambda: manifest)
-    monkeypatch.setattr(formal_module, "load_catalog", fail_load_catalog)
+    monkeypatch.setattr(
+        formal_module.serving_reader,
+        "read_iceberg_snapshot",
+        fail_read_iceberg_snapshot,
+    )
 
     with pytest.raises(formal_module.FormalTableSnapshotNotFound):
         formal_module.get_formal_latest("recommendation_set")
@@ -325,38 +331,11 @@ def formal_schema(pa_module: Any) -> Any:
     )
 
 
-def create_formal_catalog(
-    tmp_path: Path,
-    memory_catalog_class: Any,
-    pa_module: Any,
-) -> Any:
-    catalog = memory_catalog_class(
-        "test",
-        warehouse=f"file://{tmp_path / 'warehouse'}",
+def formal_payload(pa_module: Any, *, version: str, score: int) -> Any:
+    return pa_module.table(
+        {"version": [version], "score": [score]},
+        schema=formal_schema(pa_module),
     )
-    catalog.create_namespace_if_not_exists(("formal",))
-    catalog.create_table(FORMAL_IDENTIFIER, schema=formal_schema(pa_module))
-    return catalog
-
-
-def write_formal_snapshot(
-    catalog: Any,
-    pa_module: Any,
-    *,
-    version: str,
-    score: int,
-) -> int:
-    table = catalog.load_table(FORMAL_IDENTIFIER)
-    table.overwrite(
-        pa_module.table(
-            {"version": [version], "score": [score]},
-            schema=formal_schema(pa_module),
-        )
-    )
-    snapshot = table.refresh().current_snapshot()
-    if snapshot is None:
-        raise AssertionError("formal table overwrite did not create a snapshot")
-    return int(snapshot.snapshot_id)
 
 
 def make_manifest(
@@ -470,34 +449,6 @@ def _publish_formal_manifest(
     for status in ("phase0", "phase1", "phase2", "phase3"):
         transition_cycle_status(cycle.cycle_id, status)
     publish_manifest(cycle.cycle_id, snapshots)
-
-
-def _fake_snapshot_catalog(
-    pa_module: Any,
-    *,
-    expected_snapshot_id: int,
-) -> object:
-    class FakeScan:
-        def to_arrow(self) -> Any:
-            return pa_module.table(
-                {
-                    "version": [f"snapshot-{expected_snapshot_id}"],
-                    "score": [expected_snapshot_id],
-                },
-                schema=formal_schema(pa_module),
-            )
-
-    class FakeTable:
-        def scan(self, *, snapshot_id: int) -> FakeScan:
-            assert snapshot_id == expected_snapshot_id
-            return FakeScan()
-
-    class FakeCatalog:
-        def load_table(self, table_identifier: str) -> FakeTable:
-            assert table_identifier == FORMAL_IDENTIFIER
-            return FakeTable()
-
-    return FakeCatalog()
 
 
 def _create_engine(dsn: str, **kwargs: object) -> Any:
