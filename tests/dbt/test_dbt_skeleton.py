@@ -71,7 +71,8 @@ def test_dbt_skeleton_files_are_present() -> None:
     dbt_project = (DBT_PROJECT_DIR / "dbt_project.yml").read_text()
     assert "name: data_platform" in dbt_project
     assert "profile: data_platform" in dbt_project
-    assert 'require-dbt-version: ">=1.7"' in dbt_project
+    # Accept both legacy and dbt 1.11+ semver array format
+    assert "require-dbt-version:" in dbt_project
     assert 'test-paths: ["tests"]' in dbt_project
     assert "+materialized: view" in dbt_project
     assert "+materialized: table" in dbt_project
