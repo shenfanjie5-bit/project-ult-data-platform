@@ -1,0 +1,134 @@
+version: 2
+
+models:
+  - name: int_price_bars_adjusted
+    description: Unified security bar records with per-date adjustment factors.
+    tests:
+      - unique_combination_of_columns:
+          combination_of_columns: ["ts_code", "trade_date", "freq"]
+    columns:
+      - name: ts_code
+        tests:
+          - not_null
+          - relationships:
+              to: ref('int_security_master')
+              field: ts_code
+      - name: trade_date
+        tests:
+          - not_null
+      - name: freq
+        tests:
+          - not_null
+          - accepted_values:
+              values: ["daily", "weekly", "monthly"]
+      - name: source_run_id
+        tests:
+          - not_null
+
+  - name: int_financial_reports_latest
+    description: Wide financial report versions joined across income, balance sheet, cash flow, and financial indicators.
+    tests:
+      - unique_combination_of_columns:
+          combination_of_columns: ["ts_code", "ann_date", "f_ann_date", "end_date", "report_type", "comp_type", "update_flag"]
+      - at_most_one_true_per_group:
+          group_by_columns: ["ts_code", "end_date", "report_type"]
+          flag_column: is_latest
+    columns:
+      - name: ts_code
+        tests:
+          - not_null
+          - relationships:
+              to: ref('int_security_master')
+              field: ts_code
+      - name: end_date
+        tests:
+          - not_null
+      - name: ann_date
+        tests:
+          - not_null
+      - name: report_type
+        tests:
+          - not_null
+      - name: update_flag
+        tests:
+          - not_null
+      - name: is_latest
+        tests:
+          - not_null
+          - accepted_values:
+              values: [true, false]
+              quote: false
+
+  - name: int_security_master
+    description: Security attributes joined from stock basics, company metadata, and latest name change metadata.
+    columns:
+      - name: ts_code
+        tests:
+          - not_null
+          - unique
+      - name: symbol
+        tests:
+          - not_null
+      - name: name
+        tests:
+          - not_null
+      - name: market
+        tests:
+          - not_null
+      - name: list_date
+        tests:
+          - not_null
+      - name: is_active
+        tests:
+          - not_null
+          - accepted_values:
+              values: [true, false]
+              quote: false
+
+  - name: int_index_membership
+    description: Normalized index constituent membership intervals with dated weight records.
+    tests:
+      - unique_combination_of_columns:
+          combination_of_columns: ["index_code", "con_code", "effective_date"]
+    columns:
+      - name: index_code
+        tests:
+          - not_null
+          - relationships:
+              to: ref('stg_index_basic')
+              field: ts_code
+      - name: con_code
+        tests:
+          - not_null
+          - relationships:
+              to: ref('int_security_master')
+              field: ts_code
+      - name: effective_date
+        tests:
+          - not_null
+      - name: source_run_id
+        tests:
+          - not_null
+
+  - name: int_event_timeline
+    description: Event metadata timeline for announcements, suspensions, dividends, float changes, holders, and disclosure dates.
+    tests:
+      - unique_combination_of_columns:
+          combination_of_columns: ["event_type", "ts_code", "event_date", "title", "related_date", "reference_url"]
+    columns:
+      - name: event_type
+        tests:
+          - not_null
+          - accepted_values:
+              values: ["announcement", "suspend", "dividend", "share_float", "holder_number", "disclosure_date"]
+      - name: ts_code
+        tests:
+          - relationships:
+              to: ref('int_security_master')
+              field: ts_code
+      - name: event_date
+        tests:
+          - not_null
+      - name: source_run_id
+        tests:
+          - not_null
