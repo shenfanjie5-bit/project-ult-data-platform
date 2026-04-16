@@ -17,8 +17,7 @@ from data_platform.cycle.manifest import (
     get_publish_manifest,
     validate_snapshot_id,
 )
-from data_platform.serving.catalog import load_catalog
-from data_platform.serving.reader import _validate_identifier
+import data_platform.serving.reader as serving_reader
 
 
 FORMAL_NAMESPACE: Final[str] = "formal"
@@ -128,7 +127,7 @@ def formal_table_identifier(object_type: str) -> str:
     """Return the manifest key and Iceberg identifier for one formal object type."""
 
     try:
-        _validate_identifier(object_type)
+        serving_reader._validate_identifier(object_type)
     except (TypeError, ValueError) as exc:
         raise FormalObjectTypeInvalid(object_type) from exc
     return f"{FORMAL_NAMESPACE}.{object_type}"
@@ -159,11 +158,10 @@ def _snapshot_from_manifest(
 
 
 def _read_formal_snapshot(table_identifier: str, snapshot_id: int) -> pa.Table:
-    table = load_catalog().load_table(table_identifier)
-    payload = table.scan(snapshot_id=snapshot_id).to_arrow()
+    payload = serving_reader.read_iceberg_snapshot(table_identifier, snapshot_id)
     if isinstance(payload, pa.Table):
         return payload
-    msg = "formal Iceberg scan did not return a PyArrow table"
+    msg = "formal DuckDB Iceberg scan did not return a PyArrow table"
     raise TypeError(msg)
 
 
