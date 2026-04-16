@@ -3,8 +3,10 @@ from __future__ import annotations
 import json
 import os
 from collections.abc import Generator, Mapping
+from concurrent.futures import ThreadPoolExecutor
 from dataclasses import FrozenInstanceError, fields, is_dataclass
 from datetime import UTC, date, datetime
+from threading import Barrier
 from typing import Any
 from uuid import uuid4
 
@@ -272,6 +274,64 @@ def test_selection_insert_failure_rolls_back_whole_freeze_transaction(
     assert metadata.cutoff_ingest_seq is None
     assert metadata.candidate_count == 0
     assert metadata.selection_frozen_at is None
+
+
+def test_concurrent_freezes_do_not_select_candidate_twice(
+    cycle_repository_env: str,
+    cycle_engine: Any,
+) -> None:
+    assert cycle_repository_env
+    create_cycle(date(2026, 4, 16))
+    create_cycle(date(2026, 4, 17))
+    with cycle_engine.begin() as connection:
+        accepted_ids = [
+            int(
+                _insert_candidate(
+                    connection,
+                    validation_status="accepted",
+                    candidate=f"concurrent-freeze-{index}",
+                )["id"]
+            )
+            for index in range(8)
+        ]
+        connection.exec_driver_sql(
+            """
+            CREATE OR REPLACE FUNCTION data_platform.slow_selection_insert()
+            RETURNS trigger
+            LANGUAGE plpgsql
+            AS $$
+            BEGIN
+                PERFORM pg_sleep(0.1);
+                RETURN NEW;
+            END;
+            $$;
+
+            CREATE TRIGGER slow_selection_insert
+            BEFORE INSERT ON data_platform.cycle_candidate_selection
+            FOR EACH ROW
+            EXECUTE FUNCTION data_platform.slow_selection_insert();
+            """
+        )
+
+    barrier = Barrier(2)
+
+    def freeze(cycle_id: str) -> Any:
+        barrier.wait(timeout=15)
+        return freeze_cycle_candidates(cycle_id)
+
+    with ThreadPoolExecutor(max_workers=2) as executor:
+        future_16 = executor.submit(freeze, "CYCLE_20260416")
+        future_17 = executor.submit(freeze, "CYCLE_20260417")
+        metadata_16 = future_16.result(timeout=30)
+        metadata_17 = future_17.result(timeout=30)
+
+    selection_16 = _selection_ids(cycle_engine, "CYCLE_20260416")
+    selection_17 = _selection_ids(cycle_engine, "CYCLE_20260417")
+
+    assert not set(selection_16).intersection(selection_17)
+    assert set(selection_16).union(selection_17).issubset(accepted_ids)
+    assert metadata_16.candidate_count == len(selection_16)
+    assert metadata_17.candidate_count == len(selection_17)
 
 
 @pytest.fixture()

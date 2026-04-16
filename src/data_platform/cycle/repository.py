@@ -100,6 +100,8 @@ class CycleRepository:
         Under PostgreSQL READ COMMITTED, the freeze boundary is the
         INSERT...SELECT statement start. Candidates accepted before that statement's
         snapshot are eligible; candidates accepted later wait for a future cycle.
+        Eligible candidate rows are locked with SKIP LOCKED so concurrent freezes
+        cannot select the same candidate into multiple cycles.
         Metadata is derived from the same inserted CTE so cutoffs and counts always
         describe the actual selected rows.
         """
@@ -129,23 +131,27 @@ class CycleRepository:
         row = connection.execute(
             _text(
                 f"""
-                WITH inserted AS (
+                WITH locked_candidates AS (
+                    SELECT candidate_queue.id AS candidate_id
+                    FROM {CANDIDATE_QUEUE_TABLE} AS candidate_queue
+                    WHERE candidate_queue.validation_status = 'accepted'
+                      AND NOT EXISTS (
+                          SELECT 1
+                          FROM {CYCLE_CANDIDATE_SELECTION_TABLE} AS selection
+                          WHERE selection.candidate_id = candidate_queue.id
+                      )
+                    ORDER BY candidate_queue.ingest_seq ASC
+                    FOR UPDATE OF candidate_queue SKIP LOCKED
+                ),
+                inserted AS (
                     INSERT INTO {CYCLE_CANDIDATE_SELECTION_TABLE} (
                         cycle_id,
                         candidate_id
                     )
                     SELECT
                         :cycle_id,
-                        candidate_queue.id
-                    FROM {CANDIDATE_QUEUE_TABLE} AS candidate_queue
-                    WHERE candidate_queue.validation_status = 'accepted'
-                      AND NOT EXISTS (
-                          SELECT 1
-                          FROM {CYCLE_CANDIDATE_SELECTION_TABLE} AS selection
-                          WHERE selection.cycle_id = :cycle_id
-                            AND selection.candidate_id = candidate_queue.id
-                      )
-                    ORDER BY candidate_queue.ingest_seq ASC
+                        locked_candidates.candidate_id
+                    FROM locked_candidates
                     RETURNING candidate_id
                 ),
                 stats AS (
