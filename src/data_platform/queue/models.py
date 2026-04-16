@@ -5,6 +5,7 @@ from __future__ import annotations
 from collections.abc import Mapping
 from dataclasses import dataclass
 from datetime import datetime
+from types import MappingProxyType
 from typing import Any, Final, Literal, TypeAlias
 
 CandidatePayloadType: TypeAlias = Literal["Ex-0", "Ex-1", "Ex-2", "Ex-3"]
@@ -39,6 +40,7 @@ class CandidateQueueItem:
         _validate_payload_type(self.payload_type)
         _validate_validation_status(self.validation_status)
         _validate_payload(self.payload)
+        object.__setattr__(self, "payload", MappingProxyType(dict(self.payload)))
 
 
 @dataclass(frozen=True, slots=True)
@@ -71,6 +73,10 @@ def _validate_validation_status(value: str) -> None:
 
 
 def _validate_payload(payload: Mapping[str, Any]) -> None:
+    if not isinstance(payload, Mapping):
+        msg = "payload must be a JSON object mapping"
+        raise TypeError(msg)
+
     forbidden_keys = sorted(_FORBIDDEN_PAYLOAD_KEYS.intersection(payload))
     if forbidden_keys:
         msg = (

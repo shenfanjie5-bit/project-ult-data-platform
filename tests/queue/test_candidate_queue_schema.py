@@ -153,6 +153,41 @@ def test_candidate_queue_item_rejects_ingest_metadata_in_payload(forbidden_key: 
         )
 
 
+def test_candidate_queue_item_requires_payload_mapping() -> None:
+    with pytest.raises(TypeError, match="payload must be a JSON object mapping"):
+        CandidateQueueItem(
+            id=1,
+            payload_type="Ex-1",
+            payload=["not", "an", "object"],  # type: ignore[arg-type]
+            submitted_by="subsystem-a",
+            submitted_at=datetime.now(UTC),
+            ingest_seq=1,
+            validation_status="pending",
+            rejection_reason=None,
+        )
+
+
+def test_candidate_queue_item_payload_is_defensively_copied_and_read_only() -> None:
+    producer_payload = {"candidate": "alpha"}
+    item = CandidateQueueItem(
+        id=1,
+        payload_type="Ex-1",
+        payload=producer_payload,
+        submitted_by="subsystem-a",
+        submitted_at=datetime.now(UTC),
+        ingest_seq=1,
+        validation_status="pending",
+        rejection_reason=None,
+    )
+
+    producer_payload["submitted_at"] = "not producer-owned"
+
+    assert dict(item.payload) == {"candidate": "alpha"}
+    with pytest.raises(TypeError):
+        item.payload["ingest_seq"] = 2  # type: ignore[index]
+    assert "ingest_seq" not in item.payload
+
+
 def test_migration_creates_candidate_queue_schema(migrated_postgres_dsn: str) -> None:
     engine = _create_engine(migrated_postgres_dsn)
     try:
