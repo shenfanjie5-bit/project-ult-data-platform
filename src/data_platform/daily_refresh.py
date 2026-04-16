@@ -3,6 +3,8 @@
 from __future__ import annotations
 
 import argparse
+import contextlib
+import hashlib
 import json
 import os
 import shutil
@@ -10,7 +12,7 @@ import subprocess
 import sys
 from collections.abc import Mapping, Sequence
 from dataclasses import asdict, dataclass, is_dataclass
-from datetime import date, datetime, timedelta
+from datetime import UTC, date, datetime, timedelta
 from decimal import Decimal
 from pathlib import Path
 from time import perf_counter
@@ -132,6 +134,22 @@ class DailyRefreshStepError(RuntimeError):
         self.metadata = dict(metadata)
 
 
+class DailyRefreshLockError(DailyRefreshStepError):
+    """Raised when another refresh owns the same catalog/date critical section."""
+
+
+@dataclass(frozen=True)
+class _DailyRefreshLock:
+    path: Path
+    fd: int
+
+    def release(self) -> None:
+        with contextlib.suppress(OSError):
+            os.close(self.fd)
+        with contextlib.suppress(FileNotFoundError):
+            self.path.unlink()
+
+
 class _JsonArgumentParser(argparse.ArgumentParser):
     def error(self, message: str) -> NoReturn:
         raise ValueError(message)
@@ -204,43 +222,55 @@ def run_daily_refresh(
         _write_report_if_requested(json_report, result)
         return result
 
-    dbt_selectors = _dbt_selectors(selected_assets, all_assets)
-    if not _append_step(
-        steps,
-        "dbt_run",
-        lambda: _run_dbt_step(
-            "run",
-            settings,
-            partition_date,
-            selectors=dbt_selectors,
-        ),
-    ):
+    lock_started_at = perf_counter()
+    try:
+        refresh_lock = _acquire_refresh_lock(settings, partition_date)
+    except DailyRefreshLockError as exc:
+        _append_failed_step(steps, "refresh_lock", exc, started_at=lock_started_at)
         result = _result(partition_date, steps)
         _write_report_if_requested(json_report, result)
         return result
 
-    if not _append_step(
-        steps,
-        "dbt_test",
-        lambda: _run_dbt_step(
-            "test",
-            settings,
-            partition_date,
-            selectors=dbt_selectors,
-        ),
-    ):
-        result = _result(partition_date, steps)
-        _write_report_if_requested(json_report, result)
-        return result
+    try:
+        dbt_selectors = _dbt_selectors(selected_assets, all_assets)
+        if not _append_step(
+            steps,
+            "dbt_run",
+            lambda: _run_dbt_step(
+                "run",
+                settings,
+                partition_date,
+                selectors=dbt_selectors,
+            ),
+        ):
+            result = _result(partition_date, steps)
+            _write_report_if_requested(json_report, result)
+            return result
 
-    if not _append_step(
-        steps,
-        "canonical",
-        lambda: _run_canonical_step(settings, selected_assets, all_assets),
-    ):
-        result = _result(partition_date, steps)
-        _write_report_if_requested(json_report, result)
-        return result
+        if not _append_step(
+            steps,
+            "dbt_test",
+            lambda: _run_dbt_step(
+                "test",
+                settings,
+                partition_date,
+                selectors=dbt_selectors,
+            ),
+        ):
+            result = _result(partition_date, steps)
+            _write_report_if_requested(json_report, result)
+            return result
+
+        if not _append_step(
+            steps,
+            "canonical",
+            lambda: _run_canonical_step(settings, selected_assets, all_assets),
+        ):
+            result = _result(partition_date, steps)
+            _write_report_if_requested(json_report, result)
+            return result
+    finally:
+        refresh_lock.release()
 
     _append_step(
         steps,
@@ -461,6 +491,52 @@ def _run_canonical_step(
         "write_results": [_write_result_metadata(result) for result in write_results],
         "skipped_writes": skipped_writes,
     }
+
+
+def _acquire_refresh_lock(
+    settings: Settings,
+    partition_date: date,
+) -> _DailyRefreshLock:
+    lock_path = _refresh_lock_path(settings, partition_date)
+    lock_path.parent.mkdir(parents=True, exist_ok=True)
+    payload = {
+        "catalog": settings.iceberg_catalog_name,
+        "partition_date": f"{partition_date:%Y%m%d}",
+        "pid": os.getpid(),
+        "acquired_at": datetime.now(UTC).isoformat(timespec="seconds"),
+    }
+    flags = os.O_CREAT | os.O_EXCL | os.O_WRONLY
+    try:
+        fd = os.open(lock_path, flags, 0o600)
+    except FileExistsError as exc:
+        metadata = {
+            "error": "daily refresh already running for catalog/date",
+            "error_type": "refresh_lock_held",
+            "catalog": settings.iceberg_catalog_name,
+            "partition_date": f"{partition_date:%Y%m%d}",
+            "lock_path": str(lock_path),
+        }
+        raise DailyRefreshLockError(metadata["error"], metadata) from exc
+
+    try:
+        os.write(fd, (json.dumps(payload, sort_keys=True) + "\n").encode("utf-8"))
+    except Exception:
+        with contextlib.suppress(OSError):
+            os.close(fd)
+        with contextlib.suppress(FileNotFoundError):
+            lock_path.unlink()
+        raise
+    return _DailyRefreshLock(path=lock_path, fd=fd)
+
+
+def _refresh_lock_path(settings: Settings, partition_date: date) -> Path:
+    key = f"{settings.iceberg_catalog_name}:{partition_date:%Y%m%d}"
+    digest = hashlib.sha256(key.encode("utf-8")).hexdigest()[:24]
+    return (
+        settings.iceberg_warehouse_path.expanduser()
+        / "_daily_refresh_locks"
+        / f"{digest}.lock"
+    )
 
 
 def _run_raw_health_step(

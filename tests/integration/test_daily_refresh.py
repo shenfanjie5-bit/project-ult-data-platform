@@ -2,8 +2,10 @@ from __future__ import annotations
 
 import json
 import os
+import shutil
 import subprocess
 import sys
+import threading
 from datetime import date
 from pathlib import Path
 from typing import Any
@@ -169,6 +171,126 @@ def test_daily_refresh_script_reports_missing_dp_pg_dsn(tmp_path: Path) -> None:
     assert report["steps"][0]["name"] == "config"
 
 
+def test_concurrent_daily_refresh_same_date_fails_before_dbt_and_canonical(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    _set_daily_refresh_env(monkeypatch, tmp_path)
+    _install_fast_success_stubs(monkeypatch)
+    first_dbt_started = threading.Event()
+    release_first_run = threading.Event()
+    dbt_calls: list[list[str]] = []
+
+    def fake_adapter_step(*_args: object, **_kwargs: object) -> dict[str, Any]:
+        return {
+            "mock": True,
+            "asset_specs_count": 0,
+            "artifact_count": 0,
+            "artifacts": [],
+        }
+
+    def fake_run_dbt_command(args: list[str], settings: Any) -> dict[str, Any]:
+        dbt_calls.append(args)
+        if args[0] == "run" and not first_dbt_started.is_set():
+            first_dbt_started.set()
+            assert release_first_run.wait(timeout=5)
+        return {
+            "command": ["dbt", *args],
+            "dbt_executable": "dbt",
+            "returncode": 0,
+            "stdout_tail": "",
+            "stderr_tail": "",
+            "duckdb_path": str(settings.duckdb_path),
+        }
+
+    monkeypatch.setattr(daily_refresh, "_run_adapter_step", fake_adapter_step)
+    monkeypatch.setattr(daily_refresh, "_run_dbt_command", fake_run_dbt_command)
+    monkeypatch.setattr(
+        daily_refresh,
+        "_run_raw_health_step",
+        lambda *_args, **_kwargs: {"checked_artifacts": 0, "issues": []},
+    )
+    first_result: dict[str, daily_refresh.DailyRefreshResult] = {}
+    first_error: list[BaseException] = []
+
+    def run_first() -> None:
+        try:
+            first_result["result"] = daily_refresh.run_daily_refresh(
+                PARTITION_DATE,
+                mock=True,
+            )
+        except BaseException as exc:  # pragma: no cover - re-raised by assertion
+            first_error.append(exc)
+
+    first_thread = threading.Thread(target=run_first)
+    first_thread.start()
+    assert first_dbt_started.wait(timeout=5)
+
+    second = daily_refresh.run_daily_refresh(PARTITION_DATE, mock=True)
+    release_first_run.set()
+    first_thread.join(timeout=5)
+
+    assert first_error == []
+    assert not first_thread.is_alive()
+    assert first_result["result"].ok is True
+    assert second.ok is False
+    assert [step.name for step in second.steps] == ["adapter", "refresh_lock"]
+    assert second.steps[-1].metadata["error_type"] == "refresh_lock_held"
+    assert "already running" in second.steps[-1].metadata["error"]
+    assert all(
+        step.name not in {"dbt_run", "dbt_test", "canonical"}
+        for step in second.steps
+    )
+    assert [call[0] for call in dbt_calls] == ["run", "test"]
+
+
+def test_mock_daily_refresh_real_pipeline_repeatable_when_pg_available(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    pg_dsn = os.environ.get("DP_DAILY_REFRESH_TEST_PG_DSN")
+    if not pg_dsn:
+        pytest.skip(
+            "DP_DAILY_REFRESH_TEST_PG_DSN is required for the non-stubbed "
+            "daily refresh integration test"
+        )
+    local_dbt = PROJECT_ROOT / ".venv" / "bin" / "dbt"
+    if shutil.which("dbt") is None and not local_dbt.exists():
+        pytest.skip("dbt executable is required for the non-stubbed daily refresh test")
+
+    _set_daily_refresh_env(monkeypatch, tmp_path)
+    monkeypatch.setenv("DP_PG_DSN", pg_dsn)
+    monkeypatch.setenv(
+        "DP_ICEBERG_CATALOG_NAME",
+        f"data_platform_daily_refresh_{tmp_path.name}",
+    )
+    reset_settings_cache()
+
+    first = daily_refresh.run_daily_refresh(PARTITION_DATE, mock=True)
+    second = daily_refresh.run_daily_refresh(PARTITION_DATE, mock=True)
+
+    assert first.ok is True
+    assert second.ok is True
+    assert [step.name for step in second.steps] == [
+        "adapter",
+        "dbt_run",
+        "dbt_test",
+        "canonical",
+        "raw_health",
+    ]
+    first_rows = [
+        item["row_count"]
+        for item in _result_step(first, "canonical").metadata["write_results"]
+    ]
+    second_rows = [
+        item["row_count"]
+        for item in _result_step(second, "canonical").metadata["write_results"]
+    ]
+    assert first_rows == second_rows
+    assert len(second_rows) == 1 + len(CANONICAL_MART_LOAD_SPECS)
+    assert all(row_count > 0 for row_count in second_rows)
+
+
 def _set_daily_refresh_env(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,
@@ -253,3 +375,13 @@ def _step(report: dict[str, Any], name: str) -> dict[str, Any]:
         if step["name"] == name:
             return step
     raise AssertionError(f"missing daily refresh step: {name}")
+
+
+def _result_step(
+    result: daily_refresh.DailyRefreshResult,
+    name: str,
+) -> daily_refresh.DailyRefreshStepResult:
+    for step in result.steps:
+        if step.name == name:
+            return step
+    raise AssertionError(f"missing daily refresh result step: {name}")
