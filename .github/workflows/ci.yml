@@ -7,6 +7,23 @@ on:
 jobs:
   test:
     runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_DB: postgres
+          POSTGRES_PASSWORD: dp
+          POSTGRES_USER: postgres
+        ports:
+          - 55432:5432
+        options: >-
+          --health-cmd "pg_isready -U postgres -d postgres"
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+    env:
+      DATABASE_URL: postgresql://postgres:dp@localhost:55432/postgres
+      DP_PG_DSN: postgresql://postgres:dp@localhost:55432/postgres
     steps:
       - uses: actions/checkout@v4
 

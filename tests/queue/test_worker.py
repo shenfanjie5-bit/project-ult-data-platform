@@ -7,7 +7,7 @@ import json
 import logging
 import os
 import threading
-from typing import Any
+from typing import Any, NoReturn
 from uuid import uuid4
 
 import pytest
@@ -230,7 +230,9 @@ def queue_engine(migrated_postgres_dsn: str) -> Generator[Any]:
 def migrated_postgres_dsn() -> Generator[str]:
     admin_dsn = os.environ.get("DATABASE_URL") or os.environ.get("DP_PG_DSN")
     if not admin_dsn:
-        pytest.skip("PostgreSQL queue worker tests require DATABASE_URL or DP_PG_DSN")
+        _skip_or_fail_worker_db(
+            "PostgreSQL queue worker tests require DATABASE_URL or DP_PG_DSN",
+        )
 
     sqlalchemy = pytest.importorskip(
         "sqlalchemy",
@@ -256,13 +258,15 @@ def migrated_postgres_dsn() -> Generator[str]:
             connection.execute(sqlalchemy.text(f'CREATE DATABASE "{database_name}"'))
     except sqlalchemy_error as exc:
         admin_engine.dispose()
-        pytest.skip(
+        _skip_or_fail_worker_db(
             "PostgreSQL queue worker tests require permission to create "
             f"test databases: {exc}"
         )
 
     test_dsn = str(
-        make_url(runner_module._sqlalchemy_postgres_uri(admin_dsn)).set(database=database_name)
+        make_url(runner_module._sqlalchemy_postgres_uri(admin_dsn)).set(
+            database=database_name,
+        )
     )
     try:
         runner_module.MigrationRunner().apply_pending(test_dsn)
@@ -280,8 +284,16 @@ def migrated_postgres_dsn() -> Generator[str]:
                 ),
                 {"database_name": database_name},
             )
-            connection.execute(sqlalchemy.text(f'DROP DATABASE IF EXISTS "{database_name}"'))
+            connection.execute(
+                sqlalchemy.text(f'DROP DATABASE IF EXISTS "{database_name}"')
+            )
         admin_engine.dispose()
+
+
+def _skip_or_fail_worker_db(message: str) -> NoReturn:
+    if os.environ.get("CI", "").strip().lower() in {"1", "true", "yes", "on"}:
+        pytest.fail(message)
+    pytest.skip(message)
 
 
 class _BarrierValidator:
