@@ -9,7 +9,11 @@ from datetime import datetime
 from typing import Any, Final
 
 from data_platform.cycle.models import CYCLE_METADATA_TABLE, _cycle_date_from_id
-from data_platform.cycle.repository import _create_engine, _text
+from data_platform.cycle.repository import (
+    InvalidCycleTransition,
+    _create_engine,
+    _text,
+)
 
 CYCLE_PUBLISH_MANIFEST_TABLE: Final[str] = "data_platform.cycle_publish_manifest"
 _FORMAL_NAMESPACE_PREFIX: Final[str] = "formal."
@@ -89,7 +93,7 @@ def publish_manifest(
                 connection.execute(
                     _text(
                         f"""
-                    SELECT cycle_id
+                    SELECT cycle_id, status
                     FROM {CYCLE_METADATA_TABLE}
                     WHERE cycle_id = :cycle_id
                     FOR UPDATE
@@ -119,6 +123,10 @@ def publish_manifest(
             )
             if existing is not None:
                 raise ManifestAlreadyPublished(cycle_id)
+
+            current_status = str(cycle["status"])
+            if current_status != "phase3":
+                raise InvalidCycleTransition(cycle_id, current_status, "published")
 
             try:
                 row = (

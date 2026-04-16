@@ -14,6 +14,7 @@ from data_platform.cycle import (
     CyclePublishManifest,
     FormalTableSnapshot,
     InvalidCycleId,
+    InvalidCycleTransition,
     InvalidFormalSnapshotManifest,
     ManifestAlreadyPublished,
     PublishManifestNotFound,
@@ -22,6 +23,7 @@ from data_platform.cycle import (
     get_latest_publish_manifest,
     get_publish_manifest,
     publish_manifest,
+    transition_cycle_status,
 )
 
 
@@ -152,6 +154,7 @@ def test_publish_manifest_inserts_row_and_updates_cycle_status(
     cycle_engine: Any,
 ) -> None:
     create_cycle(date(2026, 4, 16))
+    _advance_cycle_to_phase3("CYCLE_20260416")
 
     manifest = publish_manifest(
         "CYCLE_20260416",
@@ -185,6 +188,7 @@ def test_repeated_publish_raises_and_preserves_original_manifest(
     cycle_repository_env: str,
 ) -> None:
     create_cycle(date(2026, 4, 16))
+    _advance_cycle_to_phase3("CYCLE_20260416")
     original = publish_manifest("CYCLE_20260416", {"formal.recommendation_set": 123})
 
     with pytest.raises(ManifestAlreadyPublished):
@@ -197,6 +201,40 @@ def test_repeated_publish_raises_and_preserves_original_manifest(
         .snapshot_id
         == 123
     )
+
+
+def test_publish_manifest_rejects_published_cycle_without_manifest(
+    cycle_repository_env: str,
+    cycle_engine: Any,
+) -> None:
+    create_cycle(date(2026, 4, 16))
+    _advance_cycle_to_phase3("CYCLE_20260416")
+    transition_cycle_status("CYCLE_20260416", "published")
+
+    with pytest.raises(InvalidCycleTransition):
+        publish_manifest("CYCLE_20260416", {"formal.recommendation_set": 123})
+
+    assert get_cycle("CYCLE_20260416").status == "published"
+    assert _manifest_count(cycle_engine) == 0
+
+
+@pytest.mark.parametrize(
+    "status",
+    ["pending", "phase0", "phase1", "phase2", "failed"],
+)
+def test_publish_manifest_rejects_cycles_before_phase3(
+    cycle_repository_env: str,
+    cycle_engine: Any,
+    status: str,
+) -> None:
+    create_cycle(date(2026, 4, 16))
+    _move_cycle_to_status("CYCLE_20260416", status)
+
+    with pytest.raises(InvalidCycleTransition):
+        publish_manifest("CYCLE_20260416", {"formal.recommendation_set": 123})
+
+    assert get_cycle("CYCLE_20260416").status == status
+    assert _manifest_count(cycle_engine) == 0
 
 
 def test_publish_manifest_missing_cycle_raises_not_found(
@@ -227,6 +265,7 @@ def test_get_publish_manifest_rejects_stored_invalid_json_contract(
     cycle_engine: Any,
 ) -> None:
     create_cycle(date(2026, 4, 16))
+    _advance_cycle_to_phase3("CYCLE_20260416")
     with cycle_engine.begin() as connection:
         connection.execute(
             _text(
@@ -252,6 +291,7 @@ def test_publish_manifest_insert_failure_rolls_back_status_update(
     cycle_engine: Any,
 ) -> None:
     create_cycle(date(2026, 4, 16))
+    _advance_cycle_to_phase3("CYCLE_20260416")
     with cycle_engine.begin() as connection:
         connection.exec_driver_sql(
             """
@@ -278,7 +318,7 @@ def test_publish_manifest_insert_failure_rolls_back_status_update(
     with pytest.raises(sqlalchemy_error):
         publish_manifest("CYCLE_20260416", {"formal.recommendation_set": 123})
 
-    assert get_cycle("CYCLE_20260416").status == "pending"
+    assert get_cycle("CYCLE_20260416").status == "phase3"
     assert _manifest_count(cycle_engine) == 0
 
 
@@ -288,6 +328,8 @@ def test_get_latest_publish_manifest_orders_by_postgres_manifest_metadata(
 ) -> None:
     create_cycle(date(2026, 4, 16))
     create_cycle(date(2026, 4, 17))
+    _advance_cycle_to_phase3("CYCLE_20260416")
+    _advance_cycle_to_phase3("CYCLE_20260417")
     publish_manifest("CYCLE_20260416", {"formal.recommendation_set": 123})
     publish_manifest("CYCLE_20260417", {"formal.recommendation_set": 456})
 
@@ -417,6 +459,24 @@ def _manifest_count(engine: Any) -> int:
                 _text("SELECT count(*) FROM data_platform.cycle_publish_manifest")
             ).scalar_one()
         )
+
+
+def _advance_cycle_to_phase3(cycle_id: str) -> None:
+    _move_cycle_to_status(cycle_id, "phase3")
+
+
+def _move_cycle_to_status(cycle_id: str, status: str) -> None:
+    if status == "pending":
+        return
+    if status == "failed":
+        transition_cycle_status(cycle_id, "failed")
+        return
+    for next_status in ("phase0", "phase1", "phase2", "phase3"):
+        transition_cycle_status(cycle_id, next_status)
+        if next_status == status:
+            return
+    msg = f"unsupported test cycle status: {status!r}"
+    raise AssertionError(msg)
 
 
 def _create_engine(dsn: str, **kwargs: object) -> Any:
