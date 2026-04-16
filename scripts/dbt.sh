@@ -19,19 +19,4 @@ fi
 # (already set above, compatible with dbt 1.5+)
 export DBT_PROJECT_DIR
 
-DBT_ARGS=("$@")
-if [ "${1:-}" = "test" ]; then
-  HAS_INDIRECT_SELECTION=0
-  for arg in "$@"; do
-    if [ "${arg}" = "--indirect-selection" ]; then
-      HAS_INDIRECT_SELECTION=1
-      break
-    fi
-  done
-
-  if [ "${HAS_INDIRECT_SELECTION}" -eq 0 ]; then
-    DBT_ARGS=("test" "--indirect-selection" "cautious" "${@:2}")
-  fi
-fi
-
-exec "${DBT_BIN}" "${DBT_ARGS[@]}"
+exec "${DBT_BIN}" "$@"

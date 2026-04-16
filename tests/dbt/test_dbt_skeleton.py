@@ -123,19 +123,17 @@ def test_stg_stock_basic_preserves_p1a_contract() -> None:
     assert "iceberg_scan" not in lowered_model_sql
 
 
-def test_dbt_wrapper_defaults_tests_to_cautious_indirect_selection(tmp_path: Path) -> None:
+def test_dbt_wrapper_does_not_mask_relationship_test_selection(tmp_path: Path) -> None:
     assert _run_dbt_wrapper_with_fake_dbt(
         tmp_path, ["test", "--select", "intermediate"]
     ) == [
         "test",
-        "--indirect-selection",
-        "cautious",
         "--select",
         "intermediate",
     ]
 
 
-def test_dbt_wrapper_preserves_explicit_indirect_selection(tmp_path: Path) -> None:
+def test_dbt_wrapper_preserves_explicit_test_selection_args(tmp_path: Path) -> None:
     assert _run_dbt_wrapper_with_fake_dbt(
         tmp_path,
         [

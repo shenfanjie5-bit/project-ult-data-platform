@@ -57,6 +57,12 @@ def test_marts_sql_and_schema_contracts_are_present() -> None:
     assert {"not_null", "unique"}.issubset(
         _test_names(_schema_column(declared_models["mart_dim_security"], "ts_code"))
     )
+    dim_security_relationship = _relationship_test(
+        _schema_column(declared_models["mart_dim_security"], "ts_code")
+    )
+    assert dim_security_relationship["to"] == "ref('int_security_master')"
+    assert dim_security_relationship["field"] == "ts_code"
+    assert dim_security_relationship["config"]["severity"] == "error"
     assert "not_null" in _test_names(
         _schema_column(declared_models["mart_dim_security"], "list_date")
     )
@@ -332,3 +338,10 @@ def _model_test_name(test: str | dict[str, Any]) -> str:
     if isinstance(test, str):
         return test
     return next(iter(test))
+
+
+def _relationship_test(column: dict[str, Any]) -> dict[str, Any]:
+    for test in column.get("tests", []):
+        if isinstance(test, dict) and "relationships" in test:
+            return test["relationships"]
+    raise AssertionError(f"missing relationship test for column: {column['name']}")
