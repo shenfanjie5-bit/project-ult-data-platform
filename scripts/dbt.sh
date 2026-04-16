@@ -15,4 +15,7 @@ else
   exit 127
 fi
 
-exec "${DBT_BIN}" --project-dir "${DBT_PROJECT_DIR}" "$@"
+# dbt 1.8+ removed --project-dir flag; use DBT_PROJECT_DIR env var instead
+# (already set above, compatible with dbt 1.5+)
+export DBT_PROJECT_DIR
+exec "${DBT_BIN}" "$@"
