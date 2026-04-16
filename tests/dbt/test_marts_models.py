@@ -75,6 +75,8 @@ def test_marts_sql_and_schema_contracts_are_present() -> None:
         for test in price_tests
         if _model_test_name(test) == "unique_combination_of_columns"
     )
+    price_sql = (MARTS_DIR / "mart_fact_price_bar.sql").read_text().lower()
+    assert "try_cast" not in price_sql
     assert price_unique_test["combination_of_columns"] == ["ts_code", "trade_date", "freq"]
     assert "not_null" in _test_names(
         _schema_column(declared_models["mart_fact_price_bar"], "trade_date")
@@ -187,6 +189,61 @@ def test_marts_models_execute_with_duckdb_raw_fixture(tmp_path: Path) -> None:
     )
     assert event_summary == (6, 6)
     assert {"body", "content", "text"}.isdisjoint(event_columns)
+
+
+def test_price_mart_rejects_malformed_numeric_values() -> None:
+    duckdb = pytest.importorskip("duckdb")
+
+    connection = duckdb.connect(":memory:")
+    try:
+        connection.execute(
+            """
+            create table int_price_bars_adjusted (
+                ts_code varchar,
+                trade_date date,
+                freq varchar,
+                open varchar,
+                high varchar,
+                low varchar,
+                close varchar,
+                pre_close varchar,
+                change varchar,
+                pct_chg varchar,
+                vol varchar,
+                amount varchar,
+                adj_factor varchar,
+                source_run_id varchar,
+                raw_loaded_at timestamp
+            )
+            """
+        )
+        connection.execute(
+            """
+            insert into int_price_bars_adjusted values (
+                '000001.SZ',
+                date '2026-04-15',
+                'daily',
+                'not-a-decimal',
+                '11.0',
+                '9.0',
+                '10.5',
+                '10.1',
+                '0.4',
+                '3.96',
+                '1000',
+                '10500',
+                '1.0',
+                'run-001',
+                timestamp '2026-04-15 10:30:00'
+            )
+            """
+        )
+        model_sql = _render_mart_model("mart_fact_price_bar")
+
+        with pytest.raises(duckdb.Error, match="not-a-decimal"):
+            connection.execute(f'create table "mart_fact_price_bar" as {model_sql}')
+    finally:
+        connection.close()
 
 
 def test_dbt_run_and_test_marts_with_rawwriter_fixture(tmp_path: Path) -> None:

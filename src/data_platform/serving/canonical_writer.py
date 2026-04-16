@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import argparse
 from dataclasses import asdict, dataclass
+from datetime import UTC, datetime
 import json
 import logging
 from pathlib import Path
@@ -11,6 +12,8 @@ import re
 import sys
 from time import perf_counter
 from typing import Final, NoReturn, Sequence
+from urllib.parse import unquote, urlparse
+from uuid import uuid4
 
 import duckdb
 import pyarrow as pa  # type: ignore[import-untyped]
@@ -27,6 +30,7 @@ TABLE_STOCK_BASIC = "stock_basic"
 TABLE_MARTS = "marts"
 CANONICAL_STOCK_BASIC_IDENTIFIER = "canonical.stock_basic"
 CANONICAL_LOADED_AT_COLUMN = "canonical_loaded_at"
+CANONICAL_MART_SNAPSHOT_SET_FILE = "_mart_snapshot_set.json"
 FORBIDDEN_PAYLOAD_FIELDS = frozenset({"submitted_at", "ingest_seq"})
 _IDENTIFIER_PATTERN: Final[re.Pattern[str]] = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*$")
 
@@ -78,6 +82,13 @@ class CanonicalLoadSpec:
 
         object.__setattr__(self, "identifier", identifier)
         object.__setattr__(self, "duckdb_relation", duckdb_relation)
+
+
+@dataclass(frozen=True, slots=True)
+class _PreparedCanonicalLoad:
+    spec: CanonicalLoadSpec
+    table: Table
+    table_arrow: pa.Table
 
 
 class _JsonErrorArgumentParser(argparse.ArgumentParser):
@@ -270,21 +281,45 @@ def load_canonical_table(
     """Load one DuckDB relation into its canonical Iceberg table via full overwrite."""
 
     start = perf_counter()
+    prepared = _prepare_canonical_load(
+        catalog,
+        duckdb_path,
+        spec,
+        allow_empty=allow_empty,
+    )
+    result, _refreshed_table = _overwrite_prepared_load(prepared, started_at=start)
+    return result
+
+
+def _prepare_canonical_load(
+    catalog: SqlCatalog,
+    duckdb_path: Path,
+    spec: CanonicalLoadSpec,
+    *,
+    allow_empty: bool,
+) -> _PreparedCanonicalLoad:
     table = catalog.load_table(spec.identifier)
     target_columns = _table_field_names(table)
     table_arrow = _read_duckdb_relation(duckdb_path, spec, target_columns)
     _validate_no_forbidden_payload_fields(table_arrow)
     _validate_payload_fields_match_target(spec.identifier, table, table_arrow)
     _validate_non_empty_staging(spec, table_arrow, allow_empty=allow_empty)
+    return _PreparedCanonicalLoad(spec=spec, table=table, table_arrow=table_arrow)
 
-    table.overwrite(table_arrow)
-    refreshed_table = table.refresh()
-    snapshot_id = _current_snapshot_id(refreshed_table, spec.identifier)
-    duration_ms = int((perf_counter() - start) * 1000)
+
+def _overwrite_prepared_load(
+    prepared: _PreparedCanonicalLoad,
+    *,
+    started_at: float,
+) -> tuple[WriteResult, Table]:
+    prepared.table.overwrite(prepared.table_arrow)
+    refreshed_table = prepared.table.refresh()
+    snapshot_id = _current_snapshot_id(refreshed_table, prepared.spec.identifier)
+    duration_ms = int((perf_counter() - started_at) * 1000)
     result = WriteResult(
-        table=spec.identifier,
+        table=prepared.spec.identifier,
         snapshot_id=snapshot_id,
-        row_count=table_arrow.num_rows,
+        row_count=prepared.table_arrow.num_rows,
         duration_ms=duration_ms,
     )
     logger.info(
@@ -295,7 +330,7 @@ def load_canonical_table(
             "snapshot": result.snapshot_id,
         },
     )
-    return result
+    return result, refreshed_table
 
 
 def load_canonical_stock_basic(
@@ -322,8 +357,8 @@ def load_canonical_marts(
 ) -> list[WriteResult]:
     """Load all canonical mart tables in the project-defined dependency order."""
 
-    return [
-        load_canonical_table(
+    prepared_loads = [
+        _prepare_canonical_load(
             catalog,
             duckdb_path,
             spec,
@@ -331,6 +366,28 @@ def load_canonical_marts(
         )
         for spec in CANONICAL_MART_LOAD_SPECS
     ]
+
+    results: list[WriteResult] = []
+    snapshot_set_tables: dict[str, dict[str, int | str]] = {}
+    load_id = str(uuid4())
+    for prepared in prepared_loads:
+        result, refreshed_table = _overwrite_prepared_load(
+            prepared,
+            started_at=perf_counter(),
+        )
+        results.append(result)
+        snapshot_set_tables[_table_name_from_identifier(result.table)] = {
+            "identifier": result.table,
+            "snapshot_id": result.snapshot_id,
+            "metadata_location": str(_local_path_from_location(refreshed_table.metadata_location)),
+        }
+
+    _write_mart_snapshot_set_manifest(
+        prepared_loads[0].table,
+        load_id=load_id,
+        tables=snapshot_set_tables,
+    )
+    return results
 
 
 def main(argv: Sequence[str] | None = None) -> int:
@@ -480,6 +537,44 @@ def _current_snapshot_id(table: Table, identifier: str) -> int:
     return int(snapshot.snapshot_id)
 
 
+def _write_mart_snapshot_set_manifest(
+    table: Table,
+    *,
+    load_id: str,
+    tables: dict[str, dict[str, int | str]],
+) -> None:
+    manifest_path = _mart_snapshot_set_manifest_path(table)
+    manifest_path.parent.mkdir(parents=True, exist_ok=True)
+    payload = {
+        "version": 1,
+        "load_id": load_id,
+        "published_at": datetime.now(UTC).isoformat(),
+        "tables": tables,
+    }
+    temp_path = manifest_path.with_name(f".{manifest_path.name}.{load_id}.tmp")
+    temp_path.write_text(json.dumps(payload, sort_keys=True), encoding="utf-8")
+    temp_path.replace(manifest_path)
+
+
+def _mart_snapshot_set_manifest_path(table: Table) -> Path:
+    table_location = _local_path_from_location(table.location())
+    return table_location.parent / CANONICAL_MART_SNAPSHOT_SET_FILE
+
+
+def _local_path_from_location(location: str) -> Path:
+    parsed = urlparse(location)
+    if parsed.scheme == "file":
+        return Path(unquote(parsed.path))
+    if parsed.scheme:
+        msg = "canonical mart snapshot set manifest requires a local file Iceberg warehouse"
+        raise ValueError(msg)
+    return Path(location)
+
+
+def _table_name_from_identifier(identifier: str) -> str:
+    return identifier.rsplit(".", maxsplit=1)[-1]
+
+
 def _serialize_result(result: WriteResult | list[WriteResult]) -> object:
     if isinstance(result, list):
         return [asdict(item) for item in result]
@@ -488,6 +583,7 @@ def _serialize_result(result: WriteResult | list[WriteResult]) -> object:
 
 __all__ = [
     "CANONICAL_MART_LOAD_SPECS",
+    "CANONICAL_MART_SNAPSHOT_SET_FILE",
     "CanonicalLoadSpec",
     "WriteResult",
     "load_canonical_marts",

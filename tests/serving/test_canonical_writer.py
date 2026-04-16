@@ -19,6 +19,7 @@ from data_platform.ddl.iceberg_tables import (
 from data_platform.serving import canonical_writer
 from data_platform.serving.canonical_writer import (
     CANONICAL_MART_LOAD_SPECS,
+    CANONICAL_MART_SNAPSHOT_SET_FILE,
     CANONICAL_STOCK_BASIC_IDENTIFIER,
     FORBIDDEN_PAYLOAD_FIELDS,
     CanonicalLoadSpec,
@@ -169,6 +170,8 @@ def test_load_canonical_marts_writes_all_tables_in_fixed_order(tmp_path: Path) -
     write_mart_relations(duckdb_path)
 
     results = load_canonical_marts(catalog, duckdb_path)  # type: ignore[arg-type]
+    manifest_path = tmp_path / "warehouse" / "canonical" / CANONICAL_MART_SNAPSHOT_SET_FILE
+    manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
 
     assert [result.table for result in results] == [
         spec.identifier for spec in CANONICAL_MART_LOAD_SPECS
@@ -185,6 +188,35 @@ def test_load_canonical_marts_writes_all_tables_in_fixed_order(tmp_path: Path) -
         assert payload.num_rows == 1
         assert payload.schema.names == table_spec.schema.names
         assert "canonical_loaded_at" in payload.schema.names
+
+        table_name = load_spec.identifier.rsplit(".", maxsplit=1)[-1]
+        assert manifest["tables"][table_name]["identifier"] == load_spec.identifier
+        assert manifest["tables"][table_name]["snapshot_id"] == results[
+            CANONICAL_MART_LOAD_SPECS.index(load_spec)
+        ].snapshot_id
+        assert manifest["tables"][table_name]["metadata_location"].endswith(".metadata.json")
+
+
+def test_load_canonical_marts_preflights_all_relations_before_overwrite(
+    tmp_path: Path,
+) -> None:
+    catalog = create_catalog(tmp_path, CANONICAL_MART_TABLE_SPECS)
+    duckdb_path = tmp_path / "marts.duckdb"
+    write_mart_relations(duckdb_path)
+    connection = duckdb.connect(str(duckdb_path))
+    try:
+        connection.execute("ALTER TABLE mart_fact_price_bar DROP COLUMN adj_factor")
+    finally:
+        connection.close()
+
+    with pytest.raises(duckdb.Error, match="adj_factor"):
+        load_canonical_marts(catalog, duckdb_path)  # type: ignore[arg-type]
+
+    for load_spec in CANONICAL_MART_LOAD_SPECS:
+        assert catalog.load_table(load_spec.identifier).current_snapshot() is None
+
+    manifest_path = tmp_path / "warehouse" / "canonical" / CANONICAL_MART_SNAPSHOT_SET_FILE
+    assert not manifest_path.exists()
 
 
 def test_load_canonical_table_rejects_missing_relation_column(tmp_path: Path) -> None:

@@ -9,9 +9,18 @@ import duckdb
 import pytest
 from pyiceberg.catalog.memory import InMemoryCatalog
 
-from data_platform.ddl.iceberg_tables import CANONICAL_STOCK_BASIC_SPEC, ensure_tables
+from data_platform.ddl.iceberg_tables import (
+    CANONICAL_MART_TABLE_SPECS,
+    CANONICAL_STOCK_BASIC_SPEC,
+    ensure_tables,
+)
 from data_platform.serving import reader
-from data_platform.serving.canonical_writer import load_canonical_stock_basic
+from data_platform.serving.canonical_writer import (
+    CANONICAL_MART_LOAD_SPECS,
+    load_canonical_marts,
+    load_canonical_stock_basic,
+    load_canonical_table,
+)
 from data_platform.serving.reader import (
     CanonicalTableNotFound,
     UnsupportedFilter,
@@ -20,7 +29,9 @@ from data_platform.serving.reader import (
     with_duckdb_connection,
 )
 from tests.serving.test_canonical_writer import (
+    create_catalog,
     stock_basic_rows as staging_stock_basic_rows,
+    write_mart_relations,
     write_staging_stock_basic,
 )
 
@@ -223,6 +234,84 @@ def test_read_canonical_uses_real_iceberg_scan_for_stock_basic(
 
         with pytest.raises(CanonicalTableNotFound):
             read_canonical("missing_table")
+    finally:
+        reader._duckdb_connection.cache_clear()
+
+
+def test_read_canonical_uses_mart_snapshot_set_manifest(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _require_duckdb_iceberg_extension()
+
+    catalog = create_catalog(tmp_path, CANONICAL_MART_TABLE_SPECS)
+    duckdb_path = tmp_path / "marts.duckdb"
+    write_mart_relations(duckdb_path)
+    load_canonical_marts(catalog, duckdb_path)  # type: ignore[arg-type]
+
+    connection = duckdb.connect(str(duckdb_path))
+    try:
+        connection.execute("UPDATE mart_fact_price_bar SET freq = 'weekly'")
+    finally:
+        connection.close()
+    load_canonical_table(
+        catalog,
+        duckdb_path,
+        CANONICAL_MART_LOAD_SPECS[2],
+    )  # type: ignore[arg-type]
+
+    monkeypatch.setattr(
+        reader,
+        "get_settings",
+        lambda: FakeSettings(
+            duckdb_path=tmp_path / "reader.duckdb",
+            iceberg_warehouse_path=tmp_path / "warehouse",
+        ),
+    )
+    reader._duckdb_connection.cache_clear()
+    try:
+        daily = read_canonical(
+            "fact_price_bar",
+            columns=["freq"],
+            filters=[("freq", "=", "daily")],
+        )
+        weekly = read_canonical(
+            "fact_price_bar",
+            columns=["freq"],
+            filters=[("freq", "=", "weekly")],
+        )
+
+        assert daily.column("freq").to_pylist() == ["daily"]
+        assert weekly.num_rows == 0
+    finally:
+        reader._duckdb_connection.cache_clear()
+
+
+def test_read_canonical_rejects_unpublished_mart_head(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    catalog = create_catalog(tmp_path, [CANONICAL_MART_TABLE_SPECS[2]])
+    duckdb_path = tmp_path / "marts.duckdb"
+    write_mart_relations(duckdb_path)
+    load_canonical_table(
+        catalog,
+        duckdb_path,
+        CANONICAL_MART_LOAD_SPECS[2],
+    )  # type: ignore[arg-type]
+
+    monkeypatch.setattr(
+        reader,
+        "get_settings",
+        lambda: FakeSettings(
+            duckdb_path=tmp_path / "reader.duckdb",
+            iceberg_warehouse_path=tmp_path / "warehouse",
+        ),
+    )
+    reader._duckdb_connection.cache_clear()
+    try:
+        with pytest.raises(CanonicalTableNotFound):
+            read_canonical("fact_price_bar")
     finally:
         reader._duckdb_connection.cache_clear()
 
