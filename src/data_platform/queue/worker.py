@@ -6,14 +6,20 @@ import argparse
 from collections.abc import Sequence
 from dataclasses import asdict, dataclass
 import json
+import logging
 import sys
 from time import perf_counter_ns
 from typing import Never
 
 from data_platform.queue.repository import CandidateRepository
-from data_platform.queue.validation import CandidateValidator, EnvelopeCandidateValidator
+from data_platform.queue.validation import (
+    CandidateValidationError,
+    CandidateValidator,
+    EnvelopeCandidateValidator,
+)
 
 _REJECTION_REASON_MAX_CHARS = 1000
+_LOGGER = logging.getLogger(__name__)
 
 
 @dataclass(frozen=True, slots=True)
@@ -45,14 +51,14 @@ def validate_pending_candidates(
     scanned = 0
 
     try:
-        with repository._engine.begin() as connection:
+        with repository.begin() as connection:
             candidates = repository.fetch_pending_for_update(limit, connection)
             scanned = len(candidates)
 
             for candidate in candidates:
                 try:
                     candidate_validator.validate(candidate)
-                except Exception as exc:
+                except CandidateValidationError as exc:
                     rejected += 1
                     repository.mark_validation_result(
                         candidate.id,
@@ -60,6 +66,14 @@ def validate_pending_candidates(
                         _format_rejection_reason(exc),
                         connection,
                     )
+                except Exception:
+                    _LOGGER.warning(
+                        "unexpected candidate validator failure; transaction will "
+                        "roll back and candidate will remain pending",
+                        extra={"candidate_id": candidate.id},
+                        exc_info=True,
+                    )
+                    raise
                 else:
                     accepted += 1
                     repository.mark_validation_result(

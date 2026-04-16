@@ -4,6 +4,7 @@ from collections.abc import Generator, Mapping
 from concurrent.futures import ThreadPoolExecutor
 from datetime import UTC, datetime
 import json
+import logging
 import os
 import threading
 from typing import Any
@@ -134,6 +135,37 @@ def test_worker_respects_limit(
     assert summary.accepted == 10
     assert summary.rejected == 0
     assert _status_counts(queue_engine) == {"accepted": 10, "pending": 2}
+
+
+def test_worker_rolls_back_unexpected_validator_exceptions(
+    queue_worker_env: str,
+    queue_engine: Any,
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    with queue_engine.begin() as connection:
+        first = _insert_candidate(connection, "Ex-1", _payload("Ex-1", "first"))
+        second = _insert_candidate(connection, "Ex-1", _payload("Ex-1", "crash"))
+
+    class CrashingValidator:
+        def validate(self, item: CandidateQueueItem) -> None:
+            if item.payload["candidate"] == "crash":
+                raise RuntimeError("validator backend unavailable")
+
+    with caplog.at_level(logging.WARNING):
+        with pytest.raises(RuntimeError, match="validator backend unavailable"):
+            validate_pending_candidates(validator=CrashingValidator())
+
+    rows = _queue_rows(queue_engine)
+
+    assert rows[first]["validation_status"] == "pending"
+    assert rows[first]["rejection_reason"] is None
+    assert rows[second]["validation_status"] == "pending"
+    assert rows[second]["rejection_reason"] is None
+    assert _status_counts(queue_engine) == {"pending": 2}
+    assert any(
+        "unexpected candidate validator failure" in record.message
+        for record in caplog.records
+    )
 
 
 def test_concurrent_workers_do_not_process_same_candidate_twice(

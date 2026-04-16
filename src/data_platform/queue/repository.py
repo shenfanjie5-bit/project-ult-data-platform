@@ -107,6 +107,11 @@ class CandidateRepository:
 
         return _row_to_candidate_queue_item(row)
 
+    def begin(self) -> Any:
+        """Begin a PostgreSQL transaction for queue operations."""
+
+        return self._engine.begin()
+
     def fetch_pending_for_update(
         self,
         limit: int,
