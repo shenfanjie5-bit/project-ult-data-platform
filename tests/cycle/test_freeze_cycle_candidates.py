@@ -23,7 +23,7 @@ from data_platform.cycle import (
 
 
 EXPECTED_SELECTION_COLUMNS = ["cycle_id", "candidate_id", "selected_at"]
-EXPECTED_MIGRATIONS = ["0001", "0002", "0003", "0004"]
+EXPECTED_MIGRATIONS = ["0001", "0002", "0003", "0004", "0005"]
 
 
 def test_cycle_candidate_selection_model_exposes_contract() -> None:
