@@ -24,9 +24,10 @@ _FORWARD_TRANSITIONS: Final[dict[CycleStatus, CycleStatus]] = {
     "phase0": "phase1",
     "phase1": "phase2",
     "phase2": "phase3",
-    "phase3": "published",
 }
-_FAILED_SOURCES: Final[frozenset[CycleStatus]] = frozenset(_FORWARD_TRANSITIONS)
+_FAILED_SOURCES: Final[frozenset[CycleStatus]] = frozenset(
+    ("pending", "phase0", "phase1", "phase2", "phase3")
+)
 
 
 class CycleAlreadyExists(RuntimeError):

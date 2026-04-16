@@ -20,6 +20,7 @@ from data_platform.cycle import (
     InvalidCycleTransition,
     create_cycle,
     get_cycle,
+    publish_manifest,
     transition_cycle_status,
 )
 
@@ -277,11 +278,11 @@ def test_legal_cycle_status_transitions_pass(cycle_repository_env: str) -> None:
     create_cycle(date(2026, 4, 16))
     cycle_id = "CYCLE_20260416"
 
-    for status in ["phase0", "phase1", "phase2", "phase3", "published"]:
+    for status in ["phase0", "phase1", "phase2", "phase3"]:
         metadata = transition_cycle_status(cycle_id, status)
         assert metadata.status == status
 
-    assert get_cycle(cycle_id).status == "published"
+    assert get_cycle(cycle_id).status == "phase3"
 
 
 def test_direct_pending_to_published_transition_fails(cycle_repository_env: str) -> None:
@@ -320,8 +321,9 @@ def test_failed_status_can_be_entered_from_any_nonterminal_status(
 def test_published_cycle_cannot_transition_to_failed(cycle_repository_env: str) -> None:
     create_cycle(date(2026, 4, 16))
     cycle_id = "CYCLE_20260416"
-    for status in ["phase0", "phase1", "phase2", "phase3", "published"]:
+    for status in ["phase0", "phase1", "phase2", "phase3"]:
         transition_cycle_status(cycle_id, status)
+    publish_manifest(cycle_id, {"formal.recommendation_set": 123})
 
     with pytest.raises(InvalidCycleTransition):
         transition_cycle_status(cycle_id, "failed")

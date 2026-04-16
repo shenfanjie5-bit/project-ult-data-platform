@@ -203,18 +203,19 @@ def test_repeated_publish_raises_and_preserves_original_manifest(
     )
 
 
-def test_publish_manifest_rejects_published_cycle_without_manifest(
+def test_transition_cycle_status_cannot_publish_without_manifest(
     cycle_repository_env: str,
     cycle_engine: Any,
 ) -> None:
     create_cycle(date(2026, 4, 16))
     _advance_cycle_to_phase3("CYCLE_20260416")
-    transition_cycle_status("CYCLE_20260416", "published")
 
     with pytest.raises(InvalidCycleTransition):
-        publish_manifest("CYCLE_20260416", {"formal.recommendation_set": 123})
+        transition_cycle_status("CYCLE_20260416", "published")
 
-    assert get_cycle("CYCLE_20260416").status == "published"
+    assert get_cycle("CYCLE_20260416").status == "phase3"
+    with pytest.raises(PublishManifestNotFound):
+        get_publish_manifest("CYCLE_20260416")
     assert _manifest_count(cycle_engine) == 0
 
 
