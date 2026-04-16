@@ -53,6 +53,19 @@ DATE_FIELD_NAMES = {
     "start_date",
     "trade_date",
 }
+PRICE_DATASETS = {"daily", "weekly", "monthly"}
+PRICE_NUMERIC_FIELD_NAMES = {
+    "open",
+    "high",
+    "low",
+    "close",
+    "pre_close",
+    "change",
+    "pct_chg",
+    "vol",
+    "amount",
+}
+FIXTURE_DECIMAL_STRING = "1.123456789012345678"
 
 
 def test_adapter_declared_staging_models_are_present() -> None:
@@ -514,6 +527,10 @@ def _sample_value(dataset: str, field: pa.Field) -> str | Decimal | None:
         return "1"
     if field.name == "update_flag":
         return "0"
+    if dataset in PRICE_DATASETS and field.name in PRICE_NUMERIC_FIELD_NAMES:
+        return FIXTURE_DECIMAL_STRING
+    if dataset == "adj_factor" and field.name == "adj_factor":
+        return FIXTURE_DECIMAL_STRING
     if pa.types.is_decimal(field.type):
         return Decimal("1.123456789012345678")
     return f"{field.name}-fixture"

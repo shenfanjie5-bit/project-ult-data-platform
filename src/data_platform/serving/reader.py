@@ -5,6 +5,7 @@ from __future__ import annotations
 from collections.abc import Iterator, Sequence
 from contextlib import contextmanager
 from functools import lru_cache
+import json
 from pathlib import Path
 import re
 from threading import RLock
@@ -18,6 +19,16 @@ from data_platform.config import get_settings
 
 CANONICAL_NAMESPACE = "canonical"
 TABLE_STOCK_BASIC = "stock_basic"
+CANONICAL_MART_SNAPSHOT_SET_FILE = "_mart_snapshot_set.json"
+CANONICAL_MART_TABLES = frozenset(
+    {
+        "dim_security",
+        "dim_index",
+        "fact_price_bar",
+        "fact_financial_indicator",
+        "fact_event",
+    }
+)
 _IDENTIFIER_PATTERN = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*$")
 _CONNECTION_LOCK = RLock()
 
@@ -143,13 +154,56 @@ def _filter_values(filter_spec: object, value: object) -> list[Any]:
 
 
 def _canonical_table_expression(table: str) -> str:
-    table_location = _canonical_table_location(table)
-    return f"iceberg_scan({_sql_string_literal(str(table_location))})"
+    snapshot_entry = _canonical_mart_snapshot_entry(table)
+    if snapshot_entry is not None:
+        metadata_location = str(snapshot_entry["metadata_location"])
+        snapshot_id = int(snapshot_entry["snapshot_id"])
+        return (
+            f"iceberg_scan({_sql_string_literal(metadata_location)}, "
+            f"snapshot_from_id = {snapshot_id})"
+        )
+    if table in CANONICAL_MART_TABLES:
+        raise CanonicalTableNotFound(table)
+
+    latest_metadata_location = _latest_metadata_location(table)
+    return f"iceberg_scan({_sql_string_literal(str(latest_metadata_location))})"
 
 
 def _canonical_table_location(table: str) -> Path:
     warehouse_path = get_settings().iceberg_warehouse_path.expanduser()
     return warehouse_path / CANONICAL_NAMESPACE / table
+
+
+def _latest_metadata_location(table: str) -> Path:
+    metadata_dir = _canonical_table_location(table) / "metadata"
+    metadata_files = sorted(metadata_dir.glob("*.metadata.json"))
+    if metadata_files:
+        return metadata_files[-1]
+    raise CanonicalTableNotFound(table)
+
+
+def _canonical_mart_snapshot_entry(table: str) -> dict[str, str | int] | None:
+    manifest_path = _canonical_mart_snapshot_manifest_path()
+    if not manifest_path.exists():
+        return None
+
+    payload = json.loads(manifest_path.read_text(encoding="utf-8"))
+    tables = payload.get("tables", {})
+    if not isinstance(tables, dict):
+        return None
+    entry = tables.get(table)
+    if not isinstance(entry, dict):
+        return None
+    metadata_location = entry.get("metadata_location")
+    snapshot_id = entry.get("snapshot_id")
+    if isinstance(metadata_location, str) and isinstance(snapshot_id, (int, str)):
+        return {"metadata_location": metadata_location, "snapshot_id": snapshot_id}
+    return None
+
+
+def _canonical_mart_snapshot_manifest_path() -> Path:
+    warehouse_path = get_settings().iceberg_warehouse_path.expanduser()
+    return warehouse_path / CANONICAL_NAMESPACE / CANONICAL_MART_SNAPSHOT_SET_FILE
 
 
 def _quote_identifier(identifier: str) -> str:

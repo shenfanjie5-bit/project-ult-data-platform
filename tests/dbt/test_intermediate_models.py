@@ -151,7 +151,7 @@ def test_intermediate_models_execute_with_duckdb_raw_fixture(tmp_path: Path) -> 
     assert {row[2] for row in price_rows} == {"daily", "weekly", "monthly"}
     assert all(row[0] == "000001.SZ" for row in price_rows)
     assert all(row[1] == date(2026, 4, 15) for row in price_rows)
-    assert all(row[3] == "adj_factor-fixture" for row in price_rows)
+    assert all(row[3] == "1.123456789012345678" for row in price_rows)
     assert price_duplicate_count == 0
 
     assert financial_row == (

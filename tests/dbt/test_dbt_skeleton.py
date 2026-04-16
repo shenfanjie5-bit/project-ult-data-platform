@@ -19,6 +19,13 @@ INTERMEDIATE_MODEL_NAMES = [
     "int_price_bars_adjusted",
     "int_security_master",
 ]
+MART_MODEL_NAMES = [
+    "mart_dim_index",
+    "mart_dim_security",
+    "mart_fact_event",
+    "mart_fact_financial_indicator",
+    "mart_fact_price_bar",
+]
 
 
 def test_dbt_skeleton_files_are_present() -> None:
@@ -33,10 +40,15 @@ def test_dbt_skeleton_files_are_present() -> None:
         INTERMEDIATE_DIR / "_schema.yml",
         DBT_PROJECT_DIR / "models" / "intermediate" / ".gitkeep",
         DBT_PROJECT_DIR / "models" / "marts" / ".gitkeep",
+        DBT_PROJECT_DIR / "models" / "marts" / "_schema.yml",
         DBT_PROJECT_DIR / "seeds" / ".gitkeep",
         PROJECT_ROOT / "scripts" / "dbt.sh",
         *[STAGING_DIR / f"stg_{asset.dataset}.sql" for asset in TUSHARE_ASSETS],
         *[INTERMEDIATE_DIR / f"{model_name}.sql" for model_name in INTERMEDIATE_MODEL_NAMES],
+        *[
+            DBT_PROJECT_DIR / "models" / "marts" / f"{model_name}.sql"
+            for model_name in MART_MODEL_NAMES
+        ],
     ]
 
     missing_paths = [path for path in required_paths if not path.exists()]
@@ -51,6 +63,7 @@ def test_dbt_skeleton_files_are_present() -> None:
         [
             *(f"models/staging/stg_{asset.dataset}.sql" for asset in TUSHARE_ASSETS),
             *(f"models/intermediate/{model_name}.sql" for model_name in INTERMEDIATE_MODEL_NAMES),
+            *(f"models/marts/{model_name}.sql" for model_name in MART_MODEL_NAMES),
         ]
     )
 
