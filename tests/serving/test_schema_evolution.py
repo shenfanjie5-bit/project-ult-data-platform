@@ -186,44 +186,132 @@ def test_apply_schema_evolution_widens_column_type(tmp_path: Path) -> None:
     assert refreshed.schema().as_arrow().field("trade_count").type.equals(pa.int64())
 
 
+def test_apply_schema_evolution_rejects_non_canonical_identifier_before_load() -> None:
+    class GuardCatalog:
+        def load_table(self, table_identifier: str) -> None:
+            raise AssertionError(f"unexpected table load: {table_identifier}")
+
+    with pytest.raises(ValueError, match="declared canonical"):
+        apply_schema_evolution(  # type: ignore[arg-type]
+            GuardCatalog(),
+            "formal.object",
+            pa.schema([pa.field("id", pa.string())]),
+            dry_run=False,
+        )
+
+
+def test_apply_schema_evolution_rejects_undeclared_canonical_identifier() -> None:
+    class GuardCatalog:
+        def load_table(self, table_identifier: str) -> None:
+            raise AssertionError(f"unexpected table load: {table_identifier}")
+
+    with pytest.raises(ValueError, match="declared canonical"):
+        apply_schema_evolution(  # type: ignore[arg-type]
+            GuardCatalog(),
+            "canonical.not_declared",
+            pa.schema([pa.field("id", pa.string())]),
+            dry_run=False,
+        )
+
+
 def test_run_canonical_backfill_dry_run_does_not_write_snapshot(tmp_path: Path) -> None:
     catalog = _create_catalog(tmp_path)
-    catalog.create_table("canonical.backfill_target", schema=_backfill_target_schema())
+    catalog.create_table("canonical.stock_basic", schema=_backfill_target_schema())
     duckdb_path = tmp_path / "backfill.duckdb"
     _write_backfill_source(duckdb_path)
 
     result = run_canonical_backfill(
         catalog,  # type: ignore[arg-type]
         duckdb_path,
-        "canonical.backfill_target",
+        "canonical.stock_basic",
         "SELECT id, value FROM source_rows",
         dry_run=True,
     )
 
     assert result is None
-    assert catalog.load_table("canonical.backfill_target").current_snapshot() is None
+    assert catalog.load_table("canonical.stock_basic").current_snapshot() is None
+    assert _backfill_view_names(duckdb_path) == []
 
 
 def test_run_canonical_backfill_writes_with_write_result(tmp_path: Path) -> None:
     catalog = _create_catalog(tmp_path)
-    catalog.create_table("canonical.backfill_target", schema=_backfill_target_schema())
+    catalog.create_table("canonical.stock_basic", schema=_backfill_target_schema())
     duckdb_path = tmp_path / "backfill.duckdb"
     _write_backfill_source(duckdb_path)
 
     result = run_canonical_backfill(
         catalog,  # type: ignore[arg-type]
         duckdb_path,
-        "canonical.backfill_target",
+        "canonical.stock_basic",
         "SELECT id, value FROM source_rows",
     )
 
-    rows = catalog.load_table("canonical.backfill_target").scan().to_arrow()
+    rows = catalog.load_table("canonical.stock_basic").scan().to_arrow()
     assert result is not None
-    assert result.table == "canonical.backfill_target"
+    assert result.table == "canonical.stock_basic"
     assert result.row_count == 2
     assert result.snapshot_id
     assert rows.schema.names == ["id", "value", "canonical_loaded_at"]
     assert [row["id"] for row in rows.to_pylist()] == ["a", "b"]
+
+
+@pytest.mark.parametrize(
+    "select_sql",
+    [
+        "SELECT id, value FROM source_rows;",
+        "SELECT id, value FROM source_rows; DROP TABLE source_rows",
+        "CREATE TABLE copied_rows AS SELECT id, value FROM source_rows",
+    ],
+)
+def test_run_canonical_backfill_rejects_non_single_select_without_mutating_duckdb(
+    tmp_path: Path,
+    select_sql: str,
+) -> None:
+    catalog = _create_catalog(tmp_path)
+    catalog.create_table("canonical.stock_basic", schema=_backfill_target_schema())
+    duckdb_path = tmp_path / "backfill.duckdb"
+    _write_backfill_source(duckdb_path)
+
+    with pytest.raises(ValueError):
+        run_canonical_backfill(
+            catalog,  # type: ignore[arg-type]
+            duckdb_path,
+            "canonical.stock_basic",
+            select_sql,
+            dry_run=True,
+        )
+
+    connection = duckdb.connect(str(duckdb_path))
+    try:
+        assert connection.execute("SELECT count(*) FROM source_rows").fetchone() == (2,)
+    finally:
+        connection.close()
+
+
+def test_run_canonical_backfill_rejects_non_canonical_identifier_before_sql(
+    tmp_path: Path,
+) -> None:
+    class GuardCatalog:
+        def load_table(self, table_identifier: str) -> None:
+            raise AssertionError(f"unexpected table load: {table_identifier}")
+
+    duckdb_path = tmp_path / "backfill.duckdb"
+    _write_backfill_source(duckdb_path)
+
+    with pytest.raises(ValueError, match="declared canonical"):
+        run_canonical_backfill(  # type: ignore[arg-type]
+            GuardCatalog(),
+            duckdb_path,
+            "formal.object",
+            "SELECT id, value FROM source_rows; DROP TABLE source_rows",
+            dry_run=True,
+        )
+
+    connection = duckdb.connect(str(duckdb_path))
+    try:
+        assert connection.execute("SELECT count(*) FROM source_rows").fetchone() == (2,)
+    finally:
+        connection.close()
 
 
 def _create_catalog(tmp_path: Path) -> InMemoryCatalog:
@@ -253,5 +341,23 @@ def _write_backfill_source(duckdb_path: Path) -> None:
             SELECT 'b'::VARCHAR AS id, 2::BIGINT AS value
             """
         )
+    finally:
+        connection.close()
+
+
+def _backfill_view_names(duckdb_path: Path) -> list[str]:
+    connection = duckdb.connect(str(duckdb_path))
+    try:
+        return [
+            row[0]
+            for row in connection.execute(
+                """
+                SELECT view_name
+                FROM duckdb_views()
+                WHERE view_name LIKE 'canonical_backfill_%'
+                ORDER BY view_name
+                """
+            ).fetchall()
+        ]
     finally:
         connection.close()

@@ -25,11 +25,18 @@ from pyiceberg.types import (
     TimestamptzType,
 )
 
+from data_platform.ddl.iceberg_tables import CANONICAL_NAMESPACE, DEFAULT_TABLE_SPECS
 from data_platform.serving.canonical_writer import (
     CANONICAL_LOADED_AT_COLUMN,
     CanonicalLoadSpec,
     WriteResult,
     load_canonical_table,
+)
+
+DECLARED_CANONICAL_TABLE_IDENTIFIERS = frozenset(
+    f"{spec.namespace}.{spec.name}"
+    for spec in DEFAULT_TABLE_SPECS
+    if spec.namespace == CANONICAL_NAMESPACE
 )
 
 
@@ -60,6 +67,7 @@ def plan_schema_evolution(
 ) -> SchemaEvolutionPlan:
     """Compare an Iceberg table schema to a target PyArrow schema."""
 
+    table_identifier = _require_declared_canonical_identifier(table_identifier)
     changes: list[SchemaChange] = []
     rejections: list[str] = []
     current_fields = {field.name: field for field in current_schema}
@@ -160,6 +168,7 @@ def apply_schema_evolution(
 ) -> SchemaEvolutionPlan:
     """Plan and optionally commit allowed Iceberg schema updates."""
 
+    table_identifier = _require_declared_canonical_identifier(table_identifier)
     table = catalog.load_table(table_identifier)
     current_schema = _table_schema_as_pyarrow(table)
     plan = plan_schema_evolution(table_identifier, current_schema, target_schema)
@@ -189,6 +198,7 @@ def run_canonical_backfill(
 ) -> WriteResult | None:
     """Backfill a canonical table from an explicit DuckDB SELECT."""
 
+    table_identifier = _require_declared_canonical_identifier(table_identifier)
     cleaned_sql = _clean_select_sql(select_sql)
     table = catalog.load_table(table_identifier)
     target_schema = _table_schema_as_pyarrow(table)
@@ -200,7 +210,6 @@ def run_canonical_backfill(
         raise ValueError(msg)
 
     relation = f"canonical_backfill_{uuid4().hex}"
-    _create_backfill_view(duckdb_path, relation, cleaned_sql)
     spec = CanonicalLoadSpec(
         identifier=table_identifier,
         duckdb_relation=relation,
@@ -208,11 +217,13 @@ def run_canonical_backfill(
     )
     try:
         if dry_run:
-            _validate_backfill_relation(duckdb_path, spec)
+            _validate_backfill_select(duckdb_path, spec, cleaned_sql)
             return None
+        _create_backfill_view(duckdb_path, relation, cleaned_sql)
         return load_canonical_table(catalog, duckdb_path, spec)
     finally:
-        _drop_backfill_view(duckdb_path, relation)
+        if not dry_run:
+            _drop_backfill_view(duckdb_path, relation)
 
 
 def _table_schema_as_pyarrow(table: Table) -> pa.Schema:
@@ -299,12 +310,44 @@ def _pyarrow_type_to_iceberg(data_type: pa.DataType) -> IcebergType:
 
 def _clean_select_sql(select_sql: str) -> str:
     cleaned_sql = select_sql.strip()
-    if cleaned_sql.endswith(";"):
-        cleaned_sql = cleaned_sql[:-1].strip()
     if not cleaned_sql:
         msg = "backfill SELECT SQL must not be empty"
         raise ValueError(msg)
-    return cleaned_sql
+    if ";" in cleaned_sql:
+        msg = "backfill SQL must contain exactly one SELECT statement without semicolons"
+        raise ValueError(msg)
+
+    try:
+        statements = duckdb.extract_statements(cleaned_sql)
+    except duckdb.Error as exc:
+        msg = "backfill SQL must parse as exactly one read-only SELECT statement"
+        raise ValueError(msg) from exc
+    if len(statements) != 1:
+        msg = "backfill SQL must contain exactly one SELECT statement"
+        raise ValueError(msg)
+
+    statement = statements[0]
+    if statement.type != duckdb.StatementType.SELECT:
+        msg = "backfill SQL must be a read-only SELECT statement"
+        raise ValueError(msg)
+    return statement.query.strip()
+
+
+def _require_declared_canonical_identifier(table_identifier: str) -> str:
+    normalized_identifier = table_identifier.strip()
+    namespace, separator, _table_name = normalized_identifier.partition(".")
+    if (
+        not separator
+        or namespace != CANONICAL_NAMESPACE
+        or normalized_identifier not in DECLARED_CANONICAL_TABLE_IDENTIFIERS
+    ):
+        allowed = ", ".join(sorted(DECLARED_CANONICAL_TABLE_IDENTIFIERS))
+        msg = (
+            "schema evolution and backfill only support declared canonical tables; "
+            f"got {table_identifier!r}. allowed={allowed}"
+        )
+        raise ValueError(msg)
+    return normalized_identifier
 
 
 def _create_backfill_view(duckdb_path: Path, relation: str, select_sql: str) -> None:
@@ -317,12 +360,16 @@ def _create_backfill_view(duckdb_path: Path, relation: str, select_sql: str) -> 
         connection.close()
 
 
-def _validate_backfill_relation(duckdb_path: Path, spec: CanonicalLoadSpec) -> None:
+def _validate_backfill_select(
+    duckdb_path: Path,
+    spec: CanonicalLoadSpec,
+    select_sql: str,
+) -> None:
     quoted_columns = ", ".join(f'"{column}"' for column in spec.required_columns)
-    connection = duckdb.connect(str(duckdb_path))
+    connection = duckdb.connect(str(duckdb_path), read_only=True)
     try:
         connection.execute(
-            f'SELECT {quoted_columns} FROM "{spec.duckdb_relation}" LIMIT 0'
+            f"SELECT {quoted_columns} FROM ({select_sql}) AS backfill_source LIMIT 0"
         ).fetchall()
     finally:
         connection.close()
