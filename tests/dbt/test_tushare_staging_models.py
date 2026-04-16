@@ -516,6 +516,8 @@ def _sample_value(dataset: str, field: pa.Field) -> str | Decimal | None:
         if field.name == "f_ann_date":
             return "20260416"
         return "20260415"
+    if dataset == "index_basic" and field.name == "ts_code":
+        return "000300.SH"
     if field.name == "ts_code":
         return "000001.SZ"
     if field.name == "index_code":

@@ -174,8 +174,8 @@ def test_marts_models_execute_with_duckdb_raw_fixture(tmp_path: Path) -> None:
     assert index_row == (
         "000300.SH",
         "index_name-fixture",
-        None,
-        None,
+        "market-fixture",
+        "category-fixture",
         date(2026, 4, 15),
         date(2026, 4, 15),
     )

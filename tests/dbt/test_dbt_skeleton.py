@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import os
+import subprocess
 from pathlib import Path
 
 import pytest
@@ -120,3 +121,65 @@ def test_stg_stock_basic_preserves_p1a_contract() -> None:
     assert "canonical." not in lowered_model_sql
     assert "formal." not in lowered_model_sql
     assert "iceberg_scan" not in lowered_model_sql
+
+
+def test_dbt_wrapper_defaults_tests_to_cautious_indirect_selection(tmp_path: Path) -> None:
+    assert _run_dbt_wrapper_with_fake_dbt(
+        tmp_path, ["test", "--select", "intermediate"]
+    ) == [
+        "test",
+        "--indirect-selection",
+        "cautious",
+        "--select",
+        "intermediate",
+    ]
+
+
+def test_dbt_wrapper_preserves_explicit_indirect_selection(tmp_path: Path) -> None:
+    assert _run_dbt_wrapper_with_fake_dbt(
+        tmp_path,
+        [
+            "test",
+            "--indirect-selection",
+            "eager",
+            "--select",
+            "intermediate",
+        ],
+    ) == [
+        "test",
+        "--indirect-selection",
+        "eager",
+        "--select",
+        "intermediate",
+    ]
+
+
+def _run_dbt_wrapper_with_fake_dbt(tmp_path: Path, args: list[str]) -> list[str]:
+    fake_bin_dir = tmp_path / "bin"
+    fake_bin_dir.mkdir()
+    args_capture = tmp_path / "dbt_args.txt"
+    fake_dbt = fake_bin_dir / "dbt"
+    fake_dbt.write_text(
+        """
+#!/usr/bin/env bash
+printf '%s\n' "$@" > "${DBT_ARG_CAPTURE}"
+""".lstrip(),
+        encoding="utf-8",
+    )
+    fake_dbt.chmod(0o755)
+
+    env = os.environ.copy()
+    env["DBT_ARG_CAPTURE"] = str(args_capture)
+    env["PATH"] = f"{fake_bin_dir}{os.pathsep}{env['PATH']}"
+
+    result = subprocess.run(
+        [str(PROJECT_ROOT / "scripts" / "dbt.sh"), *args],
+        cwd=PROJECT_ROOT,
+        env=env,
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+
+    assert result.returncode == 0, result.stdout + result.stderr
+    return args_capture.read_text(encoding="utf-8").splitlines()

@@ -189,6 +189,33 @@ def test_intermediate_models_execute_with_duckdb_raw_fixture(tmp_path: Path) -> 
     assert {"body", "content", "text"}.isdisjoint(event_columns)
 
 
+def test_index_membership_fixture_satisfies_index_basic_relationship(tmp_path: Path) -> None:
+    duckdb = pytest.importorskip("duckdb")
+
+    raw_zone_path = tmp_path / "raw"
+    _write_all_tushare_raw_fixtures(raw_zone_path, tmp_path)
+
+    connection = duckdb.connect(":memory:")
+    try:
+        _create_all_staging_views(connection, raw_zone_path)
+        _create_all_intermediate_tables(connection)
+
+        missing_index_codes = connection.execute(
+            """
+            select membership.index_code
+            from int_index_membership as membership
+            left join stg_index_basic as index_basic
+                on membership.index_code = index_basic.ts_code
+            where index_basic.ts_code is null
+            order by membership.index_code
+            """
+        ).fetchall()
+    finally:
+        connection.close()
+
+    assert missing_index_codes == []
+
+
 def test_financial_intermediate_combines_latest_metrics_by_source(tmp_path: Path) -> None:
     duckdb = pytest.importorskip("duckdb")
 
