@@ -114,7 +114,7 @@ models:
     description: Event metadata timeline for announcements, suspensions, dividends, float changes, holders, and disclosure dates.
     tests:
       - unique_combination_of_columns:
-          combination_of_columns: ["event_type", "ts_code", "event_date", "title", "related_date", "reference_url", "source_run_id"]
+          combination_of_columns: ["event_type", "ts_code", "event_date", "title", "related_date", "reference_url"]
     columns:
       - name: event_type
         tests:

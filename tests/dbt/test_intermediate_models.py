@@ -67,6 +67,14 @@ def test_intermediate_sql_and_schema_contracts_are_present() -> None:
     assert "content" not in event_columns
     assert "text" not in event_columns
 
+    event_tests = declared_models["int_event_timeline"]["tests"]
+    event_unique_test = next(
+        test["unique_combination_of_columns"]
+        for test in event_tests
+        if _model_test_name(test) == "unique_combination_of_columns"
+    )
+    assert "source_run_id" not in event_unique_test["combination_of_columns"]
+
     financial_tests = declared_models["int_financial_reports_latest"]["tests"]
     assert any(_model_test_name(test) == "at_most_one_true_per_group" for test in financial_tests)
 
@@ -181,11 +189,11 @@ def test_intermediate_models_execute_with_duckdb_raw_fixture(tmp_path: Path) -> 
     assert {"body", "content", "text"}.isdisjoint(event_columns)
 
 
-def test_financial_intermediate_marks_single_latest_version(tmp_path: Path) -> None:
+def test_financial_intermediate_combines_latest_metrics_by_source(tmp_path: Path) -> None:
     duckdb = pytest.importorskip("duckdb")
 
     raw_zone_path = tmp_path / "raw"
-    _write_raw_fixtures_with_two_income_versions(raw_zone_path, tmp_path)
+    _write_raw_fixtures_with_misaligned_financial_versions(raw_zone_path, tmp_path)
 
     connection = duckdb.connect(":memory:")
     try:
@@ -194,12 +202,19 @@ def test_financial_intermediate_marks_single_latest_version(tmp_path: Path) -> N
         connection.execute(f'create table "int_financial_reports_latest" as {model_sql}')
         rows = connection.execute(
             """
-            select ann_date, update_flag, is_latest, total_revenue
+            select
+                ann_date,
+                f_ann_date,
+                update_flag,
+                is_latest,
+                total_revenue,
+                total_assets,
+                n_cashflow_act,
+                roe
             from int_financial_reports_latest
             where ts_code = '000001.SZ'
               and end_date = date '2026-03-31'
               and report_type = '1'
-            order by ann_date
             """
         ).fetchall()
         latest_count = connection.execute(
@@ -216,8 +231,16 @@ def test_financial_intermediate_marks_single_latest_version(tmp_path: Path) -> N
         connection.close()
 
     assert rows == [
-        (date(2026, 4, 14), "0", False, Decimal("1.000000000000000000")),
-        (date(2026, 4, 16), "1", True, Decimal("2.000000000000000000")),
+        (
+            date(2026, 4, 16),
+            date(2026, 4, 16),
+            "1",
+            True,
+            Decimal("2.000000000000000000"),
+            Decimal("10.000000000000000000"),
+            Decimal("20.000000000000000000"),
+            Decimal("30.000000000000000000"),
+        )
     ]
     assert latest_count == 1
 
@@ -304,7 +327,9 @@ def _render_intermediate_model(model_name: str) -> str:
     )
 
 
-def _write_raw_fixtures_with_two_income_versions(raw_zone_path: Path, tmp_path: Path) -> None:
+def _write_raw_fixtures_with_misaligned_financial_versions(
+    raw_zone_path: Path, tmp_path: Path
+) -> None:
     writer = RawWriter(
         raw_zone_path=raw_zone_path,
         iceberg_warehouse_path=tmp_path / "iceberg" / "warehouse",
@@ -335,13 +360,34 @@ def _write_raw_fixtures_with_two_income_versions(raw_zone_path: Path, tmp_path: 
                     ),
                 ]
             )
-        elif asset.dataset in {"balancesheet", "cashflow", "fina_indicator"}:
+        elif asset.dataset == "balancesheet":
+            table = _sample_table_with_values(
+                asset,
+                {
+                    "ann_date": "20260414",
+                    "f_ann_date": None,
+                    "update_flag": None,
+                    "total_assets": Decimal("10.000000000000000000"),
+                },
+            )
+        elif asset.dataset == "cashflow":
             table = _sample_table_with_values(
                 asset,
                 {
                     "ann_date": "20260414",
                     "f_ann_date": "20260414",
                     "update_flag": "0",
+                    "n_cashflow_act": Decimal("20.000000000000000000"),
+                },
+            )
+        elif asset.dataset == "fina_indicator":
+            table = _sample_table_with_values(
+                asset,
+                {
+                    "ann_date": "20260414",
+                    "f_ann_date": "20260414",
+                    "update_flag": "0",
+                    "roe": Decimal("30.000000000000000000"),
                 },
             )
 
