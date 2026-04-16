@@ -166,6 +166,34 @@ def test_freeze_selects_only_accepted_candidates_and_sets_cutoffs(
     assert all(metadata.cutoff_submitted_at >= submitted_at for submitted_at in selected_submitted_at)
 
 
+def test_freeze_metadata_matches_actual_selection_rows(
+    cycle_repository_env: str,
+    cycle_engine: Any,
+) -> None:
+    create_cycle(date(2026, 4, 16))
+    with cycle_engine.begin() as connection:
+        for index in range(3):
+            _insert_candidate(
+                connection,
+                validation_status="accepted",
+                candidate=f"accepted-{index}",
+            )
+        _insert_candidate(
+            connection,
+            validation_status="rejected",
+            candidate="rejected",
+        )
+
+    metadata = freeze_cycle_candidates("CYCLE_20260416")
+    stats = _selection_stats(cycle_engine, "CYCLE_20260416")
+
+    assert stats == {
+        "candidate_count": metadata.candidate_count,
+        "cutoff_ingest_seq": metadata.cutoff_ingest_seq,
+        "cutoff_submitted_at": metadata.cutoff_submitted_at,
+    }
+
+
 def test_freeze_missing_cycle_raises_not_found(
     cycle_repository_env: str,
 ) -> None:
@@ -390,6 +418,26 @@ def _selection_ids(engine: Any, cycle_id: str) -> list[int]:
             {"cycle_id": cycle_id},
         ).scalars()
         return [int(row) for row in rows]
+
+
+def _selection_stats(engine: Any, cycle_id: str) -> dict[str, object]:
+    with engine.connect() as connection:
+        row = connection.execute(
+            _text(
+                """
+                SELECT
+                    count(*)::integer AS candidate_count,
+                    max(candidate_queue.ingest_seq) AS cutoff_ingest_seq,
+                    max(candidate_queue.submitted_at) AS cutoff_submitted_at
+                FROM data_platform.cycle_candidate_selection AS selection
+                JOIN data_platform.candidate_queue AS candidate_queue
+                  ON candidate_queue.id = selection.candidate_id
+                WHERE selection.cycle_id = :cycle_id
+                """
+            ),
+            {"cycle_id": cycle_id},
+        ).mappings().one()
+    return dict(row)
 
 
 def _create_engine(dsn: str, **kwargs: object) -> Any:

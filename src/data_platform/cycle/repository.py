@@ -58,7 +58,7 @@ class CycleAlreadyFrozen(RuntimeError):
 
 
 class NoAcceptedCandidates(RuntimeError):
-    """Raised by strict freeze flows when no accepted candidates are available."""
+    """Available for strict callers; the default freeze path allows empty selection."""
 
     def __init__(self, cycle_id: str) -> None:
         self.cycle_id = cycle_id
@@ -95,7 +95,14 @@ class CycleRepository:
         return self._engine.begin()
 
     def freeze_selection(self, cycle_id: str, connection: Any) -> CycleMetadata:
-        """Freeze accepted queue candidates for one cycle in the caller transaction."""
+        """Freeze accepted queue candidates for one cycle in the caller transaction.
+
+        Under PostgreSQL READ COMMITTED, the freeze boundary is the
+        INSERT...SELECT statement start. Candidates accepted before that statement's
+        snapshot are eligible; candidates accepted later wait for a future cycle.
+        Metadata is derived from the same inserted CTE so cutoffs and counts always
+        describe the actual selected rows.
+        """
 
         _cycle_date_from_id(cycle_id)
         current = connection.execute(
