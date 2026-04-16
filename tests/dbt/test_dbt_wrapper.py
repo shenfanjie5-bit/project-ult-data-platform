@@ -22,8 +22,13 @@ def test_dbt_wrapper_does_not_mask_relationship_test_selection(tmp_path: Path) -
     )
 
     assert result.returncode == 0, result.stdout + result.stderr
+    # dbt.sh injects --indirect-selection=cautious for `dbt test` unless
+    # the caller already provides --indirect-selection (prevents cross-layer
+    # relationship test failures from Catalog Errors).
     assert argv_file.read_text(encoding="utf-8").splitlines() == [
         "test",
+        "--indirect-selection",
+        "cautious",
         "--select",
         "staging",
     ]
