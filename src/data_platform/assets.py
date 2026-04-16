@@ -33,6 +33,8 @@ CANONICAL_STOCK_BASIC_CALLABLE = (
     "data_platform.serving.canonical_writer:load_canonical_stock_basic"
 )
 CANONICAL_MARTS_CALLABLE = "data_platform.serving.canonical_writer:load_canonical_marts"
+CANONICAL_MARTS_ASSET_KEY: AssetKey = ("canonical", "canonical_marts")
+CANONICAL_MARTS_ASSET_IDENTIFIER = "canonical.canonical_marts"
 _REF_PATTERN = re.compile(r"\{\{\s*ref\(\s*['\"]([^'\"]+)['\"]\s*\)\s*\}\}")
 
 
@@ -158,7 +160,7 @@ def build_resources(settings: Settings | None = None) -> dict[str, Any]:
             iceberg_warehouse_path=resolved_settings.iceberg_warehouse_path,
         ),
         "raw_reader": RawReader(resolved_settings.raw_zone_path),
-        "iceberg_catalog": load_catalog(),
+        "iceberg_catalog": load_catalog(settings=resolved_settings),
         "duckdb_path": resolved_settings.duckdb_path,
         "dbt_project_dir": DBT_PROJECT_DIR,
         "raw_zone_path": resolved_settings.raw_zone_path,
@@ -350,7 +352,6 @@ def _build_dbt_specs(
 def _build_canonical_specs(
     selected_dbt_models: Sequence[str],
 ) -> list[DataPlatformAssetSpec]:
-    selected = set(selected_dbt_models)
     specs = [
         DataPlatformAssetSpec(
             key=_canonical_key(STOCK_BASIC_LOAD_SPEC.identifier),
@@ -366,25 +367,34 @@ def _build_canonical_specs(
         )
     ]
 
-    for load_spec in CANONICAL_MART_LOAD_SPECS:
-        deps: tuple[AssetKey, ...] = ()
-        if load_spec.duckdb_relation in selected:
-            deps = (_dbt_key(load_spec.duckdb_relation),)
-        specs.append(
-            DataPlatformAssetSpec(
-                key=_canonical_key(load_spec.identifier),
-                kind="canonical",
-                deps=deps,
-                metadata={
-                    "identifier": load_spec.identifier,
-                    "duckdb_relation": load_spec.duckdb_relation,
-                    "required_columns": list(load_spec.required_columns),
-                    "writer": "marts",
-                    "write_group": "canonical_marts",
+    mart_deps = tuple(
+        _dbt_key(load_spec.duckdb_relation)
+        for load_spec in CANONICAL_MART_LOAD_SPECS
+    )
+    specs.append(
+        DataPlatformAssetSpec(
+            key=CANONICAL_MARTS_ASSET_KEY,
+            kind="canonical",
+            deps=mart_deps,
+            metadata={
+                "identifier": CANONICAL_MARTS_ASSET_IDENTIFIER,
+                "canonical_identifiers": [
+                    load_spec.identifier for load_spec in CANONICAL_MART_LOAD_SPECS
+                ],
+                "duckdb_relations": [
+                    load_spec.duckdb_relation for load_spec in CANONICAL_MART_LOAD_SPECS
+                ],
+                "required_columns_by_identifier": {
+                    load_spec.identifier: list(load_spec.required_columns)
+                    for load_spec in CANONICAL_MART_LOAD_SPECS
                 },
-                callable_import_path=CANONICAL_MARTS_CALLABLE,
-            )
+                "writer": "marts",
+                "write_group": "canonical_marts",
+                "serialization_required": True,
+            },
+            callable_import_path=CANONICAL_MARTS_CALLABLE,
         )
+    )
     return specs
 
 
@@ -423,6 +433,7 @@ def _to_snake_case(value: str) -> str:
 __all__ = [
     "AssetKey",
     "AssetKind",
+    "CANONICAL_MARTS_ASSET_KEY",
     "DBT_PROJECT_DIR",
     "DataPlatformAssetSpec",
     "build_assets",

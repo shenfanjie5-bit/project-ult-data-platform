@@ -13,7 +13,7 @@ from pyiceberg.catalog.sql import SqlCatalog
 from pyiceberg.typedef import Identifier
 from sqlalchemy.exc import SQLAlchemyError
 
-from data_platform.config import get_settings
+from data_platform.config import Settings, get_settings
 
 
 DEFAULT_NAMESPACES: Final[tuple[str, str, str]] = ("canonical", "formal", "analytical")
@@ -43,10 +43,14 @@ class DataPlatformSqlCatalog(SqlCatalog):
 SQL_CATALOG_CLASS: type[SqlCatalog] = DataPlatformSqlCatalog
 
 
-def load_catalog(name: str | None = None) -> SqlCatalog:
+def load_catalog(
+    name: str | None = None,
+    *,
+    settings: Settings | None = None,
+) -> SqlCatalog:
     """Load the project PG-backed PyIceberg SQL catalog."""
 
-    pg_dsn, configured_catalog_name, warehouse_path = _catalog_config()
+    pg_dsn, configured_catalog_name, warehouse_path = _catalog_config(settings)
     catalog_name = name or configured_catalog_name
     properties = {
         "uri": _sqlalchemy_postgres_uri(pg_dsn),
@@ -77,9 +81,16 @@ def ensure_namespaces(catalog: SqlCatalog, names: Iterable[str | Identifier]) ->
             raise
 
 
-def _catalog_config() -> tuple[str, str, Path]:
+def _catalog_config(settings: Settings | None = None) -> tuple[str, str, Path]:
+    if settings is not None:
+        return (
+            str(settings.pg_dsn),
+            settings.iceberg_catalog_name,
+            settings.iceberg_warehouse_path,
+        )
+
     try:
-        settings = get_settings()
+        resolved_settings = get_settings()
     except ValidationError as exc:
         jdbc_config = _jdbc_catalog_config_from_env(exc)
         if jdbc_config is None:
@@ -87,9 +98,9 @@ def _catalog_config() -> tuple[str, str, Path]:
         return jdbc_config
 
     return (
-        str(settings.pg_dsn),
-        settings.iceberg_catalog_name,
-        settings.iceberg_warehouse_path,
+        str(resolved_settings.pg_dsn),
+        resolved_settings.iceberg_catalog_name,
+        resolved_settings.iceberg_warehouse_path,
     )
 
 
