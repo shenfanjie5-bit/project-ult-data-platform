@@ -19,4 +19,17 @@ fi
 # (already set above, compatible with dbt 1.5+)
 export DBT_PROJECT_DIR
 
-exec "${DBT_BIN}" "$@"
+# For `dbt test`, inject --indirect-selection=cautious unless the caller
+# already specified it. Prevents cross-layer relationship test failures.
+ARGS=("$@")
+if [[ "${1:-}" == "test" ]]; then
+  has_indirect=false
+  for arg in "$@"; do
+    [[ "$arg" == "--indirect-selection" ]] && has_indirect=true
+  done
+  if [[ "$has_indirect" == "false" ]]; then
+    ARGS=("${ARGS[@]:0:1}" "--indirect-selection" "cautious" "${ARGS[@]:1}")
+  fi
+fi
+
+exec "${DBT_BIN}" "${ARGS[@]}"
