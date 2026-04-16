@@ -107,6 +107,18 @@ def test_submit_candidate_rejects_invalid_payload_type() -> None:
         )
 
 
+@pytest.mark.parametrize("payload_type", [None, ["Ex-1"]])
+def test_submit_candidate_rejects_non_string_payload_type(payload_type: object) -> None:
+    with pytest.raises(CandidateValidationError, match="payload_type must be one of"):
+        submit_candidate(
+            {
+                "payload_type": payload_type,
+                "submitted_by": "test-subsystem",
+                "candidate": "alpha",
+            }
+        )
+
+
 def test_submit_candidate_rejects_missing_submitted_by() -> None:
     with pytest.raises(CandidateValidationError, match="submitted_by is required"):
         submit_candidate({"payload_type": "Ex-1", "candidate": "alpha"})
@@ -145,6 +157,28 @@ def test_submit_candidate_rejects_non_json_payload() -> None:
                 "payload_type": "Ex-1",
                 "submitted_by": "test-subsystem",
                 "as_of": datetime.now(UTC),
+            }
+        )
+
+
+def test_submit_candidate_rejects_nested_non_string_payload_keys() -> None:
+    with pytest.raises(CandidateValidationError, match="JSON object keys must be strings"):
+        submit_candidate(
+            {
+                "payload_type": "Ex-1",
+                "submitted_by": "test-subsystem",
+                "candidate": {"id": "alpha", "nested": {1: "not-json-object-key"}},
+            }
+        )
+
+
+def test_submit_candidate_rejects_nested_non_string_payload_keys_in_lists() -> None:
+    with pytest.raises(CandidateValidationError, match="JSON object keys must be strings"):
+        submit_candidate(
+            {
+                "payload_type": "Ex-1",
+                "submitted_by": "test-subsystem",
+                "candidate": [{"id": "alpha"}, {1: "not-json-object-key"}],
             }
         )
 

@@ -106,16 +106,22 @@ def _resolve_dsn() -> str:
         get_settings = getattr(config_module, "get_settings")
         return str(get_settings().pg_dsn)
     except ModuleNotFoundError as exc:
-        raise CandidateQueueWriteError("DP_PG_DSN is required for candidate queue writes", exc)
+        raise CandidateQueueWriteError(
+            "DP_PG_DSN is required for candidate queue writes", exc
+        ) from exc
     except Exception as exc:
-        raise CandidateQueueWriteError("DP_PG_DSN is required for candidate queue writes", exc)
+        raise CandidateQueueWriteError(
+            "DP_PG_DSN is required for candidate queue writes", exc
+        ) from exc
 
 
 def _create_engine(dsn: str) -> Any:
     try:
         sqlalchemy = import_module("sqlalchemy")
     except ModuleNotFoundError as exc:
-        raise CandidateQueueWriteError("candidate queue writes require SQLAlchemy", exc)
+        raise CandidateQueueWriteError(
+            "candidate queue writes require SQLAlchemy", exc
+        ) from exc
 
     create_engine = getattr(sqlalchemy, "create_engine")
     return create_engine(_sqlalchemy_postgres_uri(dsn))
@@ -125,7 +131,9 @@ def _sqlalchemy_text() -> Any:
     try:
         sqlalchemy = import_module("sqlalchemy")
     except ModuleNotFoundError as exc:
-        raise CandidateQueueWriteError("candidate queue writes require SQLAlchemy", exc)
+        raise CandidateQueueWriteError(
+            "candidate queue writes require SQLAlchemy", exc
+        ) from exc
 
     return getattr(sqlalchemy, "text")
 

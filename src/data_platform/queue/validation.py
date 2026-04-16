@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from collections.abc import Mapping
+from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 import json
 from types import MappingProxyType
@@ -72,7 +72,7 @@ def validate_candidate_envelope(payload: Mapping[str, Any]) -> CandidateEnvelope
 
 
 def _validate_payload_type(value: object) -> None:
-    if value not in _CANDIDATE_PAYLOAD_TYPES:
+    if not isinstance(value, str) or value not in _CANDIDATE_PAYLOAD_TYPES:
         msg = f"payload_type must be one of {sorted(_CANDIDATE_PAYLOAD_TYPES)}"
         raise CandidateValidationError(msg)
 
@@ -101,11 +101,19 @@ def _reject_forbidden_ingest_metadata(payload: Mapping[str, Any]) -> None:
         raise ForbiddenIngestMetadataError(forbidden_fields)
 
 
-def _validate_string_keys(payload: Mapping[Any, Any]) -> None:
-    non_string_keys = [key for key in payload if not isinstance(key, str)]
-    if non_string_keys:
-        msg = "candidate payload JSON object keys must be strings"
-        raise CandidateValidationError(msg)
+def _validate_string_keys(value: object) -> None:
+    if isinstance(value, Mapping):
+        non_string_keys = [key for key in value if not isinstance(key, str)]
+        if non_string_keys:
+            msg = "candidate payload JSON object keys must be strings"
+            raise CandidateValidationError(msg)
+        for nested_value in value.values():
+            _validate_string_keys(nested_value)
+        return
+
+    if isinstance(value, Sequence) and not isinstance(value, (bytes, bytearray, str)):
+        for nested_value in value:
+            _validate_string_keys(nested_value)
 
 
 def _validate_json_serializable(payload: Mapping[str, Any]) -> None:
