@@ -11,6 +11,8 @@ models:
           - relationships:
               to: ref('int_security_master')
               field: ts_code
+              config:
+                severity: error
       - name: list_date
         tests:
           - not_null
