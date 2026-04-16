@@ -27,7 +27,7 @@ ARGS=("$@")
 if [[ "${1:-}" == "test" ]]; then
   has_indirect=false
   for arg in "$@"; do
-    [[ "$arg" == "--indirect-selection" ]] && has_indirect=true
+    [[ "$arg" == "--indirect-selection" || "$arg" == --indirect-selection=* ]] && has_indirect=true
   done
   if [[ "$has_indirect" == "false" ]]; then
     ARGS=("${ARGS[@]:0:1}" "--indirect-selection" "cautious" "${ARGS[@]:1}")
