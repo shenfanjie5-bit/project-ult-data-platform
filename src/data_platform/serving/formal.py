@@ -8,15 +8,15 @@ from typing import Final
 import pyarrow as pa  # type: ignore[import-untyped]
 
 from data_platform.cycle.manifest import (
-    CYCLE_PUBLISH_MANIFEST_TABLE,
     CyclePublishManifest,
     FormalTableSnapshot,
+    InvalidFormalSnapshotManifest,
     PublishManifestNotFound,
-    _manifest_from_row,
     get_latest_publish_manifest,
+    get_publish_manifest_for_snapshot,
     get_publish_manifest,
+    validate_snapshot_id,
 )
-from data_platform.cycle.repository import _create_engine, _text
 from data_platform.serving.catalog import load_catalog
 from data_platform.serving.reader import _validate_identifier
 
@@ -102,11 +102,17 @@ def get_formal_by_snapshot(snapshot_id: int, object_type: str) -> FormalObject:
     """Read a formal object only if snapshot_id has been published in a manifest."""
 
     table_identifier = formal_table_identifier(object_type)
-    validated_snapshot_id = _validate_snapshot_id(snapshot_id)
-    manifest = _get_publish_manifest_for_snapshot(
-        validated_snapshot_id,
-        table_identifier,
-    )
+    validated_snapshot_id = _validate_formal_snapshot_id(snapshot_id)
+    try:
+        manifest = get_publish_manifest_for_snapshot(
+            validated_snapshot_id,
+            table_identifier,
+        )
+    except PublishManifestNotFound as exc:
+        raise FormalSnapshotNotPublished(
+            validated_snapshot_id,
+            table_identifier,
+        ) from exc
     snapshot = _snapshot_from_manifest(manifest, table_identifier)
     if snapshot.snapshot_id != validated_snapshot_id:
         raise FormalSnapshotNotPublished(validated_snapshot_id, table_identifier)
@@ -161,49 +167,11 @@ def _read_formal_snapshot(table_identifier: str, snapshot_id: int) -> pa.Table:
     raise TypeError(msg)
 
 
-def _get_publish_manifest_for_snapshot(
-    snapshot_id: int,
-    table_identifier: str,
-) -> CyclePublishManifest:
-    engine = _create_engine()
+def _validate_formal_snapshot_id(snapshot_id: int) -> int:
     try:
-        with engine.connect() as connection:
-            rows = (
-                connection.execute(
-                    _text(
-                        f"""
-                    SELECT
-                        published_cycle_id,
-                        published_at,
-                        formal_table_snapshots
-                    FROM {CYCLE_PUBLISH_MANIFEST_TABLE}
-                    ORDER BY published_at DESC, published_cycle_id DESC
-                    """
-                    )
-                )
-                .mappings()
-                .all()
-            )
-    finally:
-        engine.dispose()
-
-    for row in rows:
-        manifest = _manifest_from_row(row)
-        snapshot = manifest.formal_table_snapshots.get(table_identifier)
-        if snapshot is not None and snapshot.snapshot_id == snapshot_id:
-            return manifest
-
-    raise FormalSnapshotNotPublished(snapshot_id, table_identifier)
-
-
-def _validate_snapshot_id(snapshot_id: int) -> int:
-    if isinstance(snapshot_id, bool) or not isinstance(snapshot_id, int):
-        msg = f"snapshot_id must be a positive integer: {snapshot_id!r}"
-        raise ValueError(msg)
-    if snapshot_id < 1:
-        msg = f"snapshot_id must be a positive integer: {snapshot_id!r}"
-        raise ValueError(msg)
-    return snapshot_id
+        return validate_snapshot_id(snapshot_id)
+    except InvalidFormalSnapshotManifest as exc:
+        raise ValueError(str(exc)) from exc
 
 
 __all__ = [

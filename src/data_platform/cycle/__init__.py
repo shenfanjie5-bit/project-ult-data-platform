@@ -18,8 +18,10 @@ from data_platform.cycle.manifest import (
     ManifestAlreadyPublished,
     PublishManifestNotFound,
     get_latest_publish_manifest,
+    get_publish_manifest_for_snapshot,
     get_publish_manifest,
     publish_manifest,
+    validate_snapshot_id,
 )
 from data_platform.cycle.repository import (
     CycleAlreadyFrozen,
@@ -56,6 +58,8 @@ __all__ = [
     "get_cycle",
     "get_latest_publish_manifest",
     "get_publish_manifest",
+    "get_publish_manifest_for_snapshot",
     "publish_manifest",
     "transition_cycle_status",
+    "validate_snapshot_id",
 ]
