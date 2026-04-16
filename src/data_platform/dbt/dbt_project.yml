@@ -8,6 +8,7 @@ profile: data_platform
 model-paths: ["models"]
 seed-paths: ["seeds"]
 macro-paths: ["macros"]
+test-paths: ["tests"]
 
 target-path: "target"
 clean-targets:

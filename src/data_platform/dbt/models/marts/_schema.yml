@@ -8,6 +8,9 @@ models:
         tests:
           - not_null
           - unique
+          - relationships:
+              to: ref('int_security_master')
+              field: ts_code
       - name: list_date
         tests:
           - not_null
@@ -17,6 +20,12 @@ models:
           - accepted_values:
               values: [true, false]
               quote: false
+      - name: source_run_id
+        tests:
+          - not_null
+      - name: raw_loaded_at
+        tests:
+          - not_null
 
   - name: mart_dim_index
     description: Canonical index dimension derived from normalized index membership.
@@ -31,6 +40,12 @@ models:
       - name: latest_effective_date
         tests:
           - not_null
+      - name: source_run_id
+        tests:
+          - not_null
+      - name: raw_loaded_at
+        tests:
+          - not_null
 
   - name: mart_fact_price_bar
     description: Canonical price bar fact table at daily, weekly, and monthly frequencies.
@@ -41,6 +56,9 @@ models:
       - name: ts_code
         tests:
           - not_null
+          - relationships:
+              to: ref('mart_dim_security')
+              field: ts_code
       - name: trade_date
         tests:
           - not_null
@@ -49,6 +67,12 @@ models:
           - not_null
           - accepted_values:
               values: ["daily", "weekly", "monthly"]
+      - name: source_run_id
+        tests:
+          - not_null
+      - name: raw_loaded_at
+        tests:
+          - not_null
 
   - name: mart_fact_financial_indicator
     description: Canonical latest financial indicator fact table.
@@ -59,6 +83,9 @@ models:
       - name: ts_code
         tests:
           - not_null
+          - relationships:
+              to: ref('mart_dim_security')
+              field: ts_code
       - name: end_date
         tests:
           - not_null
@@ -74,6 +101,12 @@ models:
           - accepted_values:
               values: [true]
               quote: false
+      - name: source_run_id
+        tests:
+          - not_null
+      - name: raw_loaded_at
+        tests:
+          - not_null
 
   - name: mart_fact_event
     description: Canonical event fact table with metadata-only event payloads.
@@ -96,5 +129,16 @@ models:
                   "disclosure_date",
                 ]
       - name: event_date
+        tests:
+          - not_null
+      - name: ts_code
+        tests:
+          - relationships:
+              to: ref('mart_dim_security')
+              field: ts_code
+      - name: source_run_id
+        tests:
+          - not_null
+      - name: raw_loaded_at
         tests:
           - not_null
