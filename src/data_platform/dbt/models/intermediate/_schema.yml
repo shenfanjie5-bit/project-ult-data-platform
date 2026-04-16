@@ -112,6 +112,8 @@ models:
           - relationships:
               to: ref('stg_index_basic')
               field: ts_code
+              config:
+                severity: error
       - name: con_code
         tests:
           - not_null

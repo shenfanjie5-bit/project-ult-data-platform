@@ -20,14 +20,12 @@ fi
 export DBT_PROJECT_DIR
 
 # For `dbt test`, inject --indirect-selection=cautious unless the caller
-# already specified it. This prevents cross-layer relationship tests from
-# pulling in tables that weren't built in the current test context.
-# E.g. intermediate test referencing mart_dim_security → Catalog Error.
+# already specified it. Prevents cross-layer relationship test failures.
 ARGS=("$@")
 if [[ "${1:-}" == "test" ]]; then
   has_indirect=false
   for arg in "$@"; do
-    [[ "$arg" == "--indirect-selection" ]] && has_indirect=true
+    [[ "$arg" == "--indirect-selection" || "$arg" == --indirect-selection=* ]] && has_indirect=true
   done
   if [[ "$has_indirect" == "false" ]]; then
     ARGS=("${ARGS[@]:0:1}" "--indirect-selection" "cautious" "${ARGS[@]:1}")

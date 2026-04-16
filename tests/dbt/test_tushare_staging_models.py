@@ -196,6 +196,39 @@ def test_rawwriter_fixtures_execute_all_staging_models_with_duckdb(tmp_path: Pat
     assert income_type == "DECIMAL(38,18)"
 
 
+def test_index_staging_fixtures_cover_membership_relationships(tmp_path: Path) -> None:
+    duckdb = pytest.importorskip("duckdb")
+
+    raw_zone_path = tmp_path / "raw"
+    _write_all_tushare_raw_fixtures(raw_zone_path, tmp_path)
+
+    connection = duckdb.connect(":memory:")
+    try:
+        for model_name in ("stg_index_basic", "stg_index_member", "stg_index_weight"):
+            model_sql = _render_staging_model(model_name, raw_zone_path)
+            connection.execute(f'create view "{model_name}" as {model_sql}')
+
+        missing_index_rows = connection.execute(
+            """
+            select 'stg_index_member' as model_name, member.index_code
+            from stg_index_member as member
+            left join stg_index_basic as index_basic
+                on member.index_code = index_basic.ts_code
+            where index_basic.ts_code is null
+            union all
+            select 'stg_index_weight' as model_name, weight.index_code
+            from stg_index_weight as weight
+            left join stg_index_basic as index_basic
+                on weight.index_code = index_basic.ts_code
+            where index_basic.ts_code is null
+            """
+        ).fetchall()
+    finally:
+        connection.close()
+
+    assert missing_index_rows == []
+
+
 def test_partitioned_staging_keeps_latest_artifact_per_partition(
     tmp_path: Path,
 ) -> None:
@@ -427,6 +460,8 @@ def test_dbt_run_and_test_staging_with_rawwriter_fixture(tmp_path: Path) -> None
     )
     assert parse_result.returncode == 0, parse_result.stdout + parse_result.stderr
 
+    # Standard dbt indirect selection can exercise downstream relationship
+    # tests, so build descendants instead of changing test selection.
     run_result = _run_dbt_wrapper(
         [
             "run",
@@ -435,7 +470,7 @@ def test_dbt_run_and_test_staging_with_rawwriter_fixture(tmp_path: Path) -> None
             "--target-path",
             str(tmp_path / "run"),
             "--select",
-            "staging",
+            "staging+",
         ],
         env=env,
     )
