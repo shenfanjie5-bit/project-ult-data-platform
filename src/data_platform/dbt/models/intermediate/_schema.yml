@@ -24,6 +24,9 @@ models:
       - name: source_run_id
         tests:
           - not_null
+      - name: raw_loaded_at
+        tests:
+          - not_null
 
   - name: int_financial_reports_latest
     description: Wide financial report versions joined across income, balance sheet, cash flow, and financial indicators.
@@ -58,6 +61,12 @@ models:
           - accepted_values:
               values: [true, false]
               quote: false
+      - name: source_run_id
+        tests:
+          - not_null
+      - name: raw_loaded_at
+        tests:
+          - not_null
 
   - name: int_security_master
     description: Security attributes joined from stock basics, company metadata, and latest name change metadata.
@@ -84,6 +93,12 @@ models:
           - accepted_values:
               values: [true, false]
               quote: false
+      - name: source_run_id
+        tests:
+          - not_null
+      - name: raw_loaded_at
+        tests:
+          - not_null
 
   - name: int_index_membership
     description: Normalized index constituent membership intervals with dated weight records.
@@ -109,6 +124,9 @@ models:
       - name: source_run_id
         tests:
           - not_null
+      - name: raw_loaded_at
+        tests:
+          - not_null
 
   - name: int_event_timeline
     description: Event metadata timeline for announcements, suspensions, dividends, float changes, holders, and disclosure dates.
@@ -130,5 +148,8 @@ models:
         tests:
           - not_null
       - name: source_run_id
+        tests:
+          - not_null
+      - name: raw_loaded_at
         tests:
           - not_null

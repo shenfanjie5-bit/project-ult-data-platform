@@ -28,6 +28,8 @@ from data_platform.raw import RawWriter
 PROJECT_ROOT = Path(__file__).resolve().parents[2]
 DBT_PROJECT_DIR = PROJECT_ROOT / "src" / "data_platform" / "dbt"
 STAGING_DIR = DBT_PROJECT_DIR / "models" / "staging"
+STAGING_SOURCES_PATH = STAGING_DIR / "_sources.yml"
+STAGING_SCHEMA_PATH = STAGING_DIR / "_schema.yml"
 DATE_FIELD_NAMES = {
     "actual_date",
     "ann_date",
@@ -107,17 +109,18 @@ def test_staging_sql_uses_raw_manifest_only() -> None:
         assert "current_timestamp" not in lowered_sql
 
 
-def test_sources_yml_declares_each_tushare_model_and_basic_tests() -> None:
+def test_staging_yml_declares_each_tushare_model_and_basic_tests() -> None:
     yaml = pytest.importorskip("yaml")
 
-    parsed = yaml.safe_load((STAGING_DIR / "_sources.yml").read_text())
+    parsed_sources = yaml.safe_load(STAGING_SOURCES_PATH.read_text())
+    parsed_schema = yaml.safe_load(STAGING_SCHEMA_PATH.read_text())
     source_tables = {
         table["name"]
-        for source in parsed["sources"]
+        for source in parsed_sources["sources"]
         if source["name"] == "raw"
         for table in source["tables"]
     }
-    models_by_name = {model["name"]: model for model in parsed["models"]}
+    models_by_name = {model["name"]: model for model in parsed_schema["models"]}
 
     for asset in TUSHARE_ASSETS:
         model_name = f"stg_{asset.dataset}"

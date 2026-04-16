@@ -37,6 +37,7 @@ def test_dbt_skeleton_files_are_present() -> None:
         DBT_PROJECT_DIR / "macros" / "staging_tests.sql",
         DBT_PROJECT_DIR / "macros" / "intermediate_tests.sql",
         STAGING_DIR / "_sources.yml",
+        STAGING_DIR / "_schema.yml",
         INTERMEDIATE_DIR / "_schema.yml",
         DBT_PROJECT_DIR / "models" / "intermediate" / ".gitkeep",
         DBT_PROJECT_DIR / "models" / "marts" / ".gitkeep",
@@ -71,6 +72,7 @@ def test_dbt_skeleton_files_are_present() -> None:
     assert "name: data_platform" in dbt_project
     assert "profile: data_platform" in dbt_project
     assert 'require-dbt-version: ">=1.7"' in dbt_project
+    assert 'test-paths: ["tests"]' in dbt_project
     assert "+materialized: view" in dbt_project
     assert "+materialized: table" in dbt_project
 
