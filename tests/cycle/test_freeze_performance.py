@@ -16,7 +16,7 @@ from data_platform.queue.validation import CandidateValidationError
 from data_platform.queue.worker import validate_pending_candidates
 
 
-EXPECTED_MIGRATIONS = ["0001", "0002", "0003", "0004"]
+EXPECTED_MIGRATIONS = ["0001", "0002", "0003", "0004", "0005"]
 FREEZE_CYCLE_ID = "CYCLE_20260416"
 FREEZE_CYCLE_DATE = date(2026, 4, 16)
 FREEZE_PERFORMANCE_SECONDS = 3.0

@@ -517,6 +517,10 @@ def _sample_value(dataset: str, field: pa.Field) -> str | Decimal | None:
             return "20260416"
         return "20260415"
     if field.name == "ts_code":
+        # index_basic ts_code must match index_member index_code for
+        # referential integrity (relationship test checks this FK).
+        if dataset == "index_basic":
+            return "000300.SH"
         return "000001.SZ"
     if field.name == "index_code":
         return "000300.SH"
