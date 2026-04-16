@@ -115,9 +115,9 @@ def test_create_engine_rewrites_plain_postgres_dsn_to_psycopg(
 def test_apply_pending_is_idempotent_and_creates_schema(postgres_dsn: str) -> None:
     runner = MigrationRunner()
 
-    assert runner.apply_pending(postgres_dsn) == ["0001", "0002"]
+    assert runner.apply_pending(postgres_dsn) == ["0001", "0002", "0003"]
     assert runner.apply_pending(postgres_dsn) == []
-    assert fetch_versions(postgres_dsn) == ["0001", "0002"]
+    assert fetch_versions(postgres_dsn) == ["0001", "0002", "0003"]
     assert fetch_scalar(postgres_dsn, "SELECT to_regclass('public.dp_schema_migrations')")
     assert (
         fetch_scalar(
