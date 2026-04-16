@@ -237,6 +237,50 @@ def get_latest_publish_manifest() -> CyclePublishManifest:
         engine.dispose()
 
 
+def get_publish_manifest_for_snapshot(
+    snapshot_id: int,
+    table_identifier: str,
+) -> CyclePublishManifest:
+    """Return the newest manifest that publishes table_identifier at snapshot_id."""
+
+    validated_snapshot_id = validate_snapshot_id(snapshot_id)
+    validated_table_identifier = _validate_formal_table_key(table_identifier)
+    engine = _create_engine()
+    try:
+        with engine.connect() as connection:
+            row = (
+                connection.execute(
+                    _text(
+                        f"""
+                    SELECT
+                        published_cycle_id,
+                        published_at,
+                        formal_table_snapshots
+                    FROM {CYCLE_PUBLISH_MANIFEST_TABLE}
+                    WHERE jsonb_extract_path_text(
+                        formal_table_snapshots,
+                        :table_identifier,
+                        'snapshot_id'
+                    ) = :snapshot_id
+                    ORDER BY published_at DESC, published_cycle_id DESC
+                    LIMIT 1
+                    """
+                    ),
+                    {
+                        "table_identifier": validated_table_identifier,
+                        "snapshot_id": str(validated_snapshot_id),
+                    },
+                )
+                .mappings()
+                .one_or_none()
+            )
+            if row is None:
+                raise PublishManifestNotFound()
+            return _manifest_from_row(row)
+    finally:
+        engine.dispose()
+
+
 def _normalize_snapshot_manifest(
     formal_table_snapshots: Mapping[str, object],
 ) -> dict[str, FormalTableSnapshot]:
@@ -295,7 +339,9 @@ def _validate_formal_table_key(table: object) -> str:
     return table
 
 
-def _validate_snapshot_id(snapshot_id: object) -> int:
+def validate_snapshot_id(snapshot_id: object) -> int:
+    """Validate a formal table snapshot id from API or manifest input."""
+
     if isinstance(snapshot_id, bool) or not isinstance(snapshot_id, int):
         msg = f"snapshot_id must be a positive integer: {snapshot_id!r}"
         raise InvalidFormalSnapshotManifest(msg)
@@ -303,6 +349,10 @@ def _validate_snapshot_id(snapshot_id: object) -> int:
         msg = f"snapshot_id must be a positive integer: {snapshot_id!r}"
         raise InvalidFormalSnapshotManifest(msg)
     return snapshot_id
+
+
+def _validate_snapshot_id(snapshot_id: object) -> int:
+    return validate_snapshot_id(snapshot_id)
 
 
 def _snapshot_payload(
@@ -347,7 +397,9 @@ __all__ = [
     "InvalidFormalSnapshotManifest",
     "ManifestAlreadyPublished",
     "PublishManifestNotFound",
+    "get_publish_manifest_for_snapshot",
     "get_latest_publish_manifest",
     "get_publish_manifest",
     "publish_manifest",
+    "validate_snapshot_id",
 ]
