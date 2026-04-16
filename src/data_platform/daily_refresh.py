@@ -206,22 +206,6 @@ def run_daily_refresh(
         _write_report_if_requested(json_report, result)
         return result
 
-    if not _append_step(
-        steps,
-        "adapter",
-        lambda: _run_adapter_step(
-            adapter,
-            settings,
-            partition_date,
-            selected_assets,
-            asset_specs_count=len(asset_specs),
-            mock=mock,
-        ),
-    ):
-        result = _result(partition_date, steps)
-        _write_report_if_requested(json_report, result)
-        return result
-
     lock_started_at = perf_counter()
     try:
         refresh_lock = _acquire_refresh_lock(settings, partition_date)
@@ -232,6 +216,22 @@ def run_daily_refresh(
         return result
 
     try:
+        if not _append_step(
+            steps,
+            "adapter",
+            lambda: _run_adapter_step(
+                adapter,
+                settings,
+                partition_date,
+                selected_assets,
+                asset_specs_count=len(asset_specs),
+                mock=mock,
+            ),
+        ):
+            result = _result(partition_date, steps)
+            _write_report_if_requested(json_report, result)
+            return result
+
         dbt_selectors = _dbt_selectors(selected_assets, all_assets)
         if not _append_step(
             steps,
@@ -269,17 +269,17 @@ def run_daily_refresh(
             result = _result(partition_date, steps)
             _write_report_if_requested(json_report, result)
             return result
+
+        _append_step(
+            steps,
+            "raw_health",
+            lambda: _run_raw_health_step(settings, partition_date, selected_assets),
+        )
+        result = _result(partition_date, steps)
+        _write_report_if_requested(json_report, result)
+        return result
     finally:
         refresh_lock.release()
-
-    _append_step(
-        steps,
-        "raw_health",
-        lambda: _run_raw_health_step(settings, partition_date, selected_assets),
-    )
-    result = _result(partition_date, steps)
-    _write_report_if_requested(json_report, result)
-    return result
 
 
 def main(argv: Sequence[str] | None = None) -> int:
