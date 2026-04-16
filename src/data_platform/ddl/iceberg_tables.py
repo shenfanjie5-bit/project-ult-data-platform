@@ -23,6 +23,7 @@ from data_platform.serving.catalog import (
 FORBIDDEN_SCHEMA_FIELDS: Final[frozenset[str]] = frozenset({"submitted_at", "ingest_seq"})
 CANONICAL_NAMESPACE: Final[str] = "canonical"
 TIMESTAMP_TYPE: Final[pa.TimestampType] = pa.timestamp("us")
+DECIMAL_TYPE: Final[pa.Decimal128Type] = pa.decimal128(38, 18)
 
 
 @dataclass(frozen=True, slots=True)
@@ -108,10 +109,169 @@ ENTITY_ALIAS_SPEC: Final[TableSpec] = TableSpec(
     ),
 )
 
+CANONICAL_DIM_SECURITY_SPEC: Final[TableSpec] = TableSpec(
+    namespace=CANONICAL_NAMESPACE,
+    name="dim_security",
+    schema=pa.schema(
+        [
+            pa.field("ts_code", pa.string()),
+            pa.field("symbol", pa.string()),
+            pa.field("name", pa.string()),
+            pa.field("market", pa.string()),
+            pa.field("industry", pa.string()),
+            pa.field("list_date", pa.date32()),
+            pa.field("is_active", pa.bool_()),
+            pa.field("area", pa.string()),
+            pa.field("fullname", pa.string()),
+            pa.field("exchange", pa.string()),
+            pa.field("curr_type", pa.string()),
+            pa.field("list_status", pa.string()),
+            pa.field("delist_date", pa.date32()),
+            pa.field("setup_date", pa.date32()),
+            pa.field("province", pa.string()),
+            pa.field("city", pa.string()),
+            pa.field("reg_capital", DECIMAL_TYPE),
+            pa.field("employees", DECIMAL_TYPE),
+            pa.field("main_business", pa.string()),
+            pa.field("latest_namechange_name", pa.string()),
+            pa.field("latest_namechange_start_date", pa.date32()),
+            pa.field("latest_namechange_end_date", pa.date32()),
+            pa.field("latest_namechange_ann_date", pa.date32()),
+            pa.field("latest_namechange_reason", pa.string()),
+            pa.field("source_run_id", pa.string()),
+            pa.field("raw_loaded_at", TIMESTAMP_TYPE),
+            pa.field("canonical_loaded_at", TIMESTAMP_TYPE),
+        ]
+    ),
+)
+
+CANONICAL_DIM_INDEX_SPEC: Final[TableSpec] = TableSpec(
+    namespace=CANONICAL_NAMESPACE,
+    name="dim_index",
+    schema=pa.schema(
+        [
+            pa.field("index_code", pa.string()),
+            pa.field("index_name", pa.string()),
+            pa.field("index_market", pa.string()),
+            pa.field("index_category", pa.string()),
+            pa.field("first_effective_date", pa.date32()),
+            pa.field("latest_effective_date", pa.date32()),
+            pa.field("source_run_id", pa.string()),
+            pa.field("raw_loaded_at", TIMESTAMP_TYPE),
+            pa.field("canonical_loaded_at", TIMESTAMP_TYPE),
+        ]
+    ),
+)
+
+CANONICAL_FACT_PRICE_BAR_SPEC: Final[TableSpec] = TableSpec(
+    namespace=CANONICAL_NAMESPACE,
+    name="fact_price_bar",
+    schema=pa.schema(
+        [
+            pa.field("ts_code", pa.string()),
+            pa.field("trade_date", pa.date32()),
+            pa.field("freq", pa.string()),
+            pa.field("open", DECIMAL_TYPE),
+            pa.field("high", DECIMAL_TYPE),
+            pa.field("low", DECIMAL_TYPE),
+            pa.field("close", DECIMAL_TYPE),
+            pa.field("pre_close", DECIMAL_TYPE),
+            pa.field("change", DECIMAL_TYPE),
+            pa.field("pct_chg", DECIMAL_TYPE),
+            pa.field("vol", DECIMAL_TYPE),
+            pa.field("amount", DECIMAL_TYPE),
+            pa.field("adj_factor", DECIMAL_TYPE),
+            pa.field("source_run_id", pa.string()),
+            pa.field("raw_loaded_at", TIMESTAMP_TYPE),
+            pa.field("canonical_loaded_at", TIMESTAMP_TYPE),
+        ]
+    ),
+)
+
+CANONICAL_FACT_FINANCIAL_INDICATOR_SPEC: Final[TableSpec] = TableSpec(
+    namespace=CANONICAL_NAMESPACE,
+    name="fact_financial_indicator",
+    schema=pa.schema(
+        [
+            pa.field("ts_code", pa.string()),
+            pa.field("end_date", pa.date32()),
+            pa.field("ann_date", pa.date32()),
+            pa.field("f_ann_date", pa.date32()),
+            pa.field("report_type", pa.string()),
+            pa.field("comp_type", pa.string()),
+            pa.field("update_flag", pa.string()),
+            pa.field("is_latest", pa.bool_()),
+            pa.field("basic_eps", DECIMAL_TYPE),
+            pa.field("diluted_eps", DECIMAL_TYPE),
+            pa.field("total_revenue", DECIMAL_TYPE),
+            pa.field("revenue", DECIMAL_TYPE),
+            pa.field("operate_profit", DECIMAL_TYPE),
+            pa.field("total_profit", DECIMAL_TYPE),
+            pa.field("n_income", DECIMAL_TYPE),
+            pa.field("n_income_attr_p", DECIMAL_TYPE),
+            pa.field("money_cap", DECIMAL_TYPE),
+            pa.field("total_cur_assets", DECIMAL_TYPE),
+            pa.field("total_assets", DECIMAL_TYPE),
+            pa.field("total_cur_liab", DECIMAL_TYPE),
+            pa.field("total_liab", DECIMAL_TYPE),
+            pa.field("total_hldr_eqy_exc_min_int", DECIMAL_TYPE),
+            pa.field("total_liab_hldr_eqy", DECIMAL_TYPE),
+            pa.field("net_profit", DECIMAL_TYPE),
+            pa.field("n_cashflow_act", DECIMAL_TYPE),
+            pa.field("n_cashflow_inv_act", DECIMAL_TYPE),
+            pa.field("n_cash_flows_fnc_act", DECIMAL_TYPE),
+            pa.field("n_incr_cash_cash_equ", DECIMAL_TYPE),
+            pa.field("free_cashflow", DECIMAL_TYPE),
+            pa.field("eps", DECIMAL_TYPE),
+            pa.field("dt_eps", DECIMAL_TYPE),
+            pa.field("grossprofit_margin", DECIMAL_TYPE),
+            pa.field("netprofit_margin", DECIMAL_TYPE),
+            pa.field("roe", DECIMAL_TYPE),
+            pa.field("roa", DECIMAL_TYPE),
+            pa.field("debt_to_assets", DECIMAL_TYPE),
+            pa.field("or_yoy", DECIMAL_TYPE),
+            pa.field("netprofit_yoy", DECIMAL_TYPE),
+            pa.field("source_run_id", pa.string()),
+            pa.field("raw_loaded_at", TIMESTAMP_TYPE),
+            pa.field("canonical_loaded_at", TIMESTAMP_TYPE),
+        ]
+    ),
+)
+
+CANONICAL_FACT_EVENT_SPEC: Final[TableSpec] = TableSpec(
+    namespace=CANONICAL_NAMESPACE,
+    name="fact_event",
+    schema=pa.schema(
+        [
+            pa.field("event_type", pa.string()),
+            pa.field("ts_code", pa.string()),
+            pa.field("event_date", pa.date32()),
+            pa.field("title", pa.string()),
+            pa.field("summary", pa.string()),
+            pa.field("event_subtype", pa.string()),
+            pa.field("related_date", pa.date32()),
+            pa.field("reference_url", pa.string()),
+            pa.field("rec_time", pa.string()),
+            pa.field("source_run_id", pa.string()),
+            pa.field("raw_loaded_at", TIMESTAMP_TYPE),
+            pa.field("canonical_loaded_at", TIMESTAMP_TYPE),
+        ]
+    ),
+)
+
+CANONICAL_MART_TABLE_SPECS: Final[tuple[TableSpec, ...]] = (
+    CANONICAL_DIM_SECURITY_SPEC,
+    CANONICAL_DIM_INDEX_SPEC,
+    CANONICAL_FACT_PRICE_BAR_SPEC,
+    CANONICAL_FACT_FINANCIAL_INDICATOR_SPEC,
+    CANONICAL_FACT_EVENT_SPEC,
+)
+
 DEFAULT_TABLE_SPECS: Final[tuple[TableSpec, ...]] = (
     CANONICAL_STOCK_BASIC_SPEC,
     CANONICAL_ENTITY_SPEC,
     ENTITY_ALIAS_SPEC,
+    *CANONICAL_MART_TABLE_SPECS,
 )
 
 
