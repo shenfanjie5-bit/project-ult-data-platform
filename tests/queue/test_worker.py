@@ -29,11 +29,7 @@ def test_envelope_candidate_validator_accepts_ex_payload_envelope() -> None:
     item = _candidate_item(
         payload_type="Ex-1",
         submitted_by="worker-test",
-        payload={
-            "payload_type": "Ex-1",
-            "submitted_by": "worker-test",
-            "candidate": {"id": "alpha"},
-        },
+        payload=_payload("Ex-1", "alpha"),
     )
 
     EnvelopeCandidateValidator().validate(item)
@@ -43,11 +39,7 @@ def test_envelope_candidate_validator_rejects_payload_type_drift() -> None:
     item = _candidate_item(
         payload_type="Ex-1",
         submitted_by="worker-test",
-        payload={
-            "payload_type": "Ex-2",
-            "submitted_by": "worker-test",
-            "candidate": {"id": "alpha"},
-        },
+        payload=_payload("Ex-2", "alpha"),
     )
 
     with pytest.raises(CandidateValidationError, match="payload_type does not match"):
@@ -96,7 +88,7 @@ def test_worker_accepts_and_rejects_pending_candidates(
 
     class FakeValidator:
         def validate(self, item: CandidateQueueItem) -> None:
-            if item.payload["candidate"] == "reject":
+            if item.payload.get("signal_type") == "signal-reject":
                 raise CandidateValidationError("fake validator rejected candidate")
 
     summary = validate_pending_candidates(validator=FakeValidator())
@@ -148,7 +140,7 @@ def test_worker_rolls_back_unexpected_validator_exceptions(
 
     class CrashingValidator:
         def validate(self, item: CandidateQueueItem) -> None:
-            if item.payload["candidate"] == "crash":
+            if item.payload.get("fact_type") == "fact-crash":
                 raise RuntimeError("validator backend unavailable")
 
     with caplog.at_level(logging.WARNING):
@@ -332,11 +324,48 @@ def _candidate_item(
 
 
 def _payload(payload_type: str, candidate: str) -> dict[str, Any]:
-    return {
+    submitted_by = "worker-test"
+    base: dict[str, Any] = {
         "payload_type": payload_type,
-        "submitted_by": "worker-test",
-        "candidate": candidate,
+        "submitted_by": submitted_by,
+        "subsystem_id": submitted_by,
     }
+    if payload_type == "Ex-1":
+        return {
+            **base,
+            "fact_id": f"fact-{candidate}",
+            "entity_id": f"entity-{candidate}",
+            "fact_type": f"fact-{candidate}",
+            "fact_content": {"candidate": candidate},
+            "confidence": 0.9,
+            "source_reference": {"source": candidate},
+            "extracted_at": datetime(2026, 4, 16, 12, 0, tzinfo=UTC).isoformat(),
+        }
+    if payload_type == "Ex-2":
+        return {
+            **base,
+            "signal_id": f"signal-{candidate}",
+            "signal_type": f"signal-{candidate}",
+            "direction": "bullish",
+            "magnitude": 1.0,
+            "affected_entities": [f"entity-{candidate}"],
+            "affected_sectors": [f"sector-{candidate}"],
+            "time_horizon": "daily",
+            "evidence": [f"evidence-{candidate}"],
+            "confidence": 0.8,
+        }
+    if payload_type == "Ex-3":
+        return {
+            **base,
+            "delta_id": f"delta-{candidate}",
+            "delta_type": f"delta-{candidate}",
+            "source_node": f"source-{candidate}",
+            "target_node": f"target-{candidate}",
+            "relation_type": "related_to",
+            "properties": {"candidate": candidate},
+            "evidence": [f"evidence-{candidate}"],
+        }
+    raise AssertionError(f"unsupported payload_type for worker test helper: {payload_type}")
 
 
 def _insert_candidate(

@@ -142,8 +142,7 @@ class CycleRepository:
                       AND NOT EXISTS (
                           SELECT 1
                           FROM {CYCLE_CANDIDATE_SELECTION_TABLE} AS selection
-                          WHERE selection.cycle_id = :cycle_id
-                            AND selection.candidate_id = candidate_queue.id
+                          WHERE selection.candidate_id = candidate_queue.id
                       )
                     ORDER BY candidate_queue.ingest_seq ASC
                     RETURNING candidate_id

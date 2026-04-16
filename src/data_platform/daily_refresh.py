@@ -564,6 +564,18 @@ def _run_raw_health_step(
             }
             for issue in report.issues
         )
+        if report.checked_artifacts == 0 and not report.issues:
+            issue_payloads.append(
+                {
+                    "severity": "error",
+                    "path": str(settings.raw_zone_path),
+                    "code": "asset_partition_empty",
+                    "message": (
+                        "Raw Zone health check found no artifacts for selected asset "
+                        f"{asset.dataset!r} at partition {partition_date:%Y%m%d}"
+                    ),
+                }
+            )
 
     if any(issue["severity"] == "error" for issue in issue_payloads):
         msg = "Raw Zone health check failed"

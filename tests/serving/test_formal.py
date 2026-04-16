@@ -11,6 +11,7 @@ from uuid import uuid4
 
 import pytest
 
+from data_platform.serving import catalog as catalog_module
 from data_platform.cycle.manifest import (
     CyclePublishManifest,
     FormalTableSnapshot,
@@ -146,6 +147,76 @@ def test_latest_and_by_id_read_manifest_snapshots_not_formal_head(
     assert old.payload.column("score").to_pylist() == [1]
 
 
+def test_formal_manifest_read_preserves_old_snapshot_after_add_column(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    formal_module: Any,
+    memory_catalog_class: Any,
+    pa_module: Any,
+) -> None:
+    types_module = pytest.importorskip(
+        "pyiceberg.types",
+        reason="formal schema evolution tests require PyIceberg schema types",
+    )
+    catalog = create_formal_catalog(tmp_path, memory_catalog_class, pa_module)
+    old_snapshot_id = write_formal_snapshot(catalog, pa_module, version="old", score=1)
+    old_manifest = make_manifest("CYCLE_20260416", old_snapshot_id)
+
+    table = catalog.load_table(FORMAL_IDENTIFIER)
+    table.update_schema().add_column("notes", types_module.StringType(), required=False).commit()
+    table = catalog.load_table(FORMAL_IDENTIFIER)
+    table.overwrite(
+        pa_module.table(
+            {
+                "version": ["latest"],
+                "score": [2],
+                "notes": ["published-after-add-column"],
+            },
+            schema=pa_module.schema(
+                [
+                    pa_module.field("version", pa_module.string()),
+                    pa_module.field("score", pa_module.int64()),
+                    pa_module.field("notes", pa_module.string()),
+                ]
+            ),
+        )
+    )
+    latest_snapshot = table.refresh().current_snapshot()
+    if latest_snapshot is None:
+        raise AssertionError("formal table overwrite after add-column did not create a snapshot")
+    latest_manifest = make_manifest("CYCLE_20260417", int(latest_snapshot.snapshot_id))
+
+    monkeypatch.setattr(formal_module, "load_catalog", lambda: catalog)
+    monkeypatch.setattr(
+        formal_module,
+        "get_publish_manifest",
+        lambda cycle_id: {
+            "CYCLE_20260416": old_manifest,
+            "CYCLE_20260417": latest_manifest,
+        }[cycle_id],
+    )
+    monkeypatch.setattr(
+        formal_module,
+        "get_latest_publish_manifest",
+        lambda: latest_manifest,
+    )
+
+    old = formal_module.get_formal_by_id("CYCLE_20260416", "recommendation_set")
+    latest = formal_module.get_formal_latest("recommendation_set")
+
+    assert old.snapshot_id == old_snapshot_id
+    assert old.payload.schema.names == ["version", "score"]
+    assert old.payload.to_pylist() == [{"version": "old", "score": 1}]
+    assert latest.payload.schema.names == ["version", "score", "notes"]
+    assert latest.payload.to_pylist() == [
+        {
+            "version": "latest",
+            "score": 2,
+            "notes": "published-after-add-column",
+        }
+    ]
+
+
 def test_by_snapshot_reads_only_published_snapshot(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
@@ -228,6 +299,8 @@ def test_by_snapshot_uses_db_backed_manifest_lookup(
     target_snapshot_id = 98123
     unpublished_snapshot_id = 98124
     target_cycle_id = "CYCLE_20260201"
+
+    monkeypatch.setattr(catalog_module, "load_catalog", lambda: _fake_manifest_publish_catalog())
 
     for day in range(1, 26):
         _publish_formal_manifest(
@@ -495,6 +568,19 @@ def _fake_snapshot_catalog(
     class FakeCatalog:
         def load_table(self, table_identifier: str) -> FakeTable:
             assert table_identifier == FORMAL_IDENTIFIER
+            return FakeTable()
+
+    return FakeCatalog()
+
+
+def _fake_manifest_publish_catalog() -> object:
+    class FakeTable:
+        def snapshot_by_id(self, snapshot_id: int) -> object | None:
+            return object() if snapshot_id > 0 else None
+
+    class FakeCatalog:
+        def load_table(self, table_identifier: str) -> FakeTable:
+            assert table_identifier.startswith("formal.")
             return FakeTable()
 
     return FakeCatalog()

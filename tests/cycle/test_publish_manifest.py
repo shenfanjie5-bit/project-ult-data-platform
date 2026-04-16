@@ -9,6 +9,7 @@ from uuid import uuid4
 
 import pytest
 
+from data_platform.serving import catalog as catalog_module
 from data_platform.cycle import (
     CYCLE_PUBLISH_MANIFEST_TABLE,
     CyclePublishManifest,
@@ -350,6 +351,33 @@ def test_get_latest_publish_manifest_orders_by_postgres_manifest_metadata(
     assert latest.formal_table_snapshots["formal.recommendation_set"].snapshot_id == 456
 
 
+def test_publish_manifest_rejects_missing_catalog_snapshot_before_status_update(
+    cycle_repository_env: str,
+    cycle_engine: Any,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    create_cycle(date(2026, 4, 16))
+    _advance_cycle_to_phase3("CYCLE_20260416")
+
+    class MissingSnapshotTable:
+        def snapshot_by_id(self, snapshot_id: int) -> None:
+            assert snapshot_id == 123
+            return None
+
+    class MissingSnapshotCatalog:
+        def load_table(self, table_identifier: str) -> MissingSnapshotTable:
+            assert table_identifier == "formal.recommendation_set"
+            return MissingSnapshotTable()
+
+    monkeypatch.setattr(catalog_module, "load_catalog", lambda: MissingSnapshotCatalog())
+
+    with pytest.raises(InvalidFormalSnapshotManifest, match="snapshot does not exist"):
+        publish_manifest("CYCLE_20260416", {"formal.recommendation_set": 123})
+
+    assert get_cycle("CYCLE_20260416").status == "phase3"
+    assert _manifest_count(cycle_engine) == 0
+
+
 @pytest.fixture()
 def postgres_dsn() -> Generator[str]:
     admin_dsn = os.environ.get("DATABASE_URL") or os.environ.get("DP_PG_DSN")
@@ -436,6 +464,20 @@ def cycle_engine(migrated_postgres_dsn: str) -> Generator[Any]:
         yield engine
     finally:
         engine.dispose()
+
+
+@pytest.fixture(autouse=True)
+def stub_manifest_catalog(monkeypatch: pytest.MonkeyPatch) -> None:
+    class FakeSnapshotTable:
+        def snapshot_by_id(self, snapshot_id: int) -> object | None:
+            return object() if snapshot_id > 0 else None
+
+    class FakeCatalog:
+        def load_table(self, table_identifier: str) -> FakeSnapshotTable:
+            assert table_identifier.startswith("formal.")
+            return FakeSnapshotTable()
+
+    monkeypatch.setattr(catalog_module, "load_catalog", lambda: FakeCatalog())
 
 
 def _stored_manifest_payload(engine: Any, cycle_id: str) -> Mapping[str, object]:

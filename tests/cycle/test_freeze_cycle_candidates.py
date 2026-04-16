@@ -229,6 +229,45 @@ def test_repeated_freeze_raises_and_late_candidates_are_not_selected(
     assert get_cycle("CYCLE_20260416") == first_metadata
 
 
+def test_second_cycle_does_not_reselect_candidates_frozen_by_previous_cycle(
+    cycle_repository_env: str,
+    cycle_engine: Any,
+) -> None:
+    create_cycle(date(2026, 4, 16))
+    create_cycle(date(2026, 4, 17))
+    with cycle_engine.begin() as connection:
+        first = _insert_candidate(
+            connection,
+            validation_status="accepted",
+            candidate="first-cycle",
+        )
+        second = _insert_candidate(
+            connection,
+            validation_status="accepted",
+            candidate="second-cycle",
+        )
+
+    first_metadata = freeze_cycle_candidates("CYCLE_20260416")
+    assert first_metadata.candidate_count == 2
+    assert _selection_ids(cycle_engine, "CYCLE_20260416") == [
+        int(first["id"]),
+        int(second["id"]),
+    ]
+
+    with cycle_engine.begin() as connection:
+        third = _insert_candidate(
+            connection,
+            validation_status="accepted",
+            candidate="new-after-first-freeze",
+        )
+
+    second_metadata = freeze_cycle_candidates("CYCLE_20260417")
+
+    assert second_metadata.candidate_count == 1
+    assert second_metadata.cutoff_ingest_seq == int(third["ingest_seq"])
+    assert _selection_ids(cycle_engine, "CYCLE_20260417") == [int(third["id"])]
+
+
 def test_selection_insert_failure_rolls_back_whole_freeze_transaction(
     cycle_repository_env: str,
     cycle_engine: Any,

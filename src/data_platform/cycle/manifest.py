@@ -8,6 +8,7 @@ from dataclasses import dataclass
 from datetime import datetime
 from typing import Any, Final
 
+from data_platform.contracts_compat import load_contracts_module
 from data_platform.cycle.models import CYCLE_METADATA_TABLE, _cycle_date_from_id
 from data_platform.cycle.repository import (
     InvalidCycleTransition,
@@ -16,7 +17,21 @@ from data_platform.cycle.repository import (
 )
 
 CYCLE_PUBLISH_MANIFEST_TABLE: Final[str] = "data_platform.cycle_publish_manifest"
-_FORMAL_NAMESPACE_PREFIX: Final[str] = "formal."
+
+
+def _formal_namespace_prefix() -> str:
+    contracts_module = load_contracts_module("contracts.core.types")
+    if contracts_module is None:
+        return "formal."
+    zone = getattr(contracts_module, "Zone", None)
+    formal_zone = getattr(zone, "FORMAL", None)
+    zone_value = getattr(formal_zone, "value", None)
+    if isinstance(zone_value, str) and zone_value:
+        return f"{zone_value}."
+    return "formal."
+
+
+_FORMAL_NAMESPACE_PREFIX: Final[str] = _formal_namespace_prefix()
 
 
 class PublishManifestNotFound(LookupError):
@@ -127,6 +142,8 @@ def publish_manifest(
             current_status = str(cycle["status"])
             if current_status != "phase3":
                 raise InvalidCycleTransition(cycle_id, current_status, "published")
+
+            _validate_formal_snapshot_targets(snapshots)
 
             try:
                 row = (
@@ -359,6 +376,26 @@ def _snapshot_payload(
     snapshots: Mapping[str, FormalTableSnapshot],
 ) -> dict[str, dict[str, int]]:
     return {table: {"snapshot_id": snapshot.snapshot_id} for table, snapshot in snapshots.items()}
+
+
+def _validate_formal_snapshot_targets(
+    snapshots: Mapping[str, FormalTableSnapshot],
+) -> None:
+    from data_platform.serving.catalog import load_catalog
+
+    catalog = load_catalog()
+    for table_identifier, snapshot in snapshots.items():
+        try:
+            table = catalog.load_table(table_identifier)
+        except Exception as exc:
+            msg = f"formal table is not registered in the Iceberg catalog: {table_identifier}"
+            raise InvalidFormalSnapshotManifest(msg) from exc
+        if table.snapshot_by_id(snapshot.snapshot_id) is None:
+            msg = (
+                "formal snapshot does not exist in the Iceberg catalog: "
+                f"{table_identifier} snapshot_id={snapshot.snapshot_id}"
+            )
+            raise InvalidFormalSnapshotManifest(msg)
 
 
 def _manifest_from_row(row: Mapping[str, Any]) -> CyclePublishManifest:

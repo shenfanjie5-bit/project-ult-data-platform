@@ -49,6 +49,11 @@ class FakeAdapter(DataSourceAdapter):
         return {"requests_per_minute": 1, "daily_credit_quota": None}
 
 
+class MissingModelAdapter(FakeAdapter):
+    def get_staging_dbt_models(self) -> list[str]:
+        return ["stg_missing_model"]
+
+
 def test_build_assets_links_raw_staging_marts_and_canonical_specs() -> None:
     specs = build_assets([FakeAdapter()])
     by_key = {spec.key: spec for spec in specs}
@@ -93,6 +98,11 @@ def test_build_assets_links_raw_staging_marts_and_canonical_specs() -> None:
 
     _assert_dependency_order(specs)
     _assert_acyclic(specs)
+
+
+def test_build_assets_rejects_unknown_staging_model() -> None:
+    with pytest.raises(ValueError, match="stg_missing_model"):
+        build_assets([MissingModelAdapter()])
 
 
 def test_build_resources_returns_runtime_objects_from_settings(

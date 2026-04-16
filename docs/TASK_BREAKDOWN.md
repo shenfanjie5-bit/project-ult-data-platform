@@ -1,6 +1,6 @@
 # 项目任务拆解
 
-> 基于 `data-platform.project-doc.md` v0.1.1 §21 实施路线图拆分。
+> 基于 `data-platform.project-doc.md` v0.1.2 §21 实施路线图拆分。
 > 阶段 0（P1a 骨架）使用完整 8 段 body；阶段 1（P1b 铺量）与阶段 2（P1c 摄取与 cycle 控制）使用骨架格式，待 milestone 启动前自动细化。
 
 ## 阶段 0：P1a 骨架 —— 最小数据链路打通

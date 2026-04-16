@@ -8,15 +8,56 @@ import json
 from types import MappingProxyType
 from typing import Any, Final, Protocol, TypeAlias, cast, get_args
 
+from pydantic import ValidationError
+
+from data_platform.contracts_compat import load_contracts_module
 from data_platform.queue.models import CandidatePayloadType, CandidateQueueItem
 
 ExPayload: TypeAlias = Mapping[str, Any]
-FORBIDDEN_PRODUCER_FIELDS: Final[frozenset[str]] = frozenset(
+_DEFAULT_FORBIDDEN_PRODUCER_FIELDS: Final[frozenset[str]] = frozenset(
     {"submitted_at", "ingest_seq"}
 )
-_CANDIDATE_PAYLOAD_TYPES: Final[frozenset[str]] = frozenset(
-    cast(tuple[str, ...], get_args(CandidatePayloadType))
-)
+_CONTRACT_MODEL_NAMES: Final[dict[str, str]] = {
+    "Ex-0": "Ex0Metadata",
+    "Ex-1": "Ex1CandidateFact",
+    "Ex-2": "Ex2CandidateSignal",
+    "Ex-3": "Ex3CandidateGraphDelta",
+}
+
+
+def _contract_forbidden_producer_fields() -> frozenset[str]:
+    contracts_module = load_contracts_module("contracts.schemas.ex_payloads")
+    if contracts_module is None:
+        return _DEFAULT_FORBIDDEN_PRODUCER_FIELDS
+    forbidden_fields = getattr(contracts_module, "FORBIDDEN_INGEST_METADATA_FIELDS", None)
+    if isinstance(forbidden_fields, frozenset | set):
+        return frozenset(str(field_name) for field_name in forbidden_fields)
+    return _DEFAULT_FORBIDDEN_PRODUCER_FIELDS
+
+
+def _contract_candidate_payload_types() -> frozenset[str]:
+    contracts_module = load_contracts_module("contracts.core.types")
+    if contracts_module is None:
+        return frozenset(cast(tuple[str, ...], get_args(CandidatePayloadType)))
+    ex_type = getattr(contracts_module, "ExType", None)
+    if ex_type is None:
+        return frozenset(cast(tuple[str, ...], get_args(CandidatePayloadType)))
+    return frozenset(str(member.value) for member in ex_type)
+
+
+def _contract_payload_model(payload_type: str) -> type[Any] | None:
+    contracts_module = load_contracts_module("contracts.schemas.ex_payloads")
+    if contracts_module is None:
+        return None
+    model_name = _CONTRACT_MODEL_NAMES.get(payload_type)
+    if model_name is None:
+        return None
+    model = getattr(contracts_module, model_name, None)
+    return model if isinstance(model, type) else None
+
+
+FORBIDDEN_PRODUCER_FIELDS: Final[frozenset[str]] = _contract_forbidden_producer_fields()
+_CANDIDATE_PAYLOAD_TYPES: Final[frozenset[str]] = _contract_candidate_payload_types()
 
 
 class CandidateValidationError(ValueError):
@@ -118,6 +159,7 @@ def _copy_valid_payload(payload: Mapping[str, Any]) -> dict[str, Any]:
     _reject_forbidden_ingest_metadata(payload_copy)
     _validate_string_keys(payload_copy)
     _validate_json_serializable(payload_copy)
+    _validate_contract_payload(payload_copy)
     return payload_copy
 
 
@@ -148,6 +190,47 @@ def _validate_json_serializable(payload: Mapping[str, Any]) -> None:
     except (TypeError, ValueError) as exc:
         msg = f"candidate payload must be JSON serializable: {exc}"
         raise CandidateValidationError(msg) from exc
+
+
+def _validate_contract_payload(payload: Mapping[str, Any]) -> None:
+    payload_type = payload.get("payload_type")
+    submitted_by = payload.get("submitted_by")
+    if not isinstance(payload_type, str) or not isinstance(submitted_by, str):
+        return
+
+    model = _contract_payload_model(payload_type)
+    if model is None:
+        return
+
+    contract_payload = dict(payload)
+    contract_payload.pop("payload_type", None)
+    contract_payload.pop("submitted_by", None)
+
+    subsystem_id = contract_payload.get("subsystem_id")
+    if not isinstance(subsystem_id, str) or not subsystem_id.strip():
+        msg = "candidate payload subsystem_id is required and must be a non-empty string"
+        raise CandidateValidationError(msg)
+    if subsystem_id.strip() != submitted_by.strip():
+        msg = "candidate payload subsystem_id must match submitted_by"
+        raise CandidateValidationError(msg)
+
+    try:
+        model.model_validate(contract_payload)
+    except ValidationError as exc:
+        msg = (
+            f"{payload_type} payload does not match contracts schema: "
+            f"{_format_contract_validation_error(exc)}"
+        )
+        raise CandidateValidationError(msg) from exc
+
+
+def _format_contract_validation_error(exc: ValidationError) -> str:
+    first_error = exc.errors()[0]
+    location = ".".join(str(part) for part in first_error.get("loc", ()))
+    message = str(first_error.get("msg", "invalid payload"))
+    if location:
+        return f"{location}: {message}"
+    return message
 
 
 __all__ = [

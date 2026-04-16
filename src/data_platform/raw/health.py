@@ -90,6 +90,9 @@ def check_raw_zone(
         )
         return RawHealthReport(root=raw_root, checked_artifacts=0, issues=issues)
 
+    if not _requested_scope_exists(raw_root, source_id, dataset, partition_date, issues):
+        return RawHealthReport(root=raw_root, checked_artifacts=0, issues=issues)
+
     checked_artifacts = 0
     for partition in _iter_partitions(raw_root, source_id, dataset, partition_date, issues):
         checked_artifacts += _check_partition(
@@ -111,6 +114,98 @@ class _RawPartition:
     dataset: str
     partition_date: date
     path: Path
+
+
+def _requested_scope_exists(
+    raw_root: Path,
+    source_id: str | None,
+    dataset: str | None,
+    partition_date: date | None,
+    issues: list[RawHealthIssue],
+) -> bool:
+    if source_id is not None:
+        source_path = raw_root / source_id
+        if not source_path.is_dir():
+            issues.append(
+                RawHealthIssue(
+                    severity="error",
+                    path=source_path,
+                    code="source_missing",
+                    message="Requested Raw source directory does not exist",
+                )
+            )
+            return False
+        if dataset is not None:
+            dataset_path = source_path / dataset
+            if not dataset_path.is_dir():
+                issues.append(
+                    RawHealthIssue(
+                        severity="error",
+                        path=dataset_path,
+                        code="dataset_missing",
+                        message="Requested Raw dataset directory does not exist",
+                    )
+                )
+                return False
+            if partition_date is not None:
+                partition_path = dataset_path / _partition_dir_name(partition_date)
+                if not partition_path.is_dir():
+                    issues.append(
+                        RawHealthIssue(
+                            severity="error",
+                            path=partition_path,
+                            code="partition_missing",
+                            message="Requested Raw partition directory does not exist",
+                        )
+                    )
+                    return False
+                return True
+        return True
+
+    if dataset is not None:
+        dataset_paths = [
+            path
+            for path in raw_root.glob(f"*/{dataset}")
+            if path.is_dir()
+        ]
+        if not dataset_paths:
+            issues.append(
+                RawHealthIssue(
+                    severity="error",
+                    path=raw_root / dataset,
+                    code="dataset_missing",
+                    message="Requested Raw dataset directory does not exist",
+                )
+            )
+            return False
+        if partition_date is not None:
+            partition_name = _partition_dir_name(partition_date)
+            if not any((path / partition_name).is_dir() for path in dataset_paths):
+                issues.append(
+                    RawHealthIssue(
+                        severity="error",
+                        path=raw_root / partition_name,
+                        code="partition_missing",
+                        message="Requested Raw partition directory does not exist",
+                    )
+                )
+                return False
+        return True
+
+    if partition_date is not None:
+        partition_name = _partition_dir_name(partition_date)
+        if not any(path.is_dir() for path in raw_root.glob(f"*/*/{partition_name}")):
+            issues.append(
+                RawHealthIssue(
+                    severity="error",
+                    path=raw_root / partition_name,
+                    code="partition_missing",
+                    message="Requested Raw partition directory does not exist",
+                )
+            )
+            return False
+
+    return True
 
 
 def _default_root(root: str | Path | None) -> Path:

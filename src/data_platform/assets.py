@@ -268,6 +268,18 @@ def _selected_dbt_models(
     *,
     canonical_relations: Sequence[str],
 ) -> list[str]:
+    missing_models = sorted(
+        {
+            model_name
+            for model_name in (*staging_models, *canonical_relations)
+            if model_name not in dbt_models
+        }
+    )
+    if missing_models:
+        missing_model_list = ", ".join(missing_models)
+        msg = f"dbt model declarations are missing for: {missing_model_list}"
+        raise ValueError(msg)
+
     selected = set(staging_models)
     selected.update(canonical_relations)
 

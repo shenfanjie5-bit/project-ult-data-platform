@@ -1,4 +1,8 @@
-"""Base abstractions for data source adapters."""
+"""Internal abstractions for structured-source adapters.
+
+These interfaces are local to ``data-platform`` runtime wiring. Shared producer-side
+contracts still live in the sibling ``contracts`` package.
+"""
 
 from __future__ import annotations
 
@@ -86,7 +90,7 @@ class AdapterFetchError(RuntimeError):
 
 
 class DataSourceAdapter(ABC):
-    """Contract implemented by data source adapters."""
+    """Local runtime contract implemented by structured data source adapters."""
 
     @abstractmethod
     def get_assets(self) -> list[AssetSpec]:

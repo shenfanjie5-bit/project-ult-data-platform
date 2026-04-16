@@ -77,6 +77,23 @@ def test_check_raw_zone_reports_missing_artifact(tmp_path: Path) -> None:
     assert report.ok is False
 
 
+def test_check_raw_zone_reports_missing_requested_partition(tmp_path: Path) -> None:
+    raw_zone_path = tmp_path / "raw"
+    (raw_zone_path / SOURCE_ID / DATASET).mkdir(parents=True)
+
+    report = check_raw_zone(
+        raw_zone_path,
+        source_id=SOURCE_ID,
+        dataset=DATASET,
+        partition_date=PARTITION_DATE,
+        deep=True,
+    )
+
+    assert _issue_codes(report) == {"partition_missing"}
+    assert report.checked_artifacts == 0
+    assert report.ok is False
+
+
 def test_check_raw_zone_deep_reports_row_count_mismatch(tmp_path: Path) -> None:
     raw_zone_path = tmp_path / "raw"
     writer = _raw_writer(raw_zone_path, tmp_path)

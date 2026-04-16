@@ -88,6 +88,20 @@ def test_write_json_records_row_count_in_manifest(
     assert manifest["artifacts"][0]["row_count"] == 2
 
 
+def test_write_json_rejects_nonstandard_nan_values(
+    raw_zone_path: Path,
+    source_id: str,
+) -> None:
+    with pytest.raises(ValueError, match="Out of range float values are not JSON compliant"):
+        RawWriter().write_json(
+            source_id,
+            "stock_basic",
+            PARTITION_DATE,
+            str(uuid.uuid4()),
+            [{"value": float("nan")}],
+        )
+
+
 def test_repeated_run_id_raises_raw_artifact_exists(
     raw_zone_path: Path,
     source_id: str,

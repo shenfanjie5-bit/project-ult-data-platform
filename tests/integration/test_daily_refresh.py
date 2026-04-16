@@ -171,6 +171,42 @@ def test_daily_refresh_script_reports_missing_dp_pg_dsn(tmp_path: Path) -> None:
     assert report["steps"][0]["name"] == "config"
 
 
+def test_daily_refresh_fails_when_selected_asset_has_no_raw_artifacts(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    from data_platform.raw import RawHealthReport
+
+    _set_daily_refresh_env(monkeypatch, tmp_path)
+    _install_fast_success_stubs(monkeypatch)
+
+    def fake_check_raw_zone(*_args: Any, **kwargs: Any) -> RawHealthReport:
+        dataset = kwargs["dataset"]
+        checked_artifacts = 0 if dataset == "stock_basic" else 1
+        return RawHealthReport(
+            root=tmp_path / "raw",
+            checked_artifacts=checked_artifacts,
+            issues=[],
+        )
+
+    monkeypatch.setattr(daily_refresh, "check_raw_zone", fake_check_raw_zone)
+
+    result = daily_refresh.run_daily_refresh(PARTITION_DATE, mock=True)
+
+    assert result.ok is False
+    assert [step.name for step in result.steps] == [
+        "adapter",
+        "dbt_run",
+        "dbt_test",
+        "canonical",
+        "raw_health",
+    ]
+    raw_health = _result_step(result, "raw_health")
+    assert raw_health.status == "failed"
+    assert raw_health.metadata["error_type"] == "raw_health_failed"
+    assert raw_health.metadata["issues"][0]["code"] == "asset_partition_empty"
+
+
 def test_concurrent_daily_refresh_same_date_fails_before_raw_dbt_and_canonical(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,

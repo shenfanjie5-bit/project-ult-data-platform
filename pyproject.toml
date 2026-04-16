@@ -5,7 +5,7 @@ build-backend = "setuptools.build_meta"
 [project]
 name = "project-ult-data-platform"
 version = "0.1.0"
-description = "Scaffold workspace for data-platform."
+description = "Lite data platform for Raw archival, dbt transforms, Iceberg storage, queue ingest, cycle control, and formal serving."
 readme = "README.md"
 requires-python = ">=3.12"
 dependencies = [

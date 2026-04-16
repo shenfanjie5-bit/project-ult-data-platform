@@ -1,10 +1,10 @@
 # data-platform 完整项目文档
 
 > **文档状态**：Draft v1
-> **版本**：v0.1.1
+> **版本**：v0.1.2
 > **作者**：Codex
 > **创建日期**：2026-04-15
-> **最后更新**：2026-04-15
+> **最后更新**：2026-04-17
 > **文档目的**：把 `data-platform` 子项目从“数据都放这里”的模糊概念收束为可立项、可拆分、可实现、可验收的正式项目，使其成为主项目中唯一负责共享数据落地、结构化转换、基础 serving、Lite 模式摄取与 cycle 控制基础设施的子项目。
 
 ---
@@ -15,6 +15,7 @@
 |------|------|----------|------|
 | v0.1 | 2026-04-15 | 初稿 | Codex |
 | v0.1.1 | 2026-04-15 | 补充 `entity-registry` 初始化位点与 `stock_basic` 输入的边界说明 | Codex |
+| v0.1.2 | 2026-04-17 | 澄清内部 adapter 与 `contracts` 的边界，补充 Formal/Analytical 运行时建表策略与当前交付校准说明 | Codex |
 
 ---
 
@@ -46,7 +47,7 @@
 | Formal Zone | 主系统正式发布对象区 | Iceberg + `cycle_publish_manifest` |
 | Analytical Zone | 非 formal 的分析产物区 | Iceberg |
 | Formal Serving | 面向下游模块的 `latest / by_id / by_snapshot` 读取语义 | 通过 DuckDB + Iceberg 实现 |
-| DataSourceAdapter | 结构化数据源标准接入协议 | 由 `contracts` 定义，`data-platform` 实现 |
+| DataSourceAdapter | 本项目内部结构化数据源接入协议 | `data-platform.adapters` 定义；共享枚举与 Ex payload 合同仍以 `contracts` 为准 |
 | Ingest Metadata | Layer B 落库时补写的摄取元数据 | 如 `submitted_at`、`ingest_seq` |
 | Cycle Metadata | 一次日频 cycle 的控制元数据 | 如 cutoff、冻结时间、状态 |
 | Candidate Selection | Phase 0 冻结后的本轮候选集合 | `cycle_candidate_selection` |
@@ -65,7 +66,7 @@
 ### 4.1 项目目标
 
 1. **落地共享数据**：为主项目提供唯一的 Raw / Canonical / Formal / Analytical 数据落地基础设施。
-2. **接入结构化数据源**：实现 `DataSourceAdapter` 协议和首个 Tushare 参考实现。
+2. **接入结构化数据源**：实现本项目内部 `DataSourceAdapter` 协议和首个 Tushare 参考实现，并对齐共享 `contracts` 的 payload / zone 语义。
 3. **管理结构化转换**：通过 dbt 管理 staging / intermediate / marts 三层 SQL 转换。
 4. **提供基础读取能力**：提供 Formal Serving 和 Canonical 查询基础能力，供其他子项目只读消费。
 5. **实现 Lite 摄取闭环**：提供 PostgreSQL 队列、Python 校验、`ingest_metadata` 落库与 cycle 控制表。
@@ -114,7 +115,7 @@
 | 结构化数据源 | 行情、财务、指数、公告元数据等 | 通过 `DataSourceAdapter` 接入 |
 | `subsystem-sdk` / 子系统 | Ex-1 / Ex-2 / Ex-3 提交对象 | Lite 模式先写 PostgreSQL 队列 |
 | `main-core` | Phase 3 formal objects 发布动作 | 表与存储约束由本模块提供 |
-| `contracts` | schema、协议、错误码 | 本模块不能绕开合同定义 |
+| `contracts` | Ex payload、共享枚举、错误码等跨项目合同 | 本模块不能绕开共享合同定义 |
 
 ### 5.3 下游输出
 
@@ -269,8 +270,8 @@ main-core formal objects
 |------|------|------|
 | id | Integer | 队列主键 |
 | payload_type | Enum | `Ex-0` / `Ex-1` / `Ex-2` / `Ex-3` |
-| payload | JSON | 原始提交 payload |
-| submitted_by | String | 子系统标识 |
+| payload | JSON | 原始提交 payload，body 必须满足对应 Ex contracts schema |
+| submitted_by | String | 子系统标识，必须与 payload 内的 `subsystem_id` 一致 |
 | submitted_at | Timestamp | PG 服务端生成 |
 | ingest_seq | Integer | BIGSERIAL 排序字段 |
 | validation_status | Enum | `pending` / `accepted` / `rejected` |
@@ -302,7 +303,7 @@ main-core formal objects
 |------|------|------|
 | published_cycle_id | String | 发布 cycle ID |
 | published_at | Timestamp | PG 服务端时间 |
-| formal_table_snapshots | JSON | 每张 formal 表的 snapshot_id / version |
+| formal_table_snapshots | JSON | 每张 formal 表的 snapshot_id / version；写入前必须验证 snapshot 已存在于对应 formal 表 |
 
 #### DataSourceAdapterImpl
 
@@ -465,7 +466,7 @@ main-core formal objects
 | 模块名 | 语言 | 运行位置 | 职责 |
 |--------|------|----------|------|
 | `data_platform.raw` | Python | 库/脚本 | Raw Zone 归档 |
-| `data_platform.adapters` | Python | 库 | `DataSourceAdapter` 实现 |
+| `data_platform.adapters` | Python | 库 | 本项目内部 `DataSourceAdapter` 实现 |
 | `data_platform.queue` | Python | 库 | Lite 队列与校验 |
 | `data_platform.cycle` | Python | 库 | cycle 控制表与冻结逻辑 |
 | `data_platform.serving` | Python | 库 | Formal Serving |
@@ -516,11 +517,12 @@ main-core formal objects
 
 | 名称 | 功能 | 参数 |
 |------|------|------|
-| `DataSourceAdapter` | 结构化数据源接入协议 | `get_assets / get_resources / get_staging_dbt_models / get_quota_config` |
+| `DataSourceAdapter` | 本项目内部结构化数据源接入协议 | `get_assets / get_resources / get_staging_dbt_models / get_quota_config` |
 
 ### 16.3 版本与兼容策略
 
-- 所有共享对象以 `contracts` 为准
+- Ex payload 类型、禁止 producer 注入的摄取字段、Formal/Canonical/Analytical 共享枚举以 `contracts` 为准
+- `data_platform.adapters.DataSourceAdapter` 为本项目内部运行时接口，不直接复用 producer 侧 `contracts.protocols` 抽象
 - 表结构变更默认 backward compatible
 - breaking change 必须先改 `contracts` 和本项目文档
 
@@ -547,9 +549,9 @@ main-core formal objects
 
 ### 18.3 协议 / 契约测试
 
-- `DataSourceAdapter` 实现符合 `contracts` 协议
+- `data_platform.adapters.DataSourceAdapter` 方法集有本地契约测试覆盖
 - Ex payload 队列输入与 `contracts` 对齐
-- `cycle_publish_manifest` 字段与正式合同对齐
+- `cycle_publish_manifest` 读取语义与 Formal zone 前缀和正式合同对齐
 
 ### 18.4 性能 / 生命周期测试
 
@@ -585,7 +587,7 @@ main-core formal objects
 ### 20.1 存储与表结构
 
 - Raw Zone 归档规范
-- Canonical/Formal/Analytical 表定义
+- Canonical 默认表定义；Formal/Analytical namespace 与运行时表注册策略
 - `canonical_entity` / `entity_alias` 存储位点
 - `cycle_candidate_selection`
 - `cycle_metadata`

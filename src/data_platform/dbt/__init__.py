@@ -1,1 +1,1 @@
-"""dbt package placeholder."""
+"""dbt project package metadata for staging, intermediate, and marts models."""

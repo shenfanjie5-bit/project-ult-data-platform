@@ -1,17 +1,21 @@
 # data-platform 项目进度跟踪
 
-> 与 `docs/TASK_BREAKDOWN.md` 配套使用。基于 `data-platform.project-doc.md` v0.1.1 §21 实施路线图。
+> 与 `docs/TASK_BREAKDOWN.md` 配套使用。基于 `data-platform.project-doc.md` v0.1.2 §21 实施路线图。
 > 状态符号：`⬜ 未开始` / `🟡 进行中` / `✅ 已完成` / `🚧 阻塞`
 
 ## 阶段总览
 
 | 阶段 | 标签 | 名称 | 文档退出条件 | Issue 数 | 状态 | 起止 |
 |------|------|------|--------------|----------|------|------|
-| 阶段 0 | milestone-0 | P1a 骨架 | DuckDB 可查到 snapshot；§23-2 闭环跑通 | 14 (#001-#014) | ⬜ 未开始 | — |
-| 阶段 1 | milestone-1 | P1b 铺量 | 结构化数据层每日自动更新 | 12 (#015-#026) | ⬜ 未开始 | — |
-| 阶段 2 | milestone-2 | P1c Lite Layer B + cycle 控制 | 候选冻结与 manifest 机制单独演练通过 | 10 (#027-#036) | ⬜ 未开始 | — |
+| 阶段 0 | milestone-0 | P1a 骨架 | DuckDB 可查到 snapshot；§23-2 闭环跑通 | 14 (#001-#014) | 🟡 进行中 | 2026-04 |
+| 阶段 1 | milestone-1 | P1b 铺量 | 结构化数据层每日自动更新 | 12 (#015-#026) | 🟡 进行中 | 2026-04 |
+| 阶段 2 | milestone-2 | P1c Lite Layer B + cycle 控制 | 候选冻结与 manifest 机制单独演练通过 | 10 (#027-#036) | 🟡 进行中 | 2026-04 |
 
 **阶段依赖**：阶段 N+1 严格在阶段 N 全部完成后启动。
+
+> 2026-04-17 校准说明：仓库主线已包含 Raw/Canonical、queue/cycle、manifest
+> serving 等实际实现；本文件不再以“全部未开始”描述当前状态。精确完成度以代码、
+> smoke 与测试结果为准。
 
 ---
 
@@ -85,7 +89,7 @@
 | ISSUE-033 | Formal Serving 通过 manifest 读取 | P1 | ⬜ | #032, #012 |
 | ISSUE-034 | 100 条候选冻结性能与一致性测试 | P1 | ⬜ | #031 |
 | ISSUE-035 | manifest 一致性读取测试 | P1 | ⬜ | #033, #013 |
-| ISSUE-036 | P1c 端到端 cycle 演练 smoke-p1c | P1 | ⬜ | #034, #035, #026 |
+| ISSUE-036 | P1c 端到端 cycle 演练 smoke-p1c | P1 | 🟡 | #034, #035, #026 |
 
 **完成判定（§23 验收 3+4）**：
 - [ ] Lite 队列、`cycle_candidate_selection`、`cycle_metadata`、`cycle_publish_manifest` 全部可用

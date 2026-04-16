@@ -3,7 +3,7 @@ from __future__ import annotations
 import json
 import os
 from collections.abc import Generator, Mapping
-from datetime import date
+from datetime import UTC, date, datetime
 from time import perf_counter
 from typing import Any, Protocol
 from uuid import uuid4
@@ -147,11 +147,10 @@ def seed_candidates(cycle_engine: Any, cycle_repository_env: str) -> SeedCandida
 
         items = [
             submit_candidate(
-                {
-                    "payload_type": "Ex-1",
-                    "submitted_by": "freeze-performance-test",
-                    "candidate": f"{status}-{uuid4().hex}",
-                }
+                _valid_ex1_payload(
+                    f"{status}-{uuid4().hex}",
+                    submitted_by="freeze-performance-test",
+                )
             )
             for _ in range(count)
         ]
@@ -387,6 +386,21 @@ def _cycle_candidate_count(engine: Any, cycle_id: str) -> int:
                 {"cycle_id": cycle_id},
             ).scalar_one()
         )
+
+
+def _valid_ex1_payload(marker: str, *, submitted_by: str) -> dict[str, object]:
+    return {
+        "payload_type": "Ex-1",
+        "submitted_by": submitted_by,
+        "subsystem_id": submitted_by,
+        "fact_id": f"fact-{marker}",
+        "entity_id": f"entity-{marker}",
+        "fact_type": f"fact-{marker}",
+        "fact_content": {"candidate": marker},
+        "confidence": 0.9,
+        "source_reference": {"source": marker},
+        "extracted_at": datetime(2026, 4, 16, 12, 0, tzinfo=UTC).isoformat(),
+    }
 
 
 def _validation_status_counts(engine: Any) -> dict[str, int]:

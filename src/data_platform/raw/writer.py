@@ -99,7 +99,7 @@ class RawWriter:
 
         def write_tmp(tmp_path: Path) -> None:
             with gzip.open(tmp_path, "wt", encoding="utf-8") as file:
-                json.dump(payload, file, ensure_ascii=False)
+                json.dump(payload, file, ensure_ascii=False, allow_nan=False)
 
         return self._write_artifact(
             source_id=source_id,
