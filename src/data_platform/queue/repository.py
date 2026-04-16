@@ -6,7 +6,7 @@ from collections.abc import Mapping
 from importlib import import_module
 import json
 import os
-from typing import Any, Final, cast
+from typing import Any, Final, Literal, TypeAlias, cast
 
 from data_platform.queue.models import (
     CANDIDATE_QUEUE_TABLE,
@@ -15,6 +15,8 @@ from data_platform.queue.models import (
     ValidationStatus,
 )
 from data_platform.queue.validation import CandidateEnvelope
+
+Connection: TypeAlias = Any
 
 _RETURNING_COLUMNS: Final[tuple[str, ...]] = (
     "id",
@@ -38,6 +40,22 @@ VALUES (
     :submitted_by
 )
 RETURNING {", ".join(_RETURNING_COLUMNS)}
+"""
+_FETCH_PENDING_FOR_UPDATE_SQL: Final[str] = f"""
+SELECT {", ".join(_RETURNING_COLUMNS)}
+FROM {CANDIDATE_QUEUE_TABLE}
+WHERE validation_status = 'pending'
+ORDER BY ingest_seq ASC
+LIMIT :limit
+FOR UPDATE SKIP LOCKED
+"""
+_MARK_VALIDATION_RESULT_SQL: Final[str] = f"""
+UPDATE {CANDIDATE_QUEUE_TABLE}
+SET
+    validation_status = CAST(:status AS data_platform.validation_status),
+    rejection_reason = :rejection_reason
+WHERE id = :candidate_id
+  AND validation_status = 'pending'
 """
 
 
@@ -88,6 +106,73 @@ class CandidateRepository:
             raise
 
         return _row_to_candidate_queue_item(row)
+
+    def fetch_pending_for_update(
+        self,
+        limit: int,
+        connection: Connection,
+    ) -> list[CandidateQueueItem]:
+        """Fetch pending candidates locked for validation in the caller transaction."""
+
+        if limit < 1:
+            msg = "limit must be a positive integer"
+            raise ValueError(msg)
+
+        try:
+            text = _sqlalchemy_text()
+            rows = (
+                connection.execute(text(_FETCH_PENDING_FOR_UPDATE_SQL), {"limit": limit})
+                .mappings()
+                .all()
+            )
+        except CandidateQueueWriteError:
+            raise
+        except Exception as exc:
+            if _is_sqlalchemy_error(exc):
+                raise CandidateQueueWriteError(
+                    "candidate queue pending fetch failed", exc
+                ) from exc
+            raise
+
+        return [_row_to_candidate_queue_item(row) for row in rows]
+
+    def mark_validation_result(
+        self,
+        candidate_id: int,
+        status: Literal["accepted", "rejected"],
+        rejection_reason: str | None,
+        connection: Connection,
+    ) -> None:
+        """Mark a locked pending candidate as accepted or rejected."""
+
+        if status not in {"accepted", "rejected"}:
+            msg = "status must be 'accepted' or 'rejected'"
+            raise ValueError(msg)
+        if status == "accepted" and rejection_reason is not None:
+            msg = "accepted candidates must not have a rejection_reason"
+            raise ValueError(msg)
+        if status == "rejected" and rejection_reason is None:
+            msg = "rejected candidates must have a rejection_reason"
+            raise ValueError(msg)
+
+        try:
+            text = _sqlalchemy_text()
+            connection.execute(
+                text(_MARK_VALIDATION_RESULT_SQL),
+                {
+                    "candidate_id": candidate_id,
+                    "status": status,
+                    "rejection_reason": rejection_reason,
+                },
+            )
+        except CandidateQueueWriteError:
+            raise
+        except Exception as exc:
+            if _is_sqlalchemy_error(exc):
+                raise CandidateQueueWriteError(
+                    "candidate queue validation status update failed", exc
+                ) from exc
+            raise
 
     def close(self) -> None:
         """Dispose an owned SQLAlchemy engine."""

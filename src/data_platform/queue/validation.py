@@ -6,9 +6,9 @@ from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 import json
 from types import MappingProxyType
-from typing import Any, Final, TypeAlias, cast, get_args
+from typing import Any, Final, Protocol, TypeAlias, cast, get_args
 
-from data_platform.queue.models import CandidatePayloadType
+from data_platform.queue.models import CandidatePayloadType, CandidateQueueItem
 
 ExPayload: TypeAlias = Mapping[str, Any]
 FORBIDDEN_PRODUCER_FIELDS: Final[frozenset[str]] = frozenset(
@@ -32,6 +32,32 @@ class ForbiddenIngestMetadataError(CandidateValidationError):
             "producer payload must not include PostgreSQL ingest metadata fields: "
             f"{forbidden_fields}"
         )
+
+
+class CandidateValidator(Protocol):
+    """Validation hook for queue worker candidate checks."""
+
+    def validate(self, item: CandidateQueueItem) -> None:
+        """Raise CandidateValidationError when a candidate must be rejected."""
+
+
+class EnvelopeCandidateValidator:
+    """Default worker validator for producer-owned Ex payload envelope fields."""
+
+    def validate(self, item: CandidateQueueItem) -> None:
+        envelope = validate_candidate_envelope(item.payload)
+        if envelope.payload_type != item.payload_type:
+            msg = (
+                "candidate payload_type does not match candidate_queue payload_type: "
+                f"{envelope.payload_type} != {item.payload_type}"
+            )
+            raise CandidateValidationError(msg)
+        if envelope.submitted_by != item.submitted_by:
+            msg = (
+                "candidate submitted_by does not match candidate_queue submitted_by: "
+                f"{envelope.submitted_by} != {item.submitted_by}"
+            )
+            raise CandidateValidationError(msg)
 
 
 @dataclass(frozen=True, slots=True)
@@ -128,6 +154,8 @@ __all__ = [
     "FORBIDDEN_PRODUCER_FIELDS",
     "CandidateEnvelope",
     "CandidateValidationError",
+    "CandidateValidator",
+    "EnvelopeCandidateValidator",
     "ExPayload",
     "ForbiddenIngestMetadataError",
     "validate_candidate_envelope",

@@ -14,6 +14,8 @@ from data_platform.queue.validation import (
     FORBIDDEN_PRODUCER_FIELDS,
     CandidateEnvelope,
     CandidateValidationError,
+    CandidateValidator,
+    EnvelopeCandidateValidator,
     ForbiddenIngestMetadataError,
     validate_candidate_envelope,
 )
@@ -28,6 +30,8 @@ __all__ = [
     "CandidateQueueWriteError",
     "CandidateRepository",
     "CandidateValidationError",
+    "CandidateValidator",
+    "EnvelopeCandidateValidator",
     "ExPayload",
     "ForbiddenIngestMetadataError",
     "IngestMetadataRecord",
