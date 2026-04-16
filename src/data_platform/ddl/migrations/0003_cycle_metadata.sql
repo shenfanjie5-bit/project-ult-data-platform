@@ -31,5 +31,6 @@ CREATE TABLE IF NOT EXISTS data_platform.cycle_metadata (
     candidate_count INTEGER NOT NULL DEFAULT 0,
     selection_frozen_at TIMESTAMPTZ NULL,
     created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
-    updated_at TIMESTAMPTZ NOT NULL DEFAULT now()
+    updated_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+    CONSTRAINT cycle_metadata_candidate_count_nonnegative CHECK (candidate_count >= 0)
 );

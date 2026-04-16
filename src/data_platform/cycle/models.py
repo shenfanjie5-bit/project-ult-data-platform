@@ -5,7 +5,7 @@ from __future__ import annotations
 import re
 from dataclasses import dataclass
 from datetime import date, datetime
-from typing import Final, Literal, Pattern, TypeAlias
+from typing import Final, Literal, TypeAlias
 
 CycleStatus: TypeAlias = Literal[
     "pending",
@@ -17,7 +17,7 @@ CycleStatus: TypeAlias = Literal[
     "failed",
 ]
 
-CYCLE_ID_PATTERN: Final[Pattern[str]] = re.compile(r"^CYCLE_[0-9]{8}$")
+CYCLE_ID_PATTERN: Final[re.Pattern[str]] = re.compile(r"^CYCLE_[0-9]{8}$")
 CYCLE_METADATA_TABLE: Final[str] = "data_platform.cycle_metadata"
 
 _CYCLE_STATUSES: Final[frozenset[str]] = frozenset(

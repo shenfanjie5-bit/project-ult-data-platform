@@ -249,7 +249,58 @@ def test_migration_creates_cycle_metadata_schema(migrated_cycle_dsn: str) -> Non
                         """
                     )
                 )
-            } >= {"cycle_metadata_pkey", "cycle_metadata_cycle_date_key"}
+            } >= {
+                "cycle_metadata_pkey",
+                "cycle_metadata_cycle_date_key",
+                "cycle_metadata_candidate_count_nonnegative",
+            }
+    finally:
+        engine.dispose()
+
+
+def test_cycle_metadata_rejects_negative_candidate_count(migrated_cycle_dsn: str) -> None:
+    sqlalchemy_exc = pytest.importorskip(
+        "sqlalchemy.exc",
+        reason="PostgreSQL cycle metadata tests require SQLAlchemy",
+    ).IntegrityError
+    engine = _create_engine(migrated_cycle_dsn)
+    try:
+        with pytest.raises(sqlalchemy_exc):
+            with engine.begin() as connection:
+                connection.execute(
+                    _text(
+                        """
+                        INSERT INTO data_platform.cycle_metadata (
+                            cycle_id,
+                            cycle_date,
+                            candidate_count
+                        )
+                        VALUES ('CYCLE_20260416', DATE '2026-04-16', -1)
+                        """
+                    )
+                )
+
+        with engine.begin() as connection:
+            connection.execute(
+                _text(
+                    """
+                    INSERT INTO data_platform.cycle_metadata (cycle_id, cycle_date)
+                    VALUES ('CYCLE_20260416', DATE '2026-04-16')
+                    """
+                )
+            )
+
+        with pytest.raises(sqlalchemy_exc):
+            with engine.begin() as connection:
+                connection.execute(
+                    _text(
+                        """
+                        UPDATE data_platform.cycle_metadata
+                        SET candidate_count = -1
+                        WHERE cycle_id = 'CYCLE_20260416'
+                        """
+                    )
+                )
     finally:
         engine.dispose()
 
