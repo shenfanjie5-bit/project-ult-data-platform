@@ -1,0 +1,80 @@
+"""Types for the PostgreSQL-backed Lite candidate queue."""
+
+from __future__ import annotations
+
+from collections.abc import Mapping
+from dataclasses import dataclass
+from datetime import datetime
+from typing import Any, Final, Literal, TypeAlias
+
+CandidatePayloadType: TypeAlias = Literal["Ex-0", "Ex-1", "Ex-2", "Ex-3"]
+ValidationStatus: TypeAlias = Literal["pending", "accepted", "rejected"]
+
+CANDIDATE_QUEUE_TABLE: Final[str] = "data_platform.candidate_queue"
+INGEST_METADATA_VIEW: Final[str] = "data_platform.ingest_metadata"
+
+_CANDIDATE_PAYLOAD_TYPES: Final[frozenset[str]] = frozenset(
+    ("Ex-0", "Ex-1", "Ex-2", "Ex-3")
+)
+_VALIDATION_STATUSES: Final[frozenset[str]] = frozenset(
+    ("pending", "accepted", "rejected")
+)
+_FORBIDDEN_PAYLOAD_KEYS: Final[frozenset[str]] = frozenset(("submitted_at", "ingest_seq"))
+
+
+@dataclass(frozen=True, slots=True)
+class CandidateQueueItem:
+    """A row from data_platform.candidate_queue."""
+
+    id: int
+    payload_type: CandidatePayloadType
+    payload: Mapping[str, Any]
+    submitted_by: str
+    submitted_at: datetime
+    ingest_seq: int
+    validation_status: ValidationStatus
+    rejection_reason: str | None
+
+    def __post_init__(self) -> None:
+        _validate_payload_type(self.payload_type)
+        _validate_validation_status(self.validation_status)
+        _validate_payload(self.payload)
+
+
+@dataclass(frozen=True, slots=True)
+class IngestMetadataRecord:
+    """A row from data_platform.ingest_metadata."""
+
+    candidate_id: int
+    payload_type: CandidatePayloadType
+    submitted_by: str
+    submitted_at: datetime
+    ingest_seq: int
+    validation_status: ValidationStatus
+    rejection_reason: str | None
+
+    def __post_init__(self) -> None:
+        _validate_payload_type(self.payload_type)
+        _validate_validation_status(self.validation_status)
+
+
+def _validate_payload_type(value: str) -> None:
+    if value not in _CANDIDATE_PAYLOAD_TYPES:
+        msg = f"payload_type must be one of {sorted(_CANDIDATE_PAYLOAD_TYPES)}"
+        raise ValueError(msg)
+
+
+def _validate_validation_status(value: str) -> None:
+    if value not in _VALIDATION_STATUSES:
+        msg = f"validation_status must be one of {sorted(_VALIDATION_STATUSES)}"
+        raise ValueError(msg)
+
+
+def _validate_payload(payload: Mapping[str, Any]) -> None:
+    forbidden_keys = sorted(_FORBIDDEN_PAYLOAD_KEYS.intersection(payload))
+    if forbidden_keys:
+        msg = (
+            "producer payload must not include PostgreSQL ingest metadata fields: "
+            f"{forbidden_keys}"
+        )
+        raise ValueError(msg)
