@@ -19,6 +19,9 @@ CycleStatus: TypeAlias = Literal[
 
 CYCLE_ID_PATTERN: Final[re.Pattern[str]] = re.compile(r"^CYCLE_(?P<cycle_date>\d{8})$")
 CYCLE_METADATA_TABLE: Final[str] = "data_platform.cycle_metadata"
+CYCLE_CANDIDATE_SELECTION_TABLE: Final[str] = (
+    "data_platform.cycle_candidate_selection"
+)
 
 _CYCLE_STATUSES: Final[frozenset[str]] = frozenset(get_args(CycleStatus))
 
@@ -52,6 +55,21 @@ class CycleMetadata:
         _validate_cycle_status(self.status)
         if self.candidate_count < 0:
             msg = "candidate_count must be non-negative"
+            raise ValueError(msg)
+
+
+@dataclass(frozen=True, slots=True)
+class CycleCandidateSelection:
+    """A row from data_platform.cycle_candidate_selection."""
+
+    cycle_id: str
+    candidate_id: int
+    selected_at: datetime
+
+    def __post_init__(self) -> None:
+        _cycle_date_from_id(self.cycle_id)
+        if self.candidate_id < 1:
+            msg = "candidate_id must be positive"
             raise ValueError(msg)
 
 

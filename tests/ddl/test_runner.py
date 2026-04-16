@@ -7,12 +7,22 @@ from pathlib import Path
 from uuid import uuid4
 
 import pytest
-from sqlalchemy import create_engine, text
-from sqlalchemy.engine import make_url
-from sqlalchemy.exc import SQLAlchemyError
 
-from data_platform.ddl import runner as runner_module
-from data_platform.ddl.runner import MigrationError, MigrationRunner
+sqlalchemy = pytest.importorskip(
+    "sqlalchemy",
+    reason="PostgreSQL migration tests require SQLAlchemy",
+)
+make_url = pytest.importorskip(
+    "sqlalchemy.engine",
+    reason="PostgreSQL migration tests require SQLAlchemy",
+).make_url
+SQLAlchemyError = pytest.importorskip(
+    "sqlalchemy.exc",
+    reason="PostgreSQL migration tests require SQLAlchemy",
+).SQLAlchemyError
+
+from data_platform.ddl import runner as runner_module  # noqa: E402
+from data_platform.ddl.runner import MigrationError, MigrationRunner  # noqa: E402
 
 
 def write_migration(migrations_path: Path, filename: str, sql: str) -> None:
@@ -26,11 +36,14 @@ def postgres_dsn() -> Generator[str]:
     if not admin_dsn:
         pytest.skip("PostgreSQL migration tests require DATABASE_URL or DP_PG_DSN")
 
-    admin_engine = create_engine(admin_dsn, isolation_level="AUTOCOMMIT")
+    admin_engine = sqlalchemy.create_engine(
+        runner_module._sqlalchemy_postgres_uri(admin_dsn),
+        isolation_level="AUTOCOMMIT",
+    )
     database_name = f"dp_migrations_test_{uuid4().hex}"
     try:
         with admin_engine.connect() as connection:
-            connection.execute(text(f'CREATE DATABASE "{database_name}"'))
+            connection.execute(sqlalchemy.text(f'CREATE DATABASE "{database_name}"'))
     except SQLAlchemyError as exc:
         admin_engine.dispose()
         pytest.skip(
@@ -38,13 +51,17 @@ def postgres_dsn() -> Generator[str]:
             f"{exc}"
         )
 
-    test_dsn = str(make_url(admin_dsn).set(database=database_name))
+    test_dsn = str(
+        make_url(runner_module._sqlalchemy_postgres_uri(admin_dsn)).set(
+            database=database_name,
+        )
+    )
     try:
         yield test_dsn
     finally:
         with admin_engine.connect() as connection:
             connection.execute(
-                text(
+                sqlalchemy.text(
                     """
                     SELECT pg_terminate_backend(pid)
                     FROM pg_stat_activity
@@ -54,25 +71,25 @@ def postgres_dsn() -> Generator[str]:
                 ),
                 {"database_name": database_name},
             )
-            connection.execute(text(f'DROP DATABASE IF EXISTS "{database_name}"'))
+            connection.execute(sqlalchemy.text(f'DROP DATABASE IF EXISTS "{database_name}"'))
         admin_engine.dispose()
 
 
 def fetch_scalar(dsn: str, sql: str) -> object:
-    engine = create_engine(dsn)
+    engine = sqlalchemy.create_engine(runner_module._sqlalchemy_postgres_uri(dsn))
     try:
         with engine.connect() as connection:
-            return connection.execute(text(sql)).scalar_one()
+            return connection.execute(sqlalchemy.text(sql)).scalar_one()
     finally:
         engine.dispose()
 
 
 def fetch_versions(dsn: str) -> list[str]:
-    engine = create_engine(dsn)
+    engine = sqlalchemy.create_engine(runner_module._sqlalchemy_postgres_uri(dsn))
     try:
         with engine.connect() as connection:
             rows = connection.execute(
-                text("SELECT version FROM dp_schema_migrations ORDER BY version")
+                sqlalchemy.text("SELECT version FROM dp_schema_migrations ORDER BY version")
             ).scalars()
             return [str(row) for row in rows]
     finally:
@@ -115,9 +132,9 @@ def test_create_engine_rewrites_plain_postgres_dsn_to_psycopg(
 def test_apply_pending_is_idempotent_and_creates_schema(postgres_dsn: str) -> None:
     runner = MigrationRunner()
 
-    assert runner.apply_pending(postgres_dsn) == ["0001", "0002", "0003"]
+    assert runner.apply_pending(postgres_dsn) == ["0001", "0002", "0003", "0004"]
     assert runner.apply_pending(postgres_dsn) == []
-    assert fetch_versions(postgres_dsn) == ["0001", "0002", "0003"]
+    assert fetch_versions(postgres_dsn) == ["0001", "0002", "0003", "0004"]
     assert fetch_scalar(postgres_dsn, "SELECT to_regclass('public.dp_schema_migrations')")
     assert (
         fetch_scalar(
