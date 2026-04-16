@@ -71,6 +71,10 @@ def _validate_validation_status(value: str) -> None:
 
 
 def _validate_payload(payload: Mapping[str, Any]) -> None:
+    if not isinstance(payload, Mapping):
+        msg = "payload must be a JSON object mapping"
+        raise TypeError(msg)
+
     forbidden_keys = sorted(_FORBIDDEN_PAYLOAD_KEYS.intersection(payload))
     if forbidden_keys:
         msg = (
