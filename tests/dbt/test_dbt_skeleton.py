@@ -11,6 +11,14 @@ from data_platform.adapters.tushare import TUSHARE_ASSETS
 PROJECT_ROOT = Path(__file__).resolve().parents[2]
 DBT_PROJECT_DIR = PROJECT_ROOT / "src" / "data_platform" / "dbt"
 STAGING_DIR = DBT_PROJECT_DIR / "models" / "staging"
+INTERMEDIATE_DIR = DBT_PROJECT_DIR / "models" / "intermediate"
+INTERMEDIATE_MODEL_NAMES = [
+    "int_event_timeline",
+    "int_financial_reports_latest",
+    "int_index_membership",
+    "int_price_bars_adjusted",
+    "int_security_master",
+]
 
 
 def test_dbt_skeleton_files_are_present() -> None:
@@ -20,12 +28,15 @@ def test_dbt_skeleton_files_are_present() -> None:
         DBT_PROJECT_DIR / "macros" / "dp_raw_path.sql",
         DBT_PROJECT_DIR / "macros" / "stg_latest_raw.sql",
         DBT_PROJECT_DIR / "macros" / "staging_tests.sql",
+        DBT_PROJECT_DIR / "macros" / "intermediate_tests.sql",
         STAGING_DIR / "_sources.yml",
+        INTERMEDIATE_DIR / "_schema.yml",
         DBT_PROJECT_DIR / "models" / "intermediate" / ".gitkeep",
         DBT_PROJECT_DIR / "models" / "marts" / ".gitkeep",
         DBT_PROJECT_DIR / "seeds" / ".gitkeep",
         PROJECT_ROOT / "scripts" / "dbt.sh",
         *[STAGING_DIR / f"stg_{asset.dataset}.sql" for asset in TUSHARE_ASSETS],
+        *[INTERMEDIATE_DIR / f"{model_name}.sql" for model_name in INTERMEDIATE_MODEL_NAMES],
     ]
 
     missing_paths = [path for path in required_paths if not path.exists()]
@@ -37,7 +48,10 @@ def test_dbt_skeleton_files_are_present() -> None:
     assert missing_paths == []
     assert os.access(PROJECT_ROOT / "scripts" / "dbt.sh", os.X_OK)
     assert sql_models == sorted(
-        f"models/staging/stg_{asset.dataset}.sql" for asset in TUSHARE_ASSETS
+        [
+            *(f"models/staging/stg_{asset.dataset}.sql" for asset in TUSHARE_ASSETS),
+            *(f"models/intermediate/{model_name}.sql" for model_name in INTERMEDIATE_MODEL_NAMES),
+        ]
     )
 
     dbt_project = (DBT_PROJECT_DIR / "dbt_project.yml").read_text()
