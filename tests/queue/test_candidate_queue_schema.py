@@ -104,7 +104,7 @@ def migrated_postgres_dsn(postgres_dsn: str) -> str:
         reason="PostgreSQL candidate queue schema tests require the migration runner",
     )
     applied_versions = runner_module.MigrationRunner().apply_pending(postgres_dsn)
-    assert applied_versions == ["0001", "0002", "0003"]
+    assert applied_versions == ["0001", "0002", "0003", "0004"]
     assert runner_module.MigrationRunner().apply_pending(postgres_dsn) == []
     return postgres_dsn
 

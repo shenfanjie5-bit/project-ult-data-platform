@@ -8,6 +8,7 @@ from datetime import date
 from typing import Any, Final
 
 from data_platform.cycle.models import (
+    CYCLE_CANDIDATE_SELECTION_TABLE,
     CYCLE_METADATA_TABLE,
     CycleMetadata,
     CycleStatus,
@@ -16,6 +17,7 @@ from data_platform.cycle.models import (
     _validate_cycle_status,
     cycle_id_for_date,
 )
+from data_platform.queue.models import CANDIDATE_QUEUE_TABLE
 
 _FORWARD_TRANSITIONS: Final[dict[CycleStatus, CycleStatus]] = {
     "pending": "phase0",
@@ -43,6 +45,26 @@ class CycleNotFound(LookupError):
         super().__init__(f"cycle not found: {cycle_id}")
 
 
+class CycleAlreadyFrozen(RuntimeError):
+    """Raised when candidate selection for a cycle has already been frozen."""
+
+    def __init__(self, cycle_id: str, current_status: str) -> None:
+        self.cycle_id = cycle_id
+        self.current_status = current_status
+        super().__init__(
+            f"cycle candidate selection already frozen: {cycle_id} "
+            f"status={current_status!r}"
+        )
+
+
+class NoAcceptedCandidates(RuntimeError):
+    """Available for strict callers; the default freeze path allows empty selection."""
+
+    def __init__(self, cycle_id: str) -> None:
+        self.cycle_id = cycle_id
+        super().__init__(f"cycle has no accepted candidates to freeze: {cycle_id}")
+
+
 class InvalidCycleTransition(ValueError):
     """Raised when a requested cycle status transition is not allowed."""
 
@@ -54,6 +76,118 @@ class InvalidCycleTransition(ValueError):
             "invalid cycle status transition: "
             f"{cycle_id} {current_status!r} -> {target_status!r}"
         )
+
+
+class CycleRepository:
+    """Repository for PostgreSQL-backed cycle operations."""
+
+    def __init__(self, dsn: str | None = None, *, engine: Any | None = None) -> None:
+        if dsn is not None and engine is not None:
+            msg = "provide either dsn or engine, not both"
+            raise ValueError(msg)
+
+        self._owns_engine = engine is None
+        self._engine = engine if engine is not None else _create_engine(dsn or _resolve_dsn())
+
+    def begin(self) -> Any:
+        """Begin a PostgreSQL transaction for cycle operations."""
+
+        return self._engine.begin()
+
+    def freeze_selection(self, cycle_id: str, connection: Any) -> CycleMetadata:
+        """Freeze accepted queue candidates for one cycle in the caller transaction.
+
+        Under PostgreSQL READ COMMITTED, the freeze boundary is the
+        INSERT...SELECT statement start. Candidates accepted before that statement's
+        snapshot are eligible; candidates accepted later wait for a future cycle.
+        Metadata is derived from the same inserted CTE so cutoffs and counts always
+        describe the actual selected rows.
+        """
+
+        _cycle_date_from_id(cycle_id)
+        current = connection.execute(
+            _text(
+                f"""
+                SELECT
+                    cycle_id,
+                    status,
+                    selection_frozen_at
+                FROM {CYCLE_METADATA_TABLE}
+                WHERE cycle_id = :cycle_id
+                FOR UPDATE
+                """
+            ),
+            {"cycle_id": cycle_id},
+        ).mappings().one_or_none()
+        if current is None:
+            raise CycleNotFound(cycle_id)
+
+        current_status = _validate_cycle_status(str(current["status"]))
+        if current_status != "pending" or current["selection_frozen_at"] is not None:
+            raise CycleAlreadyFrozen(cycle_id, current_status)
+
+        row = connection.execute(
+            _text(
+                f"""
+                WITH inserted AS (
+                    INSERT INTO {CYCLE_CANDIDATE_SELECTION_TABLE} (
+                        cycle_id,
+                        candidate_id
+                    )
+                    SELECT
+                        :cycle_id,
+                        candidate_queue.id
+                    FROM {CANDIDATE_QUEUE_TABLE} AS candidate_queue
+                    WHERE candidate_queue.validation_status = 'accepted'
+                      AND NOT EXISTS (
+                          SELECT 1
+                          FROM {CYCLE_CANDIDATE_SELECTION_TABLE} AS selection
+                          WHERE selection.cycle_id = :cycle_id
+                            AND selection.candidate_id = candidate_queue.id
+                      )
+                    ORDER BY candidate_queue.ingest_seq ASC
+                    RETURNING candidate_id
+                ),
+                stats AS (
+                    SELECT
+                        max(candidate_queue.submitted_at) AS cutoff_submitted_at,
+                        max(candidate_queue.ingest_seq) AS cutoff_ingest_seq,
+                        count(*) AS candidate_count
+                    FROM inserted
+                    JOIN {CANDIDATE_QUEUE_TABLE} AS candidate_queue
+                      ON candidate_queue.id = inserted.candidate_id
+                )
+                UPDATE {CYCLE_METADATA_TABLE} AS cycle_metadata
+                SET
+                    cutoff_submitted_at = stats.cutoff_submitted_at,
+                    cutoff_ingest_seq = stats.cutoff_ingest_seq,
+                    candidate_count = CAST(stats.candidate_count AS integer),
+                    selection_frozen_at = now(),
+                    status = CAST('phase0' AS data_platform.cycle_status),
+                    updated_at = now()
+                FROM stats
+                WHERE cycle_metadata.cycle_id = :cycle_id
+                RETURNING
+                    cycle_metadata.cycle_id,
+                    cycle_metadata.cycle_date,
+                    cycle_metadata.status,
+                    cycle_metadata.cutoff_submitted_at,
+                    cycle_metadata.cutoff_ingest_seq,
+                    cycle_metadata.candidate_count,
+                    cycle_metadata.selection_frozen_at,
+                    cycle_metadata.created_at,
+                    cycle_metadata.updated_at
+                """
+            ),
+            {"cycle_id": cycle_id},
+        ).mappings().one()
+        return _metadata_from_row(row)
+
+    def close(self) -> None:
+        """Dispose an owned SQLAlchemy engine."""
+
+        if self._owns_engine:
+            self._engine.dispose()
 
 
 def create_cycle(cycle_date: date) -> CycleMetadata:
@@ -182,10 +316,10 @@ def transition_cycle_status(cycle_id: str, status: CycleStatus) -> CycleMetadata
         engine.dispose()
 
 
-def _create_engine() -> Any:
+def _create_engine(dsn: str | None = None) -> Any:
     from sqlalchemy import create_engine
 
-    return create_engine(_sqlalchemy_postgres_uri(_resolve_dsn()))
+    return create_engine(_sqlalchemy_postgres_uri(dsn or _resolve_dsn()))
 
 
 def _text(sql: str) -> Any:
@@ -245,10 +379,13 @@ def _metadata_from_row(row: Mapping[str, Any]) -> CycleMetadata:
 
 
 __all__ = [
+    "CycleAlreadyFrozen",
     "CycleAlreadyExists",
+    "CycleRepository",
     "CycleNotFound",
     "InvalidCycleId",
     "InvalidCycleTransition",
+    "NoAcceptedCandidates",
     "create_cycle",
     "get_cycle",
     "transition_cycle_status",
