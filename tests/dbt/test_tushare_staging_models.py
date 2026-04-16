@@ -460,6 +460,8 @@ def test_dbt_run_and_test_staging_with_rawwriter_fixture(tmp_path: Path) -> None
     )
     assert parse_result.returncode == 0, parse_result.stdout + parse_result.stderr
 
+    # Standard dbt indirect selection can exercise downstream relationship
+    # tests, so build descendants instead of changing test selection.
     run_result = _run_dbt_wrapper(
         [
             "run",
@@ -468,7 +470,7 @@ def test_dbt_run_and_test_staging_with_rawwriter_fixture(tmp_path: Path) -> None
             "--target-path",
             str(tmp_path / "run"),
             "--select",
-            "staging",
+            "staging+",
         ],
         env=env,
     )

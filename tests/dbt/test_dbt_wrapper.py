@@ -8,7 +8,7 @@ import subprocess
 PROJECT_ROOT = Path(__file__).resolve().parents[2]
 
 
-def test_dbt_wrapper_defaults_test_indirect_selection_to_cautious(tmp_path: Path) -> None:
+def test_dbt_wrapper_does_not_mask_relationship_test_selection(tmp_path: Path) -> None:
     argv_file = tmp_path / "argv.txt"
     env = _fake_dbt_env(tmp_path, argv_file)
 
@@ -24,14 +24,12 @@ def test_dbt_wrapper_defaults_test_indirect_selection_to_cautious(tmp_path: Path
     assert result.returncode == 0, result.stdout + result.stderr
     assert argv_file.read_text(encoding="utf-8").splitlines() == [
         "test",
-        "--indirect-selection",
-        "cautious",
         "--select",
         "staging",
     ]
 
 
-def test_dbt_wrapper_keeps_explicit_indirect_selection_override(tmp_path: Path) -> None:
+def test_dbt_wrapper_preserves_explicit_selection_args(tmp_path: Path) -> None:
     argv_file = tmp_path / "argv.txt"
     env = _fake_dbt_env(tmp_path, argv_file)
 

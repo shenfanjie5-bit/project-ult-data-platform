@@ -78,6 +78,14 @@ def test_intermediate_sql_and_schema_contracts_are_present() -> None:
     financial_tests = declared_models["int_financial_reports_latest"]["tests"]
     assert any(_model_test_name(test) == "at_most_one_true_per_group" for test in financial_tests)
 
+    membership_columns = {
+        column["name"]: column for column in declared_models["int_index_membership"]["columns"]
+    }
+    index_code_relationship = _relationship_test(membership_columns["index_code"])
+    assert index_code_relationship["to"] == "ref('stg_index_basic')"
+    assert index_code_relationship["field"] == "ts_code"
+    assert index_code_relationship["config"]["severity"] == "error"
+
 
 def test_intermediate_models_execute_with_duckdb_raw_fixture(tmp_path: Path) -> None:
     duckdb = pytest.importorskip("duckdb")
@@ -298,6 +306,13 @@ def _model_test_name(test: str | dict[str, Any]) -> str:
     if isinstance(test, str):
         return test
     return next(iter(test))
+
+
+def _relationship_test(column: dict[str, Any]) -> dict[str, Any]:
+    for test in column.get("tests", []):
+        if isinstance(test, dict) and "relationships" in test:
+            return test["relationships"]
+    raise AssertionError(f"missing relationship test for column: {column['name']}")
 
 
 def _create_all_staging_views(connection: Any, raw_zone_path: Path) -> None:
