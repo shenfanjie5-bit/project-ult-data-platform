@@ -1,11 +1,13 @@
 from __future__ import annotations
 
+from contextlib import contextmanager
 from dataclasses import dataclass
 from datetime import date, datetime
 from pathlib import Path
 from typing import Iterator
 
 import duckdb
+import pyarrow as pa
 import pytest
 from pyiceberg.catalog.memory import InMemoryCatalog
 
@@ -26,6 +28,7 @@ from data_platform.serving.reader import (
     UnsupportedFilter,
     get_canonical_stock_basic,
     read_canonical,
+    read_iceberg_snapshot,
     with_duckdb_connection,
 )
 from tests.serving.test_canonical_writer import (
@@ -175,6 +178,92 @@ def test_read_canonical_raises_for_missing_table(stock_basic_duckdb: Path) -> No
         read_canonical("missing_table")
 
     assert exc_info.value.table == "missing_table"
+
+
+def test_read_iceberg_snapshot_uses_duckdb_time_travel(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    metadata_path = (
+        tmp_path
+        / "warehouse"
+        / "formal"
+        / "recommendation_set"
+        / "metadata"
+        / "00002.metadata.json"
+    )
+    expected_payload = pa.table({"version": ["published"]})
+    executed_sql: list[str] = []
+
+    class FakeResult:
+        def to_arrow_table(self) -> pa.Table:
+            return expected_payload
+
+    class FakeConnection:
+        def execute(self, sql: str) -> FakeResult:
+            executed_sql.append(sql)
+            return FakeResult()
+
+    @contextmanager
+    def fake_duckdb_connection() -> Iterator[FakeConnection]:
+        yield FakeConnection()
+
+    monkeypatch.setattr(
+        reader,
+        "_latest_metadata_location_for_identifier",
+        lambda table_identifier: metadata_path,
+    )
+    monkeypatch.setattr(reader, "with_duckdb_connection", fake_duckdb_connection)
+
+    payload = read_iceberg_snapshot("formal.recommendation_set", 123)
+
+    assert payload == expected_payload
+    assert len(executed_sql) == 1
+    assert f"iceberg_scan('{metadata_path}', snapshot_from_id = 123)" in executed_sql[0]
+
+
+def test_read_iceberg_snapshot_reads_pinned_snapshot_not_head(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _require_duckdb_iceberg_extension()
+
+    schema = pa.schema([pa.field("version", pa.string())])
+    warehouse_path = tmp_path / "warehouse"
+    catalog = InMemoryCatalog("test", warehouse=f"file://{warehouse_path}")
+    catalog.create_namespace_if_not_exists(("formal",))
+    catalog.create_table("formal.recommendation_set", schema=schema)
+    table = catalog.load_table("formal.recommendation_set")
+
+    table.overwrite(pa.table({"version": ["published"]}, schema=schema))
+    published_snapshot = table.refresh().current_snapshot()
+    if published_snapshot is None:
+        raise AssertionError("published formal snapshot was not created")
+
+    table.overwrite(pa.table({"version": ["unpublished-head"]}, schema=schema))
+    head_snapshot = table.refresh().current_snapshot()
+    if head_snapshot is None:
+        raise AssertionError("formal head snapshot was not created")
+
+    monkeypatch.setattr(
+        reader,
+        "get_settings",
+        lambda: FakeSettings(
+            duckdb_path=tmp_path / "reader.duckdb",
+            iceberg_warehouse_path=warehouse_path,
+        ),
+    )
+    reader._duckdb_connection.cache_clear()
+    try:
+        payload = read_iceberg_snapshot(
+            "formal.recommendation_set",
+            int(published_snapshot.snapshot_id),
+        )
+    finally:
+        reader._duckdb_connection.cache_clear()
+
+    assert int(published_snapshot.snapshot_id) != int(head_snapshot.snapshot_id)
+    assert payload.column("version").to_pylist() == ["published"]
 
 
 @pytest.mark.parametrize(

@@ -74,6 +74,19 @@ FROM {_canonical_table_expression(table)}
             raise
 
 
+def read_iceberg_snapshot(table_identifier: str, snapshot_id: int) -> pa.Table:
+    """Read one Iceberg table snapshot through DuckDB time travel."""
+
+    validated_snapshot_id = _validate_snapshot_id(snapshot_id)
+    sql = f"""
+SELECT *
+FROM {_iceberg_snapshot_expression(table_identifier, validated_snapshot_id)}
+"""
+
+    with with_duckdb_connection() as connection:
+        return connection.execute(sql).to_arrow_table()
+
+
 def get_canonical_stock_basic(active_only: bool = True) -> pa.Table:
     """Read canonical.stock_basic, filtering to active rows by default."""
 
@@ -169,9 +182,16 @@ def _canonical_table_expression(table: str) -> str:
     return f"iceberg_scan({_sql_string_literal(str(latest_metadata_location))})"
 
 
+def _iceberg_snapshot_expression(table_identifier: str, snapshot_id: int) -> str:
+    metadata_location = _latest_metadata_location_for_identifier(table_identifier)
+    return (
+        f"iceberg_scan({_sql_string_literal(str(metadata_location))}, "
+        f"snapshot_from_id = {snapshot_id})"
+    )
+
+
 def _canonical_table_location(table: str) -> Path:
-    warehouse_path = get_settings().iceberg_warehouse_path.expanduser()
-    return warehouse_path / CANONICAL_NAMESPACE / table
+    return _iceberg_table_location(f"{CANONICAL_NAMESPACE}.{table}")
 
 
 def _latest_metadata_location(table: str) -> Path:
@@ -180,6 +200,21 @@ def _latest_metadata_location(table: str) -> Path:
     if metadata_files:
         return metadata_files[-1]
     raise CanonicalTableNotFound(table)
+
+
+def _latest_metadata_location_for_identifier(table_identifier: str) -> Path:
+    metadata_dir = _iceberg_table_location(table_identifier) / "metadata"
+    metadata_files = sorted(metadata_dir.glob("*.metadata.json"))
+    if metadata_files:
+        return metadata_files[-1]
+    msg = f"Iceberg table metadata not found: {table_identifier}"
+    raise FileNotFoundError(msg)
+
+
+def _iceberg_table_location(table_identifier: str) -> Path:
+    parts = _validate_table_identifier(table_identifier)
+    warehouse_path = get_settings().iceberg_warehouse_path.expanduser()
+    return warehouse_path.joinpath(*parts)
 
 
 def _canonical_mart_snapshot_entry(table: str) -> dict[str, str | int] | None:
@@ -218,6 +253,32 @@ def _validate_identifier(identifier: str) -> None:
     raise ValueError(msg)
 
 
+def _validate_table_identifier(table_identifier: str) -> tuple[str, ...]:
+    if not isinstance(table_identifier, str):
+        msg = f"table_identifier must be a string: {table_identifier!r}"
+        raise TypeError(msg)
+    if table_identifier != table_identifier.strip():
+        msg = f"table_identifier must not include surrounding whitespace: {table_identifier!r}"
+        raise ValueError(msg)
+    parts = tuple(table_identifier.split("."))
+    if len(parts) < 2:
+        msg = f"table_identifier must include a namespace and table: {table_identifier!r}"
+        raise ValueError(msg)
+    for part in parts:
+        _validate_identifier(part)
+    return parts
+
+
+def _validate_snapshot_id(snapshot_id: int) -> int:
+    if isinstance(snapshot_id, bool) or not isinstance(snapshot_id, int):
+        msg = f"snapshot_id must be a positive integer: {snapshot_id!r}"
+        raise ValueError(msg)
+    if snapshot_id < 1:
+        msg = f"snapshot_id must be a positive integer: {snapshot_id!r}"
+        raise ValueError(msg)
+    return snapshot_id
+
+
 def _sql_string_literal(value: str) -> str:
     return "'" + value.replace("'", "''") + "'"
 
@@ -236,5 +297,6 @@ __all__ = [
     "UnsupportedFilter",
     "get_canonical_stock_basic",
     "read_canonical",
+    "read_iceberg_snapshot",
     "with_duckdb_connection",
 ]
