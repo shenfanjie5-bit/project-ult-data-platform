@@ -311,6 +311,67 @@ def test_cli_preserves_high_precision_financial_numeric_value(
     assert table["total_revenue"].to_pylist() == [Decimal(HIGH_PRECISION_VENDOR_VALUE)]
 
 
+@pytest.mark.parametrize(
+    ("field_name", "field_value", "expected_error"),
+    [
+        ("report_type", None, "null identity field: report_type"),
+        ("comp_type", "   ", "blank identity field: comp_type"),
+        ("update_flag", None, "null identity field: update_flag"),
+    ],
+)
+def test_cli_rejects_invalid_financial_version_fields_without_artifact(
+    raw_zone_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+    field_name: str,
+    field_value: Any,
+    expected_error: str,
+) -> None:
+    row = _financial_row(TUSHARE_INCOME_ASSET, end_date="20260415")
+    row[field_name] = field_value
+    client = _client_for_asset(TUSHARE_INCOME_ASSET, pd.DataFrame([row]))
+    _install_tushare_client(monkeypatch, client)
+
+    exit_code = tushare_adapter_module.main(
+        ["--asset", TUSHARE_INCOME_ASSET.name, "--date", "20260415"]
+    )
+
+    captured = capsys.readouterr()
+    payload = json.loads(captured.err)
+
+    assert exit_code == 1
+    assert captured.out == ""
+    assert payload["asset"] == TUSHARE_INCOME_ASSET.name
+    assert payload["error_type"] == "upstream_data_quality"
+    assert expected_error in payload["error"]
+    assert list(raw_zone_path.rglob("*.parquet")) == []
+
+
+def test_cli_reports_invalid_financial_numeric_as_data_quality_without_artifact(
+    raw_zone_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    row = _financial_row(TUSHARE_INCOME_ASSET, end_date="20260415")
+    row["total_revenue"] = "not-a-decimal"
+    client = _client_for_asset(TUSHARE_INCOME_ASSET, pd.DataFrame([row]))
+    _install_tushare_client(monkeypatch, client)
+
+    exit_code = tushare_adapter_module.main(
+        ["--asset", TUSHARE_INCOME_ASSET.name, "--date", "20260415"]
+    )
+
+    captured = capsys.readouterr()
+    payload = json.loads(captured.err)
+
+    assert exit_code == 1
+    assert captured.out == ""
+    assert payload["asset"] == TUSHARE_INCOME_ASSET.name
+    assert payload["error_type"] == "upstream_data_quality"
+    assert "invalid numeric field: total_revenue" in payload["error"]
+    assert list(raw_zone_path.rglob("*.parquet")) == []
+
+
 @pytest.mark.parametrize("missing_field", ["ts_code", "ann_date", "end_date"])
 def test_cli_rejects_missing_financial_key_field_without_artifact(
     raw_zone_path: Path,

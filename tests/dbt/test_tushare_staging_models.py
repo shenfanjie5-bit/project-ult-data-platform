@@ -573,6 +573,8 @@ def _sample_value(dataset: str, field: pa.Field) -> str | Decimal | None:
         return FIXTURE_DECIMAL_STRING
     if dataset == "adj_factor" and field.name == "adj_factor":
         return FIXTURE_DECIMAL_STRING
+    if dataset == "stock_company" and field.name in {"reg_capital", "employees"}:
+        return FIXTURE_DECIMAL_STRING
     if pa.types.is_decimal(field.type):
         return Decimal("1.123456789012345678")
     return f"{field.name}-fixture"

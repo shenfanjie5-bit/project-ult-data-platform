@@ -39,7 +39,12 @@ where = ["src"]
 include = ["data_platform*"]
 
 [tool.setuptools.package-data]
-data_platform = ["ddl/migrations/*.sql"]
+data_platform = [
+    "ddl/migrations/*.sql",
+    "dbt/**/*.sql",
+    "dbt/**/*.yml",
+    "dbt/dbt_project.yml",
+]
 
 [tool.ruff]
 line-length = 100

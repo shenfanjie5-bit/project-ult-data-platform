@@ -17,9 +17,9 @@ select
     setup_date,
     province,
     city,
-    try_cast(nullif(trim(cast(reg_capital as varchar)), '') as decimal(38, 18))
+    cast(nullif(trim(cast(reg_capital as varchar)), '') as decimal(38, 18))
         as reg_capital,
-    try_cast(nullif(trim(cast(employees as varchar)), '') as decimal(38, 18))
+    cast(nullif(trim(cast(employees as varchar)), '') as decimal(38, 18))
         as employees,
     main_business,
     latest_namechange_name,

@@ -112,6 +112,7 @@ def test_migration_creates_cycle_candidate_selection_schema(
                 "cycle_candidate_selection_pkey",
                 "cycle_candidate_selection_cycle_id_fkey",
                 "cycle_candidate_selection_candidate_id_fkey",
+                "cycle_candidate_selection_candidate_id_key",
             }
     finally:
         engine.dispose()

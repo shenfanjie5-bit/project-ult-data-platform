@@ -319,6 +319,11 @@ def _write_spike_report() -> None:
         f"{success_rate:.0f}%" if success_rate.is_integer() else f"{success_rate:.1f}%"
     )
     overall_status = "pass" if passed == len(SPIKE_CASES) else "fail"
+    passing_conclusion = (
+        f"- P1a Iceberg 写入链 spike 成功率: {success_rate_text}"
+        if overall_status == "pass"
+        else "- Passing run conclusion: pending"
+    )
     risk_note = (
         "PG-backed SQL catalog validated for schema evolution, snapshot time travel, "
         "and optimistic commit conflict handling."
@@ -361,7 +366,7 @@ def _write_spike_report() -> None:
             "",
             f"- Completed cases: {completed}/{len(SPIKE_CASES)}",
             f"- Conclusion: {overall_status}",
-            f"- P1a Iceberg 写入链 spike 成功率: {success_rate_text}",
+            passing_conclusion,
             "",
             "## Risk Notes",
             "",

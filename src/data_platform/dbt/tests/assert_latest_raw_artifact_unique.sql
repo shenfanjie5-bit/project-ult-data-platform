@@ -22,31 +22,42 @@ raw_artifacts as (
         manifest_dataset,
         manifest_partition_date,
         cast(artifact.run_id as varchar) as source_run_id,
-        try_cast(artifact.written_at as timestamp) as raw_loaded_at,
-        rank() over (
-            partition by manifest_source_id, manifest_dataset, manifest_partition_date
-            order by
-                try_cast(artifact.written_at as timestamp) desc nulls last,
-                cast(artifact.run_id as varchar) desc nulls last
-        ) as artifact_rank
+        try_cast(artifact.written_at as timestamp) as raw_loaded_at
     from raw_manifest_files
     cross join unnest(raw_manifest_files.artifacts) as artifact_item(artifact)
 ),
 
-latest_ties as (
+max_freshness as (
     select
         manifest_source_id,
         manifest_dataset,
         manifest_partition_date,
-        raw_loaded_at,
-        count(*) as latest_artifact_count
+        max(raw_loaded_at) as max_raw_loaded_at
     from raw_artifacts
-    where artifact_rank = 1
     group by
         manifest_source_id,
         manifest_dataset,
-        manifest_partition_date,
-        raw_loaded_at
+        manifest_partition_date
+),
+
+latest_ties as (
+    select
+        raw_artifacts.manifest_source_id,
+        raw_artifacts.manifest_dataset,
+        raw_artifacts.manifest_partition_date,
+        raw_artifacts.raw_loaded_at,
+        count(*) as latest_artifact_count
+    from raw_artifacts
+    inner join max_freshness
+        on raw_artifacts.manifest_source_id = max_freshness.manifest_source_id
+        and raw_artifacts.manifest_dataset = max_freshness.manifest_dataset
+        and raw_artifacts.manifest_partition_date = max_freshness.manifest_partition_date
+        and raw_artifacts.raw_loaded_at = max_freshness.max_raw_loaded_at
+    group by
+        raw_artifacts.manifest_source_id,
+        raw_artifacts.manifest_dataset,
+        raw_artifacts.manifest_partition_date,
+        raw_artifacts.raw_loaded_at
 )
 
 select

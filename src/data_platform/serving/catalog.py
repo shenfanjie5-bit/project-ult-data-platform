@@ -127,8 +127,16 @@ def _validation_error_includes_field(error: ValidationError, field_name: str) ->
 
 
 def _normalize_namespace_identifier(namespace: str | Identifier) -> Identifier:
-    namespace_string = Catalog.namespace_to_string(namespace)
-    return tuple(namespace_string.split("."))
+    try:
+        namespace_string = Catalog.namespace_to_string(namespace)
+    except ValueError as exc:
+        msg = f"invalid Iceberg namespace identifier: {namespace!r}"
+        raise ValueError(msg) from exc
+    parts = tuple(part.strip() for part in namespace_string.split("."))
+    if not parts or any(not part for part in parts):
+        msg = f"invalid Iceberg namespace identifier: {namespace!r}"
+        raise ValueError(msg)
+    return parts
 
 
 def _namespace_exists_after_create_error(

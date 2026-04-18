@@ -71,7 +71,7 @@ def test_custom_data_test_files_are_declared() -> None:
     }
 
 
-def test_raw_manifest_data_tests_reject_invalid_run_id_and_duplicate_latest(
+def test_raw_manifest_data_tests_reject_invalid_run_id_missing_file_and_duplicate_latest(
     tmp_path: Path,
 ) -> None:
     duckdb = pytest.importorskip("duckdb")
@@ -93,10 +93,12 @@ def test_raw_manifest_data_tests_reject_invalid_run_id_and_duplicate_latest(
     )
 
     duplicate_raw_zone_path = tmp_path / "duplicate_raw"
-    duplicate_artifact = _write_minimal_raw_artifact(duplicate_raw_zone_path, tmp_path)
-    duplicate_manifest_path = duplicate_artifact.path.parent / "_manifest.json"
+    first_duplicate_artifact = _write_minimal_raw_artifact(duplicate_raw_zone_path, tmp_path)
+    second_duplicate_artifact = _write_minimal_raw_artifact(duplicate_raw_zone_path, tmp_path)
+    duplicate_manifest_path = first_duplicate_artifact.path.parent / "_manifest.json"
     duplicate_manifest = json.loads(duplicate_manifest_path.read_text(encoding="utf-8"))
-    duplicate_manifest["artifacts"].append(dict(duplicate_manifest["artifacts"][0]))
+    for artifact in duplicate_manifest["artifacts"]:
+        artifact["written_at"] = "2026-04-15T01:00:00+00:00"
     duplicate_manifest_path.write_text(
         json.dumps(duplicate_manifest, indent=2, sort_keys=True) + "\n",
         encoding="utf-8",
@@ -108,10 +110,47 @@ def test_raw_manifest_data_tests_reject_invalid_run_id_and_duplicate_latest(
         duplicate_raw_zone_path,
     )
 
+    missing_raw_zone_path = tmp_path / "missing_raw"
+    missing_artifact = _write_minimal_raw_artifact(missing_raw_zone_path, tmp_path)
+    missing_artifact.path.unlink()
+    missing_rows = _fetch_data_test_rows(
+        duckdb,
+        "assert_raw_manifest_fresh",
+        missing_raw_zone_path,
+    )
+
+    assert second_duplicate_artifact.run_id != first_duplicate_artifact.run_id
     assert invalid_rows != []
     assert any(row[4] == "not-a-valid-run-id" for row in invalid_rows)
     assert duplicate_rows != []
     assert any(row[1] == "stock_basic" and row[4] == 2 for row in duplicate_rows)
+    assert missing_rows != []
+    assert any(row[-1] is False for row in missing_rows)
+
+
+def test_raw_manifest_data_tests_reject_duplicate_manifest_row(
+    tmp_path: Path,
+) -> None:
+    duckdb = pytest.importorskip("duckdb")
+
+    duplicate_raw_zone_path = tmp_path / "duplicate_manifest_raw"
+    duplicate_artifact = _write_minimal_raw_artifact(duplicate_raw_zone_path, tmp_path)
+    duplicate_manifest_path = duplicate_artifact.path.parent / "_manifest.json"
+    duplicate_manifest = json.loads(duplicate_manifest_path.read_text(encoding="utf-8"))
+    duplicate_manifest["artifacts"].append(dict(duplicate_manifest["artifacts"][0]))
+    duplicate_manifest_path.write_text(
+        json.dumps(duplicate_manifest, indent=2, sort_keys=True) + "\n",
+        encoding="utf-8",
+    )
+
+    rows = _fetch_data_test_rows(
+        duckdb,
+        "assert_latest_raw_artifact_unique",
+        duplicate_raw_zone_path,
+    )
+
+    assert rows != []
+    assert any(row[1] == "stock_basic" and row[4] == 2 for row in rows)
 
 
 def test_mart_custom_data_tests_reject_forbidden_columns() -> None:
