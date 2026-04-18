@@ -145,12 +145,16 @@ class DailyRefreshLockError(DailyRefreshStepError):
 class _DailyRefreshLock:
     path: Path
     fd: int
+    owner_token: str
 
     def release(self) -> None:
-        with contextlib.suppress(OSError):
-            os.close(self.fd)
-        with contextlib.suppress(FileNotFoundError):
-            self.path.unlink()
+        try:
+            if _refresh_lock_matches_owner(self.path, self.fd, self.owner_token):
+                with contextlib.suppress(FileNotFoundError):
+                    self.path.unlink()
+        finally:
+            with contextlib.suppress(OSError):
+                os.close(self.fd)
 
 
 class _JsonArgumentParser(argparse.ArgumentParser):
@@ -502,14 +506,16 @@ def _acquire_refresh_lock(
 ) -> _DailyRefreshLock:
     lock_path = _refresh_lock_path(settings, partition_date)
     lock_path.parent.mkdir(parents=True, exist_ok=True)
+    owner_token = uuid4().hex
     payload = {
         "catalog": settings.iceberg_catalog_name,
         "host": socket.gethostname(),
+        "owner_token": owner_token,
         "partition_date": f"{partition_date:%Y%m%d}",
         "pid": os.getpid(),
         "acquired_at": datetime.now(UTC).isoformat(timespec="seconds"),
     }
-    flags = os.O_CREAT | os.O_EXCL | os.O_WRONLY
+    flags = os.O_CREAT | os.O_EXCL | os.O_RDWR
     fd: int | None = None
     for attempt in range(2):
         try:
@@ -543,7 +549,7 @@ def _acquire_refresh_lock(
         with contextlib.suppress(FileNotFoundError):
             lock_path.unlink()
         raise
-    return _DailyRefreshLock(path=lock_path, fd=fd)
+    return _DailyRefreshLock(path=lock_path, fd=fd, owner_token=owner_token)
 
 
 def _read_refresh_lock_owner(lock_path: Path) -> dict[str, Any]:
@@ -556,18 +562,42 @@ def _read_refresh_lock_owner(lock_path: Path) -> dict[str, Any]:
     return payload
 
 
-def _refresh_lock_is_reclaimable(owner_metadata: Mapping[str, Any]) -> bool:
-    acquired_at = _parse_lock_acquired_at(owner_metadata.get("acquired_at"))
-    if acquired_at is not None:
-        stale_after = _refresh_lock_stale_after()
-        if datetime.now(UTC) - acquired_at > stale_after:
-            return True
+def _read_refresh_lock_owner_from_fd(fd: int) -> dict[str, Any]:
+    try:
+        size = max(os.fstat(fd).st_size, 1)
+        payload = json.loads(os.pread(fd, size, 0).decode("utf-8"))
+    except (OSError, UnicodeDecodeError, json.JSONDecodeError) as exc:
+        return {"parse_error": str(exc)}
+    if not isinstance(payload, dict):
+        return {"parse_error": "refresh lock payload must be a JSON object"}
+    return payload
 
+
+def _refresh_lock_matches_owner(lock_path: Path, fd: int, owner_token: str) -> bool:
+    try:
+        fd_stat = os.fstat(fd)
+        path_stat = lock_path.stat()
+    except (OSError, FileNotFoundError):
+        return False
+    if (fd_stat.st_dev, fd_stat.st_ino) != (path_stat.st_dev, path_stat.st_ino):
+        return False
+    owner_metadata = _read_refresh_lock_owner_from_fd(fd)
+    return owner_metadata.get("owner_token") == owner_token
+
+
+def _refresh_lock_is_reclaimable(owner_metadata: Mapping[str, Any]) -> bool:
     owner_host = owner_metadata.get("host")
     owner_pid = owner_metadata.get("pid")
     if owner_host != socket.gethostname() or not isinstance(owner_pid, int):
         return False
-    return not _process_is_alive(owner_pid)
+    if _process_is_alive(owner_pid):
+        return False
+
+    acquired_at = _parse_lock_acquired_at(owner_metadata.get("acquired_at"))
+    if acquired_at is None:
+        return True
+    stale_after = _refresh_lock_stale_after()
+    return datetime.now(UTC) - acquired_at > stale_after
 
 
 def _parse_lock_acquired_at(value: object) -> datetime | None:

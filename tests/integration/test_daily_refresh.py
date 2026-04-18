@@ -3,6 +3,7 @@ from __future__ import annotations
 import json
 import os
 import shutil
+import socket
 import subprocess
 import sys
 import threading
@@ -249,6 +250,7 @@ def test_daily_refresh_reclaims_stale_lock(
     _set_daily_refresh_env(monkeypatch, tmp_path)
     _install_fast_success_stubs(monkeypatch)
     monkeypatch.setenv("DP_DAILY_REFRESH_LOCK_STALE_SECONDS", "1")
+    monkeypatch.setattr(daily_refresh, "_process_is_alive", lambda _pid: False)
     settings = daily_refresh._load_settings()
     lock_path = daily_refresh._refresh_lock_path(settings, PARTITION_DATE)
     lock_path.parent.mkdir(parents=True, exist_ok=True)
@@ -256,8 +258,9 @@ def test_daily_refresh_reclaims_stale_lock(
         json.dumps(
             {
                 "catalog": settings.iceberg_catalog_name,
+                "host": socket.gethostname(),
                 "partition_date": "20260415",
-                "pid": 999999,
+                "pid": 12345,
                 "acquired_at": (datetime.now(UTC) - timedelta(seconds=5)).isoformat(),
             },
             sort_keys=True,
@@ -277,6 +280,62 @@ def test_daily_refresh_reclaims_stale_lock(
         "raw_health",
     ]
     assert not lock_path.exists()
+
+
+def test_daily_refresh_does_not_reclaim_stale_lock_with_live_owner(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    _set_daily_refresh_env(monkeypatch, tmp_path)
+    _install_fast_success_stubs(monkeypatch)
+    monkeypatch.setenv("DP_DAILY_REFRESH_LOCK_STALE_SECONDS", "1")
+    settings = daily_refresh._load_settings()
+    lock_path = daily_refresh._refresh_lock_path(settings, PARTITION_DATE)
+    lock_path.parent.mkdir(parents=True, exist_ok=True)
+    owner = {
+        "catalog": settings.iceberg_catalog_name,
+        "host": socket.gethostname(),
+        "partition_date": "20260415",
+        "pid": os.getpid(),
+        "acquired_at": (datetime.now(UTC) - timedelta(seconds=5)).isoformat(),
+    }
+    lock_path.write_text(
+        json.dumps(owner, sort_keys=True) + "\n",
+        encoding="utf-8",
+    )
+
+    result = daily_refresh.run_daily_refresh(PARTITION_DATE, mock=True)
+
+    assert result.ok is False
+    assert [step.name for step in result.steps] == ["refresh_lock"]
+    assert result.steps[0].metadata["error_type"] == "refresh_lock_held"
+    assert json.loads(lock_path.read_text(encoding="utf-8")) == owner
+
+
+def test_refresh_lock_release_does_not_remove_replacement_lock(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    _set_daily_refresh_env(monkeypatch, tmp_path)
+    settings = daily_refresh._load_settings()
+    lock = daily_refresh._acquire_refresh_lock(settings, PARTITION_DATE)
+    replacement_owner = {
+        "catalog": settings.iceberg_catalog_name,
+        "host": socket.gethostname(),
+        "owner_token": "replacement",
+        "partition_date": "20260415",
+        "pid": os.getpid(),
+        "acquired_at": datetime.now(UTC).isoformat(),
+    }
+
+    lock.path.unlink()
+    lock.path.write_text(
+        json.dumps(replacement_owner, sort_keys=True) + "\n",
+        encoding="utf-8",
+    )
+    lock.release()
+
+    assert json.loads(lock.path.read_text(encoding="utf-8")) == replacement_owner
 
 
 def test_mock_daily_refresh_real_pipeline_repeatable_when_pg_available(
