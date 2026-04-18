@@ -8,7 +8,7 @@ from dataclasses import asdict, dataclass
 import json
 from pathlib import Path
 import re
-from typing import Any, Literal
+from typing import Any, Literal, cast
 
 from data_platform.adapters.base import AssetSpec, DataSourceAdapter
 from data_platform.adapters.tushare.assets import TUSHARE_ASSETS
@@ -409,7 +409,7 @@ def _model_layer(model_name: str) -> str:
 
 
 def _spec_to_json(spec: DataPlatformAssetSpec) -> dict[str, Any]:
-    return _json_safe(asdict(spec))
+    return cast(dict[str, Any], _json_safe(asdict(spec)))
 
 
 def _json_safe(value: Any) -> Any:

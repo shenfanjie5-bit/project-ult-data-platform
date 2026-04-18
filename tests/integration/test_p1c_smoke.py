@@ -92,6 +92,28 @@ def test_smoke_p1c_script_requires_dp_pg_dsn(tmp_path: Path) -> None:
     assert "DP_PG_DSN is required" in result.stderr
 
 
+def test_smoke_p1c_script_rejects_unsafe_target_before_database(tmp_path: Path) -> None:
+    env = os.environ.copy()
+    env["DP_PG_DSN"] = "postgresql://dp:dp@localhost/postgres"
+    env["DP_SMOKE_WORK_DIR"] = str(tmp_path / "p1c-smoke")
+    env["DP_ENV"] = "dev"
+    env["PYTHON"] = sys.executable
+    env["PYTHONPATH"] = str(PROJECT_ROOT / "src")
+
+    result = subprocess.run(
+        ["bash", str(PROJECT_ROOT / "scripts" / "smoke_p1c.sh")],
+        cwd=PROJECT_ROOT,
+        env=env,
+        capture_output=True,
+        text=True,
+        check=False,
+        timeout=60,
+    )
+
+    assert result.returncode == 2
+    assert "DP_ENV must be test for smoke-p1c" in result.stderr
+
+
 @pytest.fixture()
 def p1c_context(
     tmp_path: Path,

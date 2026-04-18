@@ -8,6 +8,7 @@ import hashlib
 import json
 import os
 import shutil
+import socket
 import subprocess
 import sys
 from collections.abc import Mapping, Sequence
@@ -44,6 +45,8 @@ DBT_SCRIPT = PROJECT_ROOT / "scripts" / "dbt.sh"
 DATE_FORMAT = "%Y%m%d"
 DEFAULT_DBT_SELECTORS = ("staging", "intermediate", "marts")
 TRUTHY_VALUES = frozenset({"1", "true", "yes", "on"})
+DEFAULT_REFRESH_LOCK_STALE_AFTER = timedelta(hours=6)
+REFRESH_LOCK_STALE_SECONDS_ENV = "DP_DAILY_REFRESH_LOCK_STALE_SECONDS"
 DATE_FIELD_NAMES = frozenset(
     {
         "actual_date",
@@ -501,22 +504,36 @@ def _acquire_refresh_lock(
     lock_path.parent.mkdir(parents=True, exist_ok=True)
     payload = {
         "catalog": settings.iceberg_catalog_name,
+        "host": socket.gethostname(),
         "partition_date": f"{partition_date:%Y%m%d}",
         "pid": os.getpid(),
         "acquired_at": datetime.now(UTC).isoformat(timespec="seconds"),
     }
     flags = os.O_CREAT | os.O_EXCL | os.O_WRONLY
-    try:
-        fd = os.open(lock_path, flags, 0o600)
-    except FileExistsError as exc:
-        metadata = {
-            "error": "daily refresh already running for catalog/date",
-            "error_type": "refresh_lock_held",
-            "catalog": settings.iceberg_catalog_name,
-            "partition_date": f"{partition_date:%Y%m%d}",
-            "lock_path": str(lock_path),
-        }
-        raise DailyRefreshLockError(metadata["error"], metadata) from exc
+    fd: int | None = None
+    for attempt in range(2):
+        try:
+            fd = os.open(lock_path, flags, 0o600)
+            break
+        except FileExistsError as exc:
+            owner_metadata = _read_refresh_lock_owner(lock_path)
+            if attempt == 0 and _refresh_lock_is_reclaimable(owner_metadata):
+                with contextlib.suppress(FileNotFoundError):
+                    lock_path.unlink()
+                continue
+
+            metadata: dict[str, Any] = {
+                "error": "daily refresh already running for catalog/date",
+                "error_type": "refresh_lock_held",
+                "catalog": settings.iceberg_catalog_name,
+                "partition_date": f"{partition_date:%Y%m%d}",
+                "lock_path": str(lock_path),
+                "lock_owner": owner_metadata,
+            }
+            raise DailyRefreshLockError(metadata["error"], metadata) from exc
+    if fd is None:
+        msg = f"refresh lock could not be acquired: {lock_path}"
+        raise DailyRefreshLockError(msg, {"error": msg, "error_type": "refresh_lock_failed"})
 
     try:
         os.write(fd, (json.dumps(payload, sort_keys=True) + "\n").encode("utf-8"))
@@ -527,6 +544,67 @@ def _acquire_refresh_lock(
             lock_path.unlink()
         raise
     return _DailyRefreshLock(path=lock_path, fd=fd)
+
+
+def _read_refresh_lock_owner(lock_path: Path) -> dict[str, Any]:
+    try:
+        payload = json.loads(lock_path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError) as exc:
+        return {"parse_error": str(exc)}
+    if not isinstance(payload, dict):
+        return {"parse_error": "refresh lock payload must be a JSON object"}
+    return payload
+
+
+def _refresh_lock_is_reclaimable(owner_metadata: Mapping[str, Any]) -> bool:
+    acquired_at = _parse_lock_acquired_at(owner_metadata.get("acquired_at"))
+    if acquired_at is not None:
+        stale_after = _refresh_lock_stale_after()
+        if datetime.now(UTC) - acquired_at > stale_after:
+            return True
+
+    owner_host = owner_metadata.get("host")
+    owner_pid = owner_metadata.get("pid")
+    if owner_host != socket.gethostname() or not isinstance(owner_pid, int):
+        return False
+    return not _process_is_alive(owner_pid)
+
+
+def _parse_lock_acquired_at(value: object) -> datetime | None:
+    if not isinstance(value, str):
+        return None
+    try:
+        parsed = datetime.fromisoformat(value)
+    except ValueError:
+        return None
+    if parsed.tzinfo is None:
+        return parsed.replace(tzinfo=UTC)
+    return parsed.astimezone(UTC)
+
+
+def _refresh_lock_stale_after() -> timedelta:
+    value = os.environ.get(REFRESH_LOCK_STALE_SECONDS_ENV)
+    if value is None:
+        return DEFAULT_REFRESH_LOCK_STALE_AFTER
+    try:
+        seconds = int(value)
+    except ValueError:
+        return DEFAULT_REFRESH_LOCK_STALE_AFTER
+    if seconds < 1:
+        return DEFAULT_REFRESH_LOCK_STALE_AFTER
+    return timedelta(seconds=seconds)
+
+
+def _process_is_alive(pid: int) -> bool:
+    if pid <= 0:
+        return False
+    try:
+        os.kill(pid, 0)
+    except ProcessLookupError:
+        return False
+    except PermissionError:
+        return True
+    return True
 
 
 def _refresh_lock_path(settings: Settings, partition_date: date) -> Path:
@@ -653,12 +731,12 @@ def _select_assets(
     selected: list[AssetSpec] = []
     unknown: list[str] = []
     for token in tokens:
-        asset = by_name_or_dataset.get(token)
-        if asset is None:
+        matched_asset = by_name_or_dataset.get(token)
+        if matched_asset is None:
             unknown.append(token)
             continue
-        if asset not in selected:
-            selected.append(asset)
+        if matched_asset not in selected:
+            selected.append(matched_asset)
 
     if unknown:
         msg = "unknown daily refresh asset selector(s): " + ", ".join(unknown)

@@ -108,6 +108,18 @@ def test_ensure_namespaces_rejects_normalized_raw_namespace(
     assert catalog.list_namespaces() == []
 
 
+@pytest.mark.parametrize("namespace", ["canonical..child", " .canonical", ("canonical", " ")])
+def test_ensure_namespaces_rejects_empty_namespace_segments(
+    namespace: str | tuple[str, ...],
+) -> None:
+    catalog = FakeCatalog()
+
+    with pytest.raises(ValueError, match="invalid Iceberg namespace"):
+        ensure_namespaces(catalog, [namespace])  # type: ignore[arg-type]
+
+    assert catalog.list_namespaces() == []
+
+
 def test_ensure_namespaces_suppresses_concurrent_duplicate_create() -> None:
     barrier = Barrier(2)
     lock = Lock()

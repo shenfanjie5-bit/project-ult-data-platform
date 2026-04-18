@@ -6,7 +6,7 @@ import shutil
 import subprocess
 import sys
 import threading
-from datetime import date
+from datetime import UTC, date, datetime, timedelta
 from pathlib import Path
 from typing import Any
 from uuid import UUID
@@ -240,6 +240,43 @@ def test_concurrent_daily_refresh_same_date_fails_before_raw_dbt_and_canonical(
     )
     assert len(stock_basic_manifest["artifacts"]) == 1
     assert UUID(stock_basic_manifest["artifacts"][0]["run_id"]).version == 4
+
+
+def test_daily_refresh_reclaims_stale_lock(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    _set_daily_refresh_env(monkeypatch, tmp_path)
+    _install_fast_success_stubs(monkeypatch)
+    monkeypatch.setenv("DP_DAILY_REFRESH_LOCK_STALE_SECONDS", "1")
+    settings = daily_refresh._load_settings()
+    lock_path = daily_refresh._refresh_lock_path(settings, PARTITION_DATE)
+    lock_path.parent.mkdir(parents=True, exist_ok=True)
+    lock_path.write_text(
+        json.dumps(
+            {
+                "catalog": settings.iceberg_catalog_name,
+                "partition_date": "20260415",
+                "pid": 999999,
+                "acquired_at": (datetime.now(UTC) - timedelta(seconds=5)).isoformat(),
+            },
+            sort_keys=True,
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+
+    result = daily_refresh.run_daily_refresh(PARTITION_DATE, mock=True)
+
+    assert result.ok is True
+    assert [step.name for step in result.steps] == [
+        "adapter",
+        "dbt_run",
+        "dbt_test",
+        "canonical",
+        "raw_health",
+    ]
+    assert not lock_path.exists()
 
 
 def test_mock_daily_refresh_real_pipeline_repeatable_when_pg_available(

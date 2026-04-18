@@ -23,6 +23,15 @@ IssueSeverity = Literal["error", "warning"]
 
 _PARTITION_RE = re.compile(r"^dt=(?P<partition>\d{8})$")
 _ARTIFACT_EXTENSIONS = (".parquet", ".json.gz")
+_MANIFEST_ARTIFACT_FIELD_TYPES = {
+    "source_id": str,
+    "dataset": str,
+    "partition_date": str,
+    "run_id": str,
+    "path": str,
+    "row_count": int,
+    "written_at": str,
+}
 
 
 @dataclass(frozen=True)
@@ -240,14 +249,15 @@ def _check_partition(
         manifest = _read_partition_manifest(manifest_path, issues)
         if manifest is not None:
             _check_manifest_header(manifest, source_id, dataset, partition_date, manifest_path, issues)
-            artifacts = _read_partition_artifacts(
-                raw_root,
-                source_id,
-                dataset,
-                partition_date,
-                manifest_path,
-                issues,
-            )
+            if _check_manifest_artifact_entries(manifest, manifest_path, issues):
+                artifacts = _read_partition_artifacts(
+                    raw_root,
+                    source_id,
+                    dataset,
+                    partition_date,
+                    manifest_path,
+                    issues,
+                )
 
     _check_duplicate_run_ids(artifacts, issues)
     for artifact in artifacts:
@@ -326,6 +336,50 @@ def _check_manifest_header(
                 ),
             )
         )
+
+
+def _check_manifest_artifact_entries(
+    manifest: dict[str, Any],
+    manifest_path: Path,
+    issues: list[RawHealthIssue],
+) -> bool:
+    artifacts = manifest.get("artifacts")
+    if not isinstance(artifacts, list):
+        return False
+
+    valid = True
+    for index, artifact in enumerate(artifacts):
+        if not isinstance(artifact, dict):
+            issues.append(
+                RawHealthIssue(
+                    severity="error",
+                    path=manifest_path,
+                    code="manifest_artifact_invalid",
+                    message=f"Raw manifest artifacts[{index}] must be a JSON object",
+                )
+            )
+            valid = False
+            continue
+
+        for field_name, field_type in _MANIFEST_ARTIFACT_FIELD_TYPES.items():
+            value = artifact.get(field_name)
+            if isinstance(value, field_type) and not (
+                field_name == "row_count" and isinstance(value, bool)
+            ):
+                continue
+            issues.append(
+                RawHealthIssue(
+                    severity="error",
+                    path=manifest_path,
+                    code="manifest_artifact_invalid",
+                    message=(
+                        f"Raw manifest artifacts[{index}].{field_name} must be "
+                        f"{field_type.__name__}"
+                    ),
+                )
+            )
+            valid = False
+    return valid
 
 
 def _read_partition_artifacts(
@@ -452,7 +506,8 @@ def _resolve_artifact_path(
 ) -> Path | None:
     path = artifact_path.expanduser()
     if not path.is_absolute():
-        path = raw_root / path
+        if not _path_is_under(path, raw_root):
+            path = raw_root / path
     if not _path_is_under(path, raw_root):
         issues.append(
             RawHealthIssue(

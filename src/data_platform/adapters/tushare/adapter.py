@@ -40,6 +40,9 @@ FINANCIAL_REQUIRED_FIELDS = (
     FINANCIAL_VERSION_FIELDS[0],
     FINANCIAL_VERSION_FIELDS[1],
     FINANCIAL_VERSION_FIELDS[3],
+    FINANCIAL_VERSION_FIELDS[4],
+    FINANCIAL_VERSION_FIELDS[5],
+    FINANCIAL_VERSION_FIELDS[6],
 )
 FINANCIAL_DATE_FIELDS = frozenset({"ann_date", "f_ann_date", "end_date"})
 STOCK_TS_CODE_DATASETS = frozenset(
@@ -79,6 +82,10 @@ class AdapterConfigError(RuntimeError):
 
 class UpstreamSchemaError(ValueError):
     """Raised when an upstream Tushare response does not match the declared schema."""
+
+
+class UpstreamDataQualityError(ValueError):
+    """Raised when upstream Tushare values violate the Raw contract."""
 
 
 class UpstreamEmptyResult(ValueError):
@@ -395,7 +402,12 @@ def _to_financial_table(dataset: str, result: Any, schema: pa.Schema) -> pa.Tabl
 
     rows = _financial_records_from_result(result, asset)
     normalized_rows = _normalize_financial_records(rows, asset)
-    _validate_asset_records(normalized_rows, asset, FINANCIAL_REQUIRED_FIELDS)
+    try:
+        _validate_asset_records(normalized_rows, asset, FINANCIAL_REQUIRED_FIELDS)
+    except UpstreamSchemaError:
+        raise
+    except ValueError as exc:
+        raise UpstreamDataQualityError(str(exc)) from exc
     columns = {
         field.name: [row[field.name] for row in normalized_rows]
         for field in asset.schema
@@ -544,7 +556,7 @@ def _normalize_decimal(
             f"Tushare {asset.dataset} row {row_index} has invalid numeric field: "
             f"{field_name}"
         )
-        raise ValueError(msg) from exc
+        raise UpstreamDataQualityError(msg) from exc
 
 
 def _validate_asset_records(
@@ -736,6 +748,8 @@ def _error_type(exc: BaseException) -> str:
     cause = exc.cause if isinstance(exc, AdapterFetchError) else exc
     if isinstance(cause, AdapterConfigError):
         return "config_error"
+    if isinstance(cause, UpstreamDataQualityError):
+        return "upstream_data_quality"
     if isinstance(cause, UpstreamSchemaError):
         return "upstream_missing_columns"
     if isinstance(cause, UpstreamEmptyResult):
@@ -871,6 +885,7 @@ __all__ = [
     "AdapterConfigError",
     "TOKEN_ENV_VAR",
     "TushareAdapter",
+    "UpstreamDataQualityError",
     "_to_event_table",
     "_to_financial_table",
     "_to_reference_table",

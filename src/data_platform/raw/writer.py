@@ -409,7 +409,13 @@ def _read_manifest(manifest_path: Path) -> dict[str, Any]:
 def _manifest_artifacts(manifest: dict[str, Any]) -> list[dict[str, Any]]:
     artifacts = manifest.get("artifacts")
     if isinstance(artifacts, list):
-        return [artifact for artifact in artifacts if isinstance(artifact, dict)]
+        validated_artifacts: list[dict[str, Any]] = []
+        for index, artifact in enumerate(artifacts):
+            if not isinstance(artifact, dict):
+                msg = f"raw manifest artifact at index {index} must be a JSON object"
+                raise ValueError(msg)
+            validated_artifacts.append(artifact)
+        return validated_artifacts
     if "run_id" in manifest:
         return [manifest]
     return []

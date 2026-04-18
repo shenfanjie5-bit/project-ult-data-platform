@@ -280,6 +280,7 @@ def load_canonical_table(
 ) -> WriteResult:
     """Load one DuckDB relation into its canonical Iceberg table via full overwrite."""
 
+    _reject_public_mart_load(spec)
     start = perf_counter()
     prepared = _prepare_canonical_load(
         catalog,
@@ -289,6 +290,18 @@ def load_canonical_table(
     )
     result, _refreshed_table = _overwrite_prepared_load(prepared, started_at=start)
     return result
+
+
+def _reject_public_mart_load(spec: CanonicalLoadSpec) -> None:
+    mart_identifiers = {mart_spec.identifier for mart_spec in CANONICAL_MART_LOAD_SPECS}
+    if spec.identifier not in mart_identifiers:
+        return
+
+    msg = (
+        f"{spec.identifier} is part of the canonical mart snapshot set; "
+        "publish marts with load_canonical_marts"
+    )
+    raise ValueError(msg)
 
 
 def _prepare_canonical_load(

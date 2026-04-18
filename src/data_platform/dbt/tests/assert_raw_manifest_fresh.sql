@@ -32,9 +32,17 @@ raw_artifacts as (
     cross join unnest(raw_manifest_files.artifacts) as artifact_item(artifact)
 ),
 
+raw_parquet_files as (
+    select file as artifact_file
+    from glob(
+        '{{ env_var("DP_RAW_ZONE_PATH", "./data_platform/raw").rstrip("/") }}/tushare/*/**/*.parquet'
+    )
+),
+
 validated as (
     select
-        *,
+        raw_artifacts.*,
+        raw_parquet_files.artifact_file is not null as artifact_exists,
         regexp_matches(
             lower(source_run_id),
             '^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$'
@@ -48,6 +56,12 @@ validated as (
             '^[0-7][0-9A-HJKMNP-TV-Z]{25}$'
         ) as has_valid_run_id
     from raw_artifacts
+    left join raw_parquet_files
+        on raw_parquet_files.artifact_file = raw_artifacts.artifact_path
+        or raw_parquet_files.artifact_file = (
+            '{{ env_var("DP_RAW_ZONE_PATH", "./data_platform/raw").rstrip("/") }}/'
+            || raw_artifacts.artifact_path
+        )
 )
 
 select
@@ -58,7 +72,8 @@ select
     source_run_id,
     artifact_path,
     row_count,
-    raw_loaded_at
+    raw_loaded_at,
+    artifact_exists
 from validated
 where manifest_source_id != artifact_source_id
    or manifest_dataset != artifact_dataset
@@ -71,6 +86,7 @@ where manifest_source_id != artifact_source_id
    or has_valid_run_id is not true
    or artifact_path is null
    or trim(artifact_path) = ''
+   or artifact_exists is not true
    or row_count is null
    or row_count < 0
    or raw_loaded_at is null

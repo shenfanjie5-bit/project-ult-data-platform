@@ -142,6 +142,11 @@ def plan_schema_evolution(
                 f"add required column is not supported for {table_identifier}.{name}"
             )
             continue
+        try:
+            _pyarrow_type_to_iceberg(target_field.type)
+        except TypeError as exc:
+            rejections.append(f"{table_identifier}.{name}: {exc}")
+            continue
         changes.append(
             SchemaChange(
                 kind="add_column",

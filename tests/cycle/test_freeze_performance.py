@@ -401,7 +401,7 @@ def _validation_status_counts(engine: Any) -> dict[str, int]:
                 """
             )
         )
-    return {str(row[0]): int(row[1]) for row in rows}
+        return {str(row[0]): int(row[1]) for row in rows}
 
 
 def _create_engine(dsn: str, **kwargs: object) -> Any:

@@ -220,20 +220,35 @@ def test_load_canonical_marts_preflights_all_relations_before_overwrite(
 
 
 def test_load_canonical_table_rejects_missing_relation_column(tmp_path: Path) -> None:
-    catalog = create_catalog(tmp_path, [CANONICAL_MART_TABLE_SPECS[0]])
-    duckdb_path = tmp_path / "marts.duckdb"
-    write_mart_relations(duckdb_path)
+    catalog = create_stock_basic_catalog(tmp_path)
+    duckdb_path = tmp_path / "staging.duckdb"
+    write_staging_stock_basic(duckdb_path, stock_basic_rows())
     bad_spec = CanonicalLoadSpec(
-        identifier="canonical.dim_security",
-        duckdb_relation="mart_dim_security",
+        identifier=CANONICAL_STOCK_BASIC_IDENTIFIER,
+        duckdb_relation="stg_stock_basic",
         required_columns=(
-            *CANONICAL_MART_LOAD_SPECS[0].required_columns,
+            *canonical_writer.STOCK_BASIC_LOAD_SPEC.required_columns,
             "missing_from_target",
         ),
     )
 
     with pytest.raises(duckdb.Error, match="missing_from_target"):
         load_canonical_table(catalog, duckdb_path, bad_spec)  # type: ignore[arg-type]
+
+    assert catalog.load_table(CANONICAL_STOCK_BASIC_IDENTIFIER).current_snapshot() is None
+
+
+def test_load_canonical_table_rejects_public_single_mart_publish(tmp_path: Path) -> None:
+    catalog = create_catalog(tmp_path, [CANONICAL_MART_TABLE_SPECS[0]])
+    duckdb_path = tmp_path / "marts.duckdb"
+    write_mart_relations(duckdb_path)
+
+    with pytest.raises(ValueError, match="publish marts with load_canonical_marts"):
+        load_canonical_table(  # type: ignore[arg-type]
+            catalog,
+            duckdb_path,
+            CANONICAL_MART_LOAD_SPECS[0],
+        )
 
     assert catalog.load_table("canonical.dim_security").current_snapshot() is None
 

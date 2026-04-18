@@ -49,6 +49,29 @@ def test_check_raw_zone_accepts_rawwriter_parquet_and_json(tmp_path: Path) -> No
     assert report.issues == []
 
 
+def test_check_raw_zone_accepts_rawwriter_relative_manifest_paths(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.chdir(tmp_path)
+    raw_zone_path = Path("relative_raw")
+    writer = _raw_writer(raw_zone_path, tmp_path)
+
+    writer.write_arrow(
+        SOURCE_ID,
+        DATASET,
+        PARTITION_DATE,
+        str(uuid.uuid4()),
+        _stock_basic_table(),
+    )
+
+    report = check_raw_zone(raw_zone_path, deep=True)
+
+    assert report.ok is True
+    assert report.checked_artifacts == 1
+    assert report.issues == []
+
+
 def test_check_raw_zone_reports_invalid_run_id(tmp_path: Path) -> None:
     raw_zone_path = tmp_path / "raw"
     run_id = "not-a-valid-run-id"
@@ -160,6 +183,40 @@ def test_check_raw_zone_reports_bad_manifest(tmp_path: Path) -> None:
     report = check_raw_zone(raw_zone_path)
 
     assert "manifest_parse_error" in _issue_codes(report)
+    assert report.ok is False
+
+
+def test_check_raw_zone_reports_malformed_manifest_artifact_entry(
+    tmp_path: Path,
+) -> None:
+    raw_zone_path = tmp_path / "raw"
+    partition_path = _partition_path(raw_zone_path)
+    partition_path.mkdir(parents=True)
+    manifest = {
+        "source_id": SOURCE_ID,
+        "dataset": DATASET,
+        "partition_date": PARTITION_DATE.isoformat(),
+        "artifacts": [
+            "not-an-object",
+            {
+                "source_id": SOURCE_ID,
+                "dataset": DATASET,
+                "partition_date": PARTITION_DATE.isoformat(),
+                "run_id": str(uuid.uuid4()),
+                "path": f"{SOURCE_ID}/{DATASET}/dt=20260415/missing.parquet",
+                "row_count": "3",
+                "written_at": "2026-04-15T01:00:00+00:00",
+            },
+        ],
+    }
+    (partition_path / "_manifest.json").write_text(
+        json.dumps(manifest, indent=2, sort_keys=True) + "\n",
+        encoding="utf-8",
+    )
+
+    report = check_raw_zone(raw_zone_path)
+
+    assert _issue_codes(report) == {"manifest_artifact_invalid"}
     assert report.ok is False
 
 

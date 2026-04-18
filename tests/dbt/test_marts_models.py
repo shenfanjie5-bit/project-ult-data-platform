@@ -252,6 +252,83 @@ def test_price_mart_rejects_malformed_numeric_values() -> None:
         connection.close()
 
 
+def test_security_mart_rejects_malformed_numeric_values() -> None:
+    duckdb = pytest.importorskip("duckdb")
+
+    connection = duckdb.connect(":memory:")
+    try:
+        connection.execute(
+            """
+            create table int_security_master (
+                ts_code varchar,
+                symbol varchar,
+                name varchar,
+                market varchar,
+                industry varchar,
+                list_date date,
+                is_active boolean,
+                area varchar,
+                fullname varchar,
+                exchange varchar,
+                curr_type varchar,
+                list_status varchar,
+                delist_date date,
+                setup_date date,
+                province varchar,
+                city varchar,
+                reg_capital varchar,
+                employees varchar,
+                main_business varchar,
+                latest_namechange_name varchar,
+                latest_namechange_start_date date,
+                latest_namechange_end_date date,
+                latest_namechange_ann_date date,
+                latest_namechange_reason varchar,
+                source_run_id varchar,
+                raw_loaded_at timestamp
+            )
+            """
+        )
+        connection.execute(
+            """
+            insert into int_security_master values (
+                '000001.SZ',
+                '000001',
+                'Ping An Bank',
+                'Main',
+                'Bank',
+                date '1991-04-03',
+                true,
+                'Shenzhen',
+                'Ping An Bank Co Ltd',
+                'SZSE',
+                'CNY',
+                'L',
+                null,
+                date '1987-12-22',
+                'Guangdong',
+                'Shenzhen',
+                'not-a-decimal',
+                '100',
+                'Banking',
+                'Ping An Bank',
+                date '2020-01-01',
+                null,
+                date '2020-01-01',
+                'rename',
+                'run-001',
+                timestamp '2026-04-15 10:30:00'
+            )
+            """
+        )
+        model_sql = _render_mart_model("mart_dim_security")
+
+        with pytest.raises(duckdb.Error, match="not-a-decimal"):
+            connection.execute(f'create table "mart_dim_security" as {model_sql}')
+    finally:
+        connection.close()
+
+
 def test_dbt_run_and_test_marts_with_rawwriter_fixture(tmp_path: Path) -> None:
     require_working_dbt()
 

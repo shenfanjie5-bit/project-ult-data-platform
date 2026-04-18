@@ -26,7 +26,7 @@ pytest -m spike tests/spike/test_iceberg_write_chain.py -v
 
 - Completed cases: 0/3
 - Conclusion: pending
-- Passing run conclusion: P1a Iceberg 写入链 spike 成功率: 100%
+- Passing run conclusion: pending
 
 ## Risk Notes
 

@@ -1,4 +1,3 @@
-from collections.abc import Generator
 from pathlib import Path
 from shutil import copyfile
 
@@ -8,24 +7,8 @@ from pydantic import ValidationError
 from data_platform.config import get_settings, reset_settings_cache
 
 
-PROJECT_ROOT = Path(__file__).resolve().parents[1]
-DP_ENV_KEYS = [
-    "DP_PG_DSN",
-    "DP_RAW_ZONE_PATH",
-    "DP_ICEBERG_WAREHOUSE_PATH",
-    "DP_DUCKDB_PATH",
-    "DP_ICEBERG_CATALOG_NAME",
-    "DP_ENV",
-]
-
-
-@pytest.fixture(autouse=True)
-def isolated_settings_cache(monkeypatch: pytest.MonkeyPatch) -> Generator[None]:
-    reset_settings_cache()
-    for key in DP_ENV_KEYS:
-        monkeypatch.delenv(key, raising=False)
-    yield
-    reset_settings_cache()
+PROJECT_ROOT = Path(__file__).resolve().parents[2]
+pytestmark = pytest.mark.usefixtures("isolated_settings_cache")
 
 
 def set_required_env(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:

@@ -19,9 +19,10 @@ from data_platform.ddl.iceberg_tables import (
 from data_platform.serving import reader
 from data_platform.serving.canonical_writer import (
     CANONICAL_MART_LOAD_SPECS,
+    _overwrite_prepared_load,
+    _prepare_canonical_load,
     load_canonical_marts,
     load_canonical_stock_basic,
-    load_canonical_table,
 )
 from data_platform.serving.reader import (
     CanonicalTableNotFound,
@@ -343,11 +344,11 @@ def test_read_canonical_uses_mart_snapshot_set_manifest(
         connection.execute("UPDATE mart_fact_price_bar SET freq = 'weekly'")
     finally:
         connection.close()
-    load_canonical_table(
+    _write_unpublished_mart_head(
         catalog,
         duckdb_path,
         CANONICAL_MART_LOAD_SPECS[2],
-    )  # type: ignore[arg-type]
+    )
 
     monkeypatch.setattr(
         reader,
@@ -383,11 +384,11 @@ def test_read_canonical_rejects_unpublished_mart_head(
     catalog = create_catalog(tmp_path, [CANONICAL_MART_TABLE_SPECS[2]])
     duckdb_path = tmp_path / "marts.duckdb"
     write_mart_relations(duckdb_path)
-    load_canonical_table(
+    _write_unpublished_mart_head(
         catalog,
         duckdb_path,
         CANONICAL_MART_LOAD_SPECS[2],
-    )  # type: ignore[arg-type]
+    )
 
     monkeypatch.setattr(
         reader,
@@ -445,6 +446,20 @@ def stock_basic_rows() -> list[StockBasicRow]:
             loaded_at,
         ),
     ]
+
+
+def _write_unpublished_mart_head(
+    catalog: object,
+    duckdb_path: Path,
+    spec: object,
+) -> None:
+    prepared = _prepare_canonical_load(  # type: ignore[arg-type]
+        catalog,
+        duckdb_path,
+        spec,
+        allow_empty=False,
+    )
+    _overwrite_prepared_load(prepared, started_at=0.0)
 
 
 def price_bar_rows() -> list[tuple[str, date, str, str, str, str, datetime, datetime]]:

@@ -34,6 +34,17 @@ def test_plan_schema_evolution_add_column_requires_backfill() -> None:
     assert plan.requires_backfill is True
 
 
+def test_plan_schema_evolution_rejects_unsupported_add_column_type() -> None:
+    current_schema = pa.schema([pa.field("ts_code", pa.string())])
+    target_schema = current_schema.append(pa.field("aliases", pa.list_(pa.string())))
+
+    plan = plan_schema_evolution("canonical.stock_basic", current_schema, target_schema)
+
+    assert plan.changes == []
+    assert plan.requires_backfill is False
+    assert any("unsupported PyArrow type" in rejection for rejection in plan.rejections)
+
+
 def test_plan_schema_evolution_allows_whitelisted_type_widening() -> None:
     current_schema = pa.schema(
         [
