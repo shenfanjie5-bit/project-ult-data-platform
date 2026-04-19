@@ -4,8 +4,8 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "project-ult-data-platform"
-version = "0.1.0"
-description = "Scaffold workspace for data-platform."
+version = "0.1.1"
+description = "Layer A canonical truth + Raw/Canonical/Formal serving + Layer B ingestion for project-ult."
 readme = "README.md"
 requires-python = ">=3.12"
 dependencies = [
@@ -23,12 +23,25 @@ dependencies = [
 ]
 
 [project.optional-dependencies]
+# Pure-pip dev tools — offline-first per SUBPROJECT_TESTING_STANDARD.md §2.2.
+# Used by test-fast / smoke CI lanes. Never includes git+URL deps.
 dev = [
     "pytest>=8,<10",
     "pytest-cov>=5,<8",
     "ruff>=0.6,<1",
     "mypy>=1.10,<2",
     "pre-commit>=3.7,<5",
+]
+# Cross-repo schema source-of-truth pin (iron rule #6 + main-core
+# stage 2.3 follow-up #1 sub-rule). Required by tests/contract/
+# test_contracts_alignment.py for cross-repo enum alignment.
+contracts-schemas = [
+    "project-ult-contracts @ git+https://github.com/shenfanjie5-bit/project-ult-contracts.git@v0.1.2",
+]
+# Shared regression fixtures bundled with project-ult-audit-eval.
+# Pinned to v0.2.1 (real sha256 fixture hashes; iron rule #6).
+shared-fixtures = [
+    "project-ult-audit-eval @ git+https://github.com/shenfanjie5-bit/project-ult-audit-eval.git@v0.2.1",
 ]
 
 [tool.setuptools]

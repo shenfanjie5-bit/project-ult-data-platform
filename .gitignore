@@ -1,19 +1,9 @@
-.orchestrator/
-.env
-.env.*
-!.env.example
+# Python bytecode
 __pycache__/
-*.py[cod]
-.venv/
-.pytest_cache/
-.mypy_cache/
-.ruff_cache/
+*.pyc
+*.pyo
 *.egg-info/
 build/
 dist/
-.coverage
-htmlcov/
-src/data_platform/dbt/profiles.yml
-src/data_platform/dbt/target/
-src/data_platform/dbt/logs/
-src/data_platform/dbt/dbt_packages/
+.venv/
+PROJECT_REPORT.md
