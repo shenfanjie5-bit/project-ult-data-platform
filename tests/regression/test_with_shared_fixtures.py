@@ -68,21 +68,27 @@ class TestManifestDeclaresFourFormalTables:
             )
 
 
-class TestRuntimeManifestModelAcceptsFixtureSnapshotIds:
-    """**This is the real-runtime regression** (iron rule #5).
+class TestFixtureManifestSemanticShape:
+    """**Fixture self-check** (NOT runtime regression).
 
-    For every minimal_cycle case, take the fixture's stored snapshot ids
-    and assert ``data_platform.cycle.manifest`` runtime model can
-    consume them — drift in the manifest schema or fixture would
-    surface here, not in audit-eval replay or assembly e2e.
+    The ``cycle_publish_manifest`` payload in the audit-eval shared
+    fixtures is the **business-readable semantic layer**: snapshot_id
+    is a string like ``"WS_CYC_2025_01_03"`` (audit-eval's stable
+    cross-module identifier) and table keys lack the ``formal.``
+    namespace prefix.
 
-    Specifically: build a per-table snapshot mapping
-    ``{table_name: snapshot_id}`` from fixture, then assert each entry
-    is a non-empty string (data-platform's manifest schema requires
-    snapshot_id to be a non-empty identifier).
+    The data-platform runtime layer (``data_platform.cycle.manifest``)
+    uses a *different* schema: snapshot_id is a positive integer
+    (Iceberg snapshot ID) and table keys must start with ``formal.``.
+    The two layers are deliberately decoupled — the fixture is what
+    audit / replay / business consumers see, the runtime int is internal.
+
+    This class validates ONLY the fixture's own semantic shape.
+    Runtime validator coverage is in ``TestRuntimeManifestValidatorPath``
+    below (codex stage-2.4 follow-up #2 fix).
     """
 
-    def test_every_case_snapshot_ids_are_well_formed(self) -> None:
+    def test_every_case_snapshot_ids_are_well_formed_strings(self) -> None:
         exercised_at_least_one = False
         for ref in iter_cases("minimal_cycle"):
             case = load_case(ref.pack_name, ref.case_id)
@@ -102,13 +108,146 @@ class TestRuntimeManifestModelAcceptsFixtureSnapshotIds:
                 assert snapshot_id, (
                     f"{ref.case_id}: tables.{table_name} missing snapshot_id"
                 )
+                # Fixture-side: snapshot_id is a business-readable str.
+                # Runtime-side: it is a positive int — see
+                # TestRuntimeManifestValidatorPath below.
                 assert isinstance(snapshot_id, str), (
-                    f"{ref.case_id}: snapshot_id must be str, "
-                    f"got {type(snapshot_id).__name__}"
+                    f"{ref.case_id}: fixture snapshot_id must be str "
+                    f"(business semantic layer); got "
+                    f"{type(snapshot_id).__name__}"
                 )
 
         assert exercised_at_least_one, (
             "expected at least one minimal_cycle case with manifest tables"
+        )
+
+
+class TestRuntimeManifestValidatorPath:
+    """**Real-runtime regression** (iron rule #5, codex stage-2.4 follow-up #2).
+
+    Imports + invokes ``data_platform.cycle.manifest`` runtime symbols
+    and asserts they accept a *runtime-shaped* manifest derived from
+    each fixture, AND reject the fixture's *semantic-shape* string
+    snapshot_ids.
+
+    The fixture's table-key set is **derived** from
+    ``case.expected.cycle_publish_manifest.tables.keys()`` — not
+    hard-coded — so adding/removing tables in the fixture automatically
+    flows into the runtime construction (codex non-blocking suggestion).
+
+    Key bridging points fixture → runtime:
+      - fixture cycle_id ``CYC_YYYY_MM_DD_DAILY`` (semantic)
+        → runtime cycle_id ``CYCLE_YYYYMMDD`` (validator pattern)
+      - fixture table key ``world_state_snapshot`` (semantic)
+        → runtime table key ``formal.world_state_snapshot``
+          (namespace-prefixed)
+      - fixture snapshot_id ``"WS_CYC_2025_01_03"`` (business id)
+        → runtime snapshot_id ``1`` (Iceberg int; assigned via enumerate)
+    """
+
+    @staticmethod
+    def _runtime_cycle_id_for(case_input: dict) -> str:
+        """Fixture cycle_id is ``CYC_YYYY_MM_DD_DAILY`` (semantic);
+        runtime ``_cycle_date_from_id`` requires ``CYCLE_YYYYMMDD``.
+        Use the fixture's trade_date as the canonical bridge.
+        """
+        trade_date = case_input["trade_date"]  # e.g. "2025-01-03"
+        compact = trade_date.replace("-", "")  # "20250103"
+        return f"CYCLE_{compact}"
+
+    def test_runtime_validator_accepts_fixture_derived_runtime_manifest(
+        self,
+    ) -> None:
+        from datetime import datetime, timezone
+
+        from data_platform.cycle.manifest import (
+            CyclePublishManifest,
+            FormalTableSnapshot,
+        )
+
+        exercised_at_least_one = False
+        for ref in iter_cases("minimal_cycle"):
+            case = load_case(ref.pack_name, ref.case_id)
+            tables = case.expected.get("cycle_publish_manifest", {}).get(
+                "tables", {}
+            )
+            if not tables:
+                continue
+            exercised_at_least_one = True
+
+            runtime_cycle_id = self._runtime_cycle_id_for(case.input)
+
+            # Derive the runtime payload from fixture's tables.keys() —
+            # NOT hard-coded — so a future fixture with N tables keeps
+            # the regression honest.
+            runtime_snapshots = {
+                f"formal.{table_key}": FormalTableSnapshot(
+                    table=f"formal.{table_key}",
+                    snapshot_id=i,
+                )
+                for i, table_key in enumerate(tables.keys(), start=1)
+            }
+
+            manifest = CyclePublishManifest(
+                published_cycle_id=runtime_cycle_id,
+                published_at=datetime.now(timezone.utc),
+                formal_table_snapshots=runtime_snapshots,
+            )
+
+            assert manifest.published_cycle_id == runtime_cycle_id
+            assert len(manifest.formal_table_snapshots) == len(tables), (
+                f"{ref.case_id}: runtime manifest has "
+                f"{len(manifest.formal_table_snapshots)} tables, "
+                f"fixture has {len(tables)}"
+            )
+            for runtime_key in manifest.formal_table_snapshots:
+                assert runtime_key.startswith("formal."), runtime_key
+                stripped = runtime_key.removeprefix("formal.")
+                assert stripped in tables, (
+                    f"{ref.case_id}: runtime table {runtime_key!r} not in "
+                    f"fixture tables {set(tables)!r}"
+                )
+                assert isinstance(
+                    manifest.formal_table_snapshots[runtime_key].snapshot_id,
+                    int,
+                ), "runtime snapshot_id must be int"
+
+        assert exercised_at_least_one, (
+            "expected at least one minimal_cycle case with manifest tables"
+        )
+
+    def test_runtime_validator_rejects_fixture_string_snapshot_ids(self) -> None:
+        """Reverse-proof the two-layer split: feeding the fixture's
+        business-string snapshot_id directly to ``validate_snapshot_id``
+        must raise. If this passes silently, the runtime validator has
+        loosened — and the two-layer assumption above breaks down.
+        """
+        import pytest
+
+        from data_platform.cycle.manifest import (
+            InvalidFormalSnapshotManifest,
+            validate_snapshot_id,
+        )
+
+        exercised_at_least_one = False
+        for ref in iter_cases("minimal_cycle"):
+            case = load_case(ref.pack_name, ref.case_id)
+            tables = case.expected.get("cycle_publish_manifest", {}).get(
+                "tables", {}
+            )
+            if not tables:
+                continue
+
+            for _, table_meta in tables.items():
+                fixture_snapshot_id = table_meta["snapshot_id"]
+                assert isinstance(fixture_snapshot_id, str)
+                exercised_at_least_one = True
+                with pytest.raises(InvalidFormalSnapshotManifest):
+                    validate_snapshot_id(fixture_snapshot_id)
+
+        assert exercised_at_least_one, (
+            "expected at least one fixture string snapshot_id to challenge "
+            "the runtime validator"
         )
 
 

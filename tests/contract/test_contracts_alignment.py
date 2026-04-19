@@ -71,22 +71,62 @@ class TestFormalObjectNameEnumCoverage:
 
 
 class TestFormalObjectContainerAcceptsCanonicalNames:
-    """data_platform.serving.formal.FormalObject is a typed container
-    used to return read results. It must accept the canonical
-    object_type strings as plain str values (it is a dataclass with
-    object_type: str — verified by its source per stage-2.4 review).
+    """``data_platform.serving.formal.FormalObject`` is a typed container
+    used to return read results. It must **really accept** every
+    canonical name from contracts ``FormalObjectName``, not just expose
+    a generically-typed field (codex stage-2.4 follow-up #2 fix).
+
+    The previous version of this test only checked that the
+    ``object_type`` field existed. A drift that narrowed
+    ``object_type`` to an enum type, or added stricter runtime
+    validation, would have slipped through. Now we round-trip every
+    canonical FormalObjectName through a real ``FormalObject`` instance
+    construction, so the alignment is exercised end-to-end.
     """
 
-    def test_formal_object_container_object_type_is_str(self) -> None:
-        from data_platform.serving.formal import FormalObject
-        import dataclasses
-        import typing
+    @staticmethod
+    def _minimal_pa_table_payload():
+        # Construct a minimal pyarrow table for the FormalObject payload
+        # field (the runtime container's payload type per its dataclass).
+        import pyarrow as pa
 
-        # Locate the object_type field annotation.
-        if dataclasses.is_dataclass(FormalObject):
-            fields = {f.name: f.type for f in dataclasses.fields(FormalObject)}
-        else:
-            fields = typing.get_type_hints(FormalObject)
-        assert "object_type" in fields, (
-            f"FormalObject must expose object_type field; got fields={list(fields)}"
-        )
+        return pa.table({"placeholder": [1]})
+
+    def test_each_canonical_name_can_be_carried_by_formal_object(self) -> None:
+        from contracts.schemas.formal_objects import FormalObjectName
+        from data_platform.serving.formal import FormalObject
+
+        payload = self._minimal_pa_table_payload()
+
+        # Real instantiation per canonical FormalObjectName value.
+        # If a future drift narrows object_type to a Literal-of-enum or
+        # adds rejection logic, at least one of these will fail.
+        constructed = []
+        for member in FormalObjectName:
+            instance = FormalObject(
+                cycle_id="CYCLE_20250103",
+                object_type=member.value,
+                snapshot_id=1,
+                payload=payload,
+            )
+            assert instance.object_type == member.value, (
+                f"FormalObject did not preserve object_type {member.value!r}"
+            )
+            assert instance.cycle_id == "CYCLE_20250103"
+            assert instance.snapshot_id == 1
+            constructed.append(member.value)
+
+        # Sanity floor: there must be at least the 4 core canonical names
+        # main-core declares (world_state / official_alpha_pool /
+        # alpha_result / recommendation). If FormalObjectName shrinks
+        # below this, downstream main-core publish breaks.
+        for required in (
+            "world_state_snapshot",
+            "official_alpha_pool",
+            "alpha_result_snapshot",
+            "recommendation_snapshot",
+        ):
+            assert required in constructed, (
+                f"FormalObjectName missing canonical name {required!r}; "
+                f"main-core publishing would have nowhere to map it"
+            )
