@@ -1,0 +1,16 @@
+{
+  "artifacts": [
+    {
+      "dataset": "monthly",
+      "partition_date": "2026-04-15",
+      "path": "tushare/monthly/dt=20260415/aa0b0001-0000-4000-9000-000000000002.parquet",
+      "row_count": 8,
+      "run_id": "aa0b0001-0000-4000-9000-000000000002",
+      "source_id": "tushare",
+      "written_at": "2026-04-15T01:00:00+00:00"
+    }
+  ],
+  "dataset": "monthly",
+  "partition_date": "2026-04-15",
+  "source_id": "tushare"
+}
