@@ -41,8 +41,15 @@ PYTHONPATH=src .venv/bin/python scripts/external_smoke_tushare_corpus.py
 
 | Name | Default | Effect |
 |---|---|---|
-| `DP_EXTERNAL_CORPUS_ROOT` | `/Volumes/dockcase2tb/database_all` | Override the corpus root (useful on a secondary machine or if the drive mounts elsewhere). |
+| `DP_EXTERNAL_CORPUS_ROOT` | `/Volumes/dockcase2tb/database_all` | Override the corpus root. The target **must be a structural mirror of the default mount**: same dataset paths relative to the root + same audit CSV at `_workspace/_meta/analysis/api_download_completeness_audit_20260420.csv`. The `fixture_traceability` check remaps declared absolute paths into the override root before resolving, so override targets that structurally mirror the default pass cleanly; it fails only if the remapped target doesn't resolve (genuine corpus defect), not on the root string itself differing. |
 | `DP_EXTERNAL_SMOKE_STRICT` | unset | When `1` / `true` / `yes`, treats "drive unmounted" as a hard failure (exit 1). Default is skip-on-unmount (exit 0) so scheduled runs don't alert when the drive is unplugged. |
+
+**Override caveat**: The script does NOT support an override pointing
+at a corpus with a *different* internal structure (flattened layout,
+renamed subdirectories, partial mirror with missing datasets, etc.).
+Those cases surface as failures in check 3 (`dataset_presence`) and
+check 6 (`fixture_traceability`) as they should — copying or
+reorganizing a corpus mirror is outside this smoke's concern.
 
 ## Exit codes
 

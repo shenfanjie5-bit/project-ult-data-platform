@@ -75,26 +75,38 @@ AUDIT_CSV_RELPATH = Path(
     "_workspace/_meta/analysis/api_download_completeness_audit_20260420.csv"
 )
 
-#: Datasets Phase B actively consumes. Each dataset's dataset_path lives
-#: in the audit CSV (column name "dataset_path"), and the audit CSV
-#: also carries the required completeness fields.
-REQUIRED_DATASETS: tuple[str, ...] = (
+#: Datasets Phase B actively consumes. Each entry is
+#: ``(doc_api, dataset_path_prefix_or_None)``:
+#:
+#: - ``doc_api`` maps to the audit CSV's ``doc_api`` column (the key
+#:   tushare.pro uses internally, e.g. "stock_basic", "trade_cal").
+#: - ``dataset_path_prefix`` disambiguates when multiple audit rows
+#:   share the same doc_api. Currently only ``trade_cal`` is
+#:   duplicated (期货数据/交易日历 + 股票数据/基础数据/交易日历);
+#:   the prefix pins it to the stock-side row Phase B depends on.
+#:   Codex review #1 P2 fix: previously this was just ``tuple[str, ...]``
+#:   and the first-win lookup in audit_rows() silently bound trade_cal
+#:   to the futures row.
+#:
+#: If a future dataset enters ``REQUIRED_TS_CODE_PRESENCE`` and it has
+#: duplicate audit CSV rows, update BOTH lists to carry the prefix.
+REQUIRED_DATASETS: tuple[tuple[str, str | None], ...] = (
     # shared case 1.1 (minimal_cycle/case_tushare_one_stock_one_cycle)
-    "stock_basic",
-    "stock_company",
-    "daily",
-    "daily_basic",
-    "trade_cal",
+    ("stock_basic", None),
+    ("stock_company", None),
+    ("daily", None),
+    ("daily_basic", None),
+    ("trade_cal", "股票数据/"),  # reject 期货数据/交易日历; Phase B uses the stock row
     # shared case 1.2 (event_cases/case_tushare_namechange_alias)
-    "namechange",
+    ("namechange", None),
     # entity-registry local fixtures
-    "stock_hsgt",
-    "bse_mapping",
-    "hk_basic",
-    "stk_ah_comparison",
+    ("stock_hsgt", None),
+    ("bse_mapping", None),
+    ("hk_basic", None),
+    ("stk_ah_comparison", None),
     # data-platform local raw fixtures
-    "weekly",
-    "monthly",
+    ("weekly", None),
+    ("monthly", None),
 )
 
 #: ts_codes Phase B fixtures name explicitly. Each tuple is
@@ -168,21 +180,72 @@ class ExternalSmokeContext:
         self.corpus_root = corpus_root
         self.strict_mount = strict_mount
         self.results: list[CheckResult] = []
-        self._audit_rows: dict[str, dict[str, str]] | None = None
+        self._audit_rows: list[dict[str, str]] | None = None
 
-    def audit_rows(self) -> dict[str, dict[str, str]]:
+    def audit_rows(self) -> list[dict[str, str]]:
+        """All audit CSV rows in file order (duplicates preserved).
+
+        Codex review #1 P2 fix: the earlier ``dict[doc_api, row]`` with
+        first-win semantics silently bound ``trade_cal`` to the 期货
+        row while Phase B uses the 股票 row. Callers now iterate and
+        disambiguate explicitly via ``_resolve_audit_row``.
+        """
         if self._audit_rows is not None:
             return self._audit_rows
         path = self.corpus_root / AUDIT_CSV_RELPATH
-        rows: dict[str, dict[str, str]] = {}
+        rows: list[dict[str, str]] = []
         with path.open(encoding="utf-8-sig") as handle:
             reader = csv.DictReader(handle)
             for row in reader:
                 doc_api = (row.get("doc_api") or "").strip()
-                if doc_api and doc_api not in rows:
-                    rows[doc_api] = row
+                if doc_api:
+                    rows.append(row)
         self._audit_rows = rows
         return rows
+
+
+def _resolve_audit_row(
+    rows: list[dict[str, str]],
+    doc_api: str,
+    dataset_path_prefix: str | None = None,
+) -> dict[str, str] | None:
+    """Return the first audit CSV row matching ``doc_api`` (and
+    optionally a ``dataset_path`` prefix). ``None`` if no match.
+
+    Codex review #1 P2 fix: replaces the previous
+    ``rows.get(doc_api)`` pattern that silently lost duplicates.
+    """
+    for row in rows:
+        if (row.get("doc_api") or "").strip() != doc_api:
+            continue
+        if dataset_path_prefix is not None:
+            candidate = (row.get("dataset_path") or "").strip()
+            if not candidate.startswith(dataset_path_prefix):
+                continue
+        return row
+    return None
+
+
+def _remap_to_current_root(
+    declared_abs: str,
+    declared_root: str,
+    current_root: Path,
+) -> Path | None:
+    """If ``declared_abs`` is a descendant of ``declared_root``, return
+    the equivalent path under ``current_root``. Return ``None`` if the
+    declared path is not under the declared root (that's a genuine
+    fixture-metadata defect, not an override-compat concern).
+
+    Codex review #1 P2 fix: fixture_traceability used to compare
+    declared absolute paths string-wise against the current corpus
+    root, which falsely failed whenever DP_EXTERNAL_CORPUS_ROOT was
+    overridden to a structurally-identical mirror (e.g. a symlink).
+    """
+    try:
+        relative = Path(declared_abs).relative_to(declared_root)
+    except ValueError:
+        return None
+    return current_root / relative
 
 
 # ────────────────────── Checks ──────────────────────
@@ -237,10 +300,11 @@ def check_audit_csv_gate(ctx: ExternalSmokeContext) -> CheckResult:
 
     missing: list[str] = []
     violations: list[str] = []
-    for dataset in REQUIRED_DATASETS:
-        row = rows.get(dataset)
+    for dataset, prefix in REQUIRED_DATASETS:
+        row = _resolve_audit_row(rows, dataset, prefix)
         if row is None:
-            missing.append(dataset)
+            label = f"{dataset} [prefix={prefix!r}]" if prefix else dataset
+            missing.append(label)
             continue
         access = (row.get("access_status") or "").strip()
         completeness = (row.get("completeness_status") or "").strip()
@@ -280,8 +344,8 @@ def check_dataset_presence(ctx: ExternalSmokeContext) -> CheckResult:
         )
 
     missing_paths: list[str] = []
-    for dataset in REQUIRED_DATASETS:
-        row = rows.get(dataset)
+    for dataset, prefix in REQUIRED_DATASETS:
+        row = _resolve_audit_row(rows, dataset, prefix)
         if row is None:
             continue  # audit gate will already have reported this
         dataset_relpath = (row.get("dataset_path") or "").strip()
@@ -318,7 +382,15 @@ def check_ts_code_presence(ctx: ExternalSmokeContext) -> CheckResult:
 
     violations: list[str] = []
     for ts_code, dataset, reason in REQUIRED_TS_CODE_PRESENCE:
-        row = rows.get(dataset)
+        # Pick the same disambiguator the REQUIRED_DATASETS list uses
+        # for this doc_api. If a future entry in this list names a
+        # duplicated dataset, add a 4th tuple field (prefix) here and
+        # thread it through to _resolve_audit_row.
+        prefix = next(
+            (p for d, p in REQUIRED_DATASETS if d == dataset),
+            None,
+        )
+        row = _resolve_audit_row(rows, dataset, prefix)
         if row is None:
             violations.append(
                 f"{ts_code} @ {dataset} ({reason}): dataset missing from audit CSV"
@@ -487,7 +559,11 @@ def check_schema_alignment(ctx: ExternalSmokeContext) -> CheckResult:
 
     violations: list[str] = []
     for dataset, expected in expected_by_dataset.items():
-        row = rows.get(dataset)
+        prefix = next(
+            (p for d, p in REQUIRED_DATASETS if d == dataset),
+            None,
+        )
+        row = _resolve_audit_row(rows, dataset, prefix)
         if row is None:
             violations.append(f"{dataset}: no audit row")
             continue
@@ -586,26 +662,44 @@ def check_fixture_traceability(ctx: ExternalSmokeContext) -> CheckResult:
             )
             continue
 
-        # Compare declared corpus_root with ctx.corpus_root (string
-        # compare — traceability blocks record the absolute path as
-        # it was cut).
-        if Path(declared_corpus_root) != ctx.corpus_root:
-            # Not necessarily a failure (e.g. running with
-            # DP_EXTERNAL_CORPUS_ROOT override on a secondary machine);
-            # report as detail but continue.
+        # Codex review #1 P2 fix: remap declared absolute paths into
+        # the current corpus root instead of string-comparing roots.
+        # The declared corpus_root is fixed when the fixture was cut
+        # (always the default /Volumes/dockcase2tb/database_all); the
+        # current root may be overridden via DP_EXTERNAL_CORPUS_ROOT
+        # to a structurally-identical mirror (symlink, secondary
+        # mount, etc.). Override is a supported mode, not a failure.
+        remapped = _remap_to_current_root(
+            declared_dataset_path, declared_corpus_root, ctx.corpus_root
+        )
+        if remapped is None:
+            # The declared path is not under the declared root — this
+            # is a genuine fixture-metadata defect, unrelated to the
+            # override question.
             violations.append(
-                f"{relpath}: declared corpus_root {declared_corpus_root!r} != current {str(ctx.corpus_root)!r}"
+                f"{relpath}: declared dataset_path {declared_dataset_path!r} is not a "
+                f"descendant of declared corpus_root {declared_corpus_root!r} — "
+                f"fixture metadata is malformed"
+            )
+        elif not remapped.is_dir():
+            extra = ""
+            if Path(declared_corpus_root) != ctx.corpus_root:
+                extra = (
+                    f" (declared root {declared_corpus_root!r} was remapped to "
+                    f"current root {str(ctx.corpus_root)!r} before resolving)"
+                )
+            violations.append(
+                f"{relpath}: dataset_path {declared_dataset_path!r} does not "
+                f"resolve under the current corpus root{extra}"
             )
 
-        # Verify declared dataset_path still resolves to a real directory.
-        if not Path(declared_dataset_path).is_dir():
-            violations.append(
-                f"{relpath}: declared dataset_path {declared_dataset_path!r} not a directory on current mount"
-            )
-
-        # Cross-check each datasets[] entry is accounted for in audit CSV.
+        # Cross-check each datasets[] entry is accounted for in audit
+        # CSV. The fixture's datasets[] list carries bare doc_api
+        # names (no prefix), so any matching row is acceptable here —
+        # the prefix-sensitive binding is already enforced by the
+        # audit_csv_gate + dataset_presence checks above.
         for dataset_name in declared_datasets:
-            if dataset_name not in rows:
+            if _resolve_audit_row(rows, dataset_name, None) is None:
                 violations.append(
                     f"{relpath}: declared dataset {dataset_name!r} not in audit CSV"
                 )
