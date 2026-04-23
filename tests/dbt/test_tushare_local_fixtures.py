@@ -130,7 +130,16 @@ def test_source_json_has_all_eight_traceability_keys(dataset: str) -> None:
 
 
 @pytest.mark.parametrize("dataset", PHASE_B_DATASETS)
-def test_parquet_exists_and_columns_match_tushare_bar_schema(dataset: str) -> None:
+def test_parquet_exists_and_schema_matches_tushare_bar_schema(dataset: str) -> None:
+    """Codex review #1 P3 fix: previously this test only compared
+    column-name SETS — type drift (e.g. ``vol`` switching from string
+    to int64, or ``trade_date`` becoming a ``date32`` column) would
+    pass undetected. Now we assert each column's pyarrow type is
+    bit-identical to ``TUSHARE_BAR_SCHEMA.field(name).type``, which
+    is the contract staging models depend on (TUSHARE_RAW_NUMERIC_TYPE
+    is ``pa.string()``; staging is responsible for the type-cast).
+    """
+
     partition_dir = FIXTURE_ROOT / dataset / PARTITION_DIR
     manifest = json.loads((partition_dir / "_manifest.json").read_text(encoding="utf-8"))
     artifact = manifest["artifacts"][0]
@@ -147,6 +156,25 @@ def test_parquet_exists_and_columns_match_tushare_bar_schema(dataset: str) -> No
     assert actual_columns == expected_columns, (
         f"{dataset} parquet column set drifted from TUSHARE_BAR_SCHEMA: "
         f"expected {sorted(expected_columns)}, got {sorted(actual_columns)}"
+    )
+
+    # Type-level lock-in: every TUSHARE_BAR_SCHEMA-declared column's
+    # pyarrow type must match the parquet column's pyarrow type
+    # exactly. Catching name-only matches with mismatched types is
+    # the precise gap codex review #1 P3 flagged.
+    type_drift: list[str] = []
+    for field_name in TUSHARE_BAR_SCHEMA.names:
+        expected_type = TUSHARE_BAR_SCHEMA.field(field_name).type
+        actual_type = table.schema.field(field_name).type
+        if not actual_type.equals(expected_type):
+            type_drift.append(
+                f"{field_name}: expected {expected_type!s}, got {actual_type!s}"
+            )
+    assert not type_drift, (
+        f"{dataset} parquet column types drifted from TUSHARE_BAR_SCHEMA "
+        f"(staging model TUSHARE_RAW_NUMERIC_TYPE expects pa.string() "
+        f"for all numeric columns; staging is responsible for casting): "
+        f"{type_drift}"
     )
 
 
