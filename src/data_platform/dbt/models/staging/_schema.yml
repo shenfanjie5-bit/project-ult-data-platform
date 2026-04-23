@@ -1070,3 +1070,192 @@ models:
         description: RawWriter manifest written_at timestamp for the selected artifact.
         tests:
           - not_null
+
+  # Plan §5 expansion — 4 new staging models.
+  - name: stg_stk_limit
+    description: Staging view over the latest Raw Zone Tushare stk_limit artifact.
+    tests:
+      - unique_combination_of_columns:
+          combination_of_columns: ["ts_code", "trade_date"]
+    columns:
+      - name: ts_code
+        description: Raw Tushare stk_limit.ts_code staged from the latest manifest artifact.
+        tests:
+          - not_null
+      - name: trade_date
+        description: Raw Tushare stk_limit.trade_date staged from the latest manifest artifact.
+        tests:
+          - not_null
+          - parsable_yyyymmdd_or_date
+      - name: up_limit
+        description: Raw Tushare stk_limit.up_limit staged from the latest manifest artifact.
+      - name: down_limit
+        description: Raw Tushare stk_limit.down_limit staged from the latest manifest artifact.
+      - name: source_run_id
+        description: RawWriter run_id selected from the latest Raw manifest artifact.
+        tests:
+          - not_null
+      - name: raw_loaded_at
+        description: RawWriter manifest written_at timestamp for the selected artifact.
+        tests:
+          - not_null
+  - name: stg_block_trade
+    description: >
+      Staging view over the latest Raw Zone Tushare block_trade artifact.
+      Same (ts_code, trade_date) CAN repeat (multiple block trades same
+      day, distinct buyer/seller/price/vol/amount), so identity widens
+      to the full row shape — this is the same pattern stg_anns uses
+      for (ts_code, ann_date, title, url). Row-level uniqueness is
+      enforced via unique_combination_of_columns.
+    tests:
+      - unique_combination_of_columns:
+          combination_of_columns: ["ts_code", "trade_date", "buyer", "seller", "price", "vol", "amount"]
+    columns:
+      - name: ts_code
+        description: Raw Tushare block_trade.ts_code staged from the latest manifest artifact.
+      - name: trade_date
+        description: Raw Tushare block_trade.trade_date staged from the latest manifest artifact.
+        tests:
+          - not_null
+          - parsable_yyyymmdd_or_date
+      - name: price
+        description: Raw Tushare block_trade.price staged from the latest manifest artifact.
+        tests:
+          - not_null
+      - name: vol
+        description: Raw Tushare block_trade.vol staged from the latest manifest artifact.
+        tests:
+          - not_null
+      - name: amount
+        description: Raw Tushare block_trade.amount staged from the latest manifest artifact.
+        tests:
+          - not_null
+      - name: buyer
+        description: Raw Tushare block_trade.buyer staged from the latest manifest artifact.
+        tests:
+          - not_null
+      - name: seller
+        description: Raw Tushare block_trade.seller staged from the latest manifest artifact.
+        tests:
+          - not_null
+      - name: source_run_id
+        description: RawWriter run_id selected from the latest Raw manifest artifact.
+        tests:
+          - not_null
+      - name: raw_loaded_at
+        description: RawWriter manifest written_at timestamp for the selected artifact.
+        tests:
+          - not_null
+  - name: stg_moneyflow
+    description: Staging view over the latest Raw Zone Tushare moneyflow artifact.
+    tests:
+      - unique_combination_of_columns:
+          combination_of_columns: ["ts_code", "trade_date"]
+    columns:
+      - name: ts_code
+        description: Raw Tushare moneyflow.ts_code staged from the latest manifest artifact.
+        tests:
+          - not_null
+      - name: trade_date
+        description: Raw Tushare moneyflow.trade_date staged from the latest manifest artifact.
+        tests:
+          - not_null
+          - parsable_yyyymmdd_or_date
+      - name: buy_sm_vol
+        description: Raw Tushare moneyflow.buy_sm_vol staged from the latest manifest artifact.
+      - name: buy_sm_amount
+        description: Raw Tushare moneyflow.buy_sm_amount staged from the latest manifest artifact.
+      - name: sell_sm_vol
+        description: Raw Tushare moneyflow.sell_sm_vol staged from the latest manifest artifact.
+      - name: sell_sm_amount
+        description: Raw Tushare moneyflow.sell_sm_amount staged from the latest manifest artifact.
+      - name: buy_md_vol
+        description: Raw Tushare moneyflow.buy_md_vol staged from the latest manifest artifact.
+      - name: buy_md_amount
+        description: Raw Tushare moneyflow.buy_md_amount staged from the latest manifest artifact.
+      - name: sell_md_vol
+        description: Raw Tushare moneyflow.sell_md_vol staged from the latest manifest artifact.
+      - name: sell_md_amount
+        description: Raw Tushare moneyflow.sell_md_amount staged from the latest manifest artifact.
+      - name: buy_lg_vol
+        description: Raw Tushare moneyflow.buy_lg_vol staged from the latest manifest artifact.
+      - name: buy_lg_amount
+        description: Raw Tushare moneyflow.buy_lg_amount staged from the latest manifest artifact.
+      - name: sell_lg_vol
+        description: Raw Tushare moneyflow.sell_lg_vol staged from the latest manifest artifact.
+      - name: sell_lg_amount
+        description: Raw Tushare moneyflow.sell_lg_amount staged from the latest manifest artifact.
+      - name: buy_elg_vol
+        description: Raw Tushare moneyflow.buy_elg_vol staged from the latest manifest artifact.
+      - name: buy_elg_amount
+        description: Raw Tushare moneyflow.buy_elg_amount staged from the latest manifest artifact.
+      - name: sell_elg_vol
+        description: Raw Tushare moneyflow.sell_elg_vol staged from the latest manifest artifact.
+      - name: sell_elg_amount
+        description: Raw Tushare moneyflow.sell_elg_amount staged from the latest manifest artifact.
+      - name: net_mf_vol
+        description: Raw Tushare moneyflow.net_mf_vol staged from the latest manifest artifact.
+      - name: net_mf_amount
+        description: Raw Tushare moneyflow.net_mf_amount staged from the latest manifest artifact.
+      - name: source_run_id
+        description: RawWriter run_id selected from the latest Raw manifest artifact.
+        tests:
+          - not_null
+      - name: raw_loaded_at
+        description: RawWriter manifest written_at timestamp for the selected artifact.
+        tests:
+          - not_null
+  - name: stg_forecast
+    description: >
+      Staging view over the latest Raw Zone Tushare forecast artifact.
+      Multi-version via update_flag; identity = ts_code + ann_date +
+      end_date + update_flag (distinct from FINANCIAL_VERSION_FIELDS —
+      forecast lacks f_ann_date / report_type / comp_type).
+    tests:
+      - unique_combination_of_columns:
+          combination_of_columns: ["ts_code", "ann_date", "end_date", "update_flag"]
+    columns:
+      - name: ts_code
+        description: Raw Tushare forecast.ts_code staged from the latest manifest artifact.
+        tests:
+          - not_null
+      - name: ann_date
+        description: Raw Tushare forecast.ann_date staged from the latest manifest artifact.
+        tests:
+          - not_null
+          - parsable_yyyymmdd_or_date
+      - name: end_date
+        description: Raw Tushare forecast.end_date staged from the latest manifest artifact.
+        tests:
+          - not_null
+          - parsable_yyyymmdd_or_date
+      - name: type
+        description: Raw Tushare forecast.type staged from the latest manifest artifact.
+      - name: p_change_min
+        description: Raw Tushare forecast.p_change_min staged from the latest manifest artifact.
+      - name: p_change_max
+        description: Raw Tushare forecast.p_change_max staged from the latest manifest artifact.
+      - name: net_profit_min
+        description: Raw Tushare forecast.net_profit_min staged from the latest manifest artifact.
+      - name: net_profit_max
+        description: Raw Tushare forecast.net_profit_max staged from the latest manifest artifact.
+      - name: last_parent_net
+        description: Raw Tushare forecast.last_parent_net staged from the latest manifest artifact.
+      - name: first_ann_date
+        description: Raw Tushare forecast.first_ann_date staged from the latest manifest artifact.
+      - name: summary
+        description: Raw Tushare forecast.summary staged from the latest manifest artifact.
+      - name: change_reason
+        description: Raw Tushare forecast.change_reason staged from the latest manifest artifact.
+      - name: update_flag
+        description: Raw Tushare forecast.update_flag staged from the latest manifest artifact.
+        tests:
+          - not_null
+      - name: source_run_id
+        description: RawWriter run_id selected from the latest Raw manifest artifact.
+        tests:
+          - not_null
+      - name: raw_loaded_at
+        description: RawWriter manifest written_at timestamp for the selected artifact.
+        tests:
+          - not_null

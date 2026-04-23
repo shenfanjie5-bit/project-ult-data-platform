@@ -100,3 +100,20 @@ sources:
         description: Tushare fina_indicator parquet files written by RawWriter.
         loader: >
           Raw Zone path pattern: ${DP_RAW_ZONE_PATH}/tushare/fina_indicator/**/*.parquet
+      # Plan §5 expansion
+      - name: tushare_stk_limit
+        description: Tushare stk_limit parquet files written by RawWriter.
+        loader: >
+          Raw Zone path pattern: ${DP_RAW_ZONE_PATH}/tushare/stk_limit/**/*.parquet
+      - name: tushare_block_trade
+        description: Tushare block_trade parquet files written by RawWriter.
+        loader: >
+          Raw Zone path pattern: ${DP_RAW_ZONE_PATH}/tushare/block_trade/**/*.parquet
+      - name: tushare_moneyflow
+        description: Tushare moneyflow parquet files written by RawWriter.
+        loader: >
+          Raw Zone path pattern: ${DP_RAW_ZONE_PATH}/tushare/moneyflow/**/*.parquet
+      - name: tushare_forecast
+        description: Tushare forecast parquet files written by RawWriter.
+        loader: >
+          Raw Zone path pattern: ${DP_RAW_ZONE_PATH}/tushare/forecast/**/*.parquet

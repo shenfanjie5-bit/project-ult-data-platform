@@ -18,6 +18,7 @@ from data_platform.adapters.tushare import (  # noqa: E402
     EVENT_METADATA_FIELDS,
     TUSHARE_ANNS_ASSET,
     TUSHARE_ASSETS,
+    TUSHARE_BLOCK_TRADE_ASSET,
     TUSHARE_DISCLOSURE_DATE_ASSET,
     TUSHARE_DIVIDEND_ASSET,
     TUSHARE_SHARE_FLOAT_ASSET,
@@ -39,6 +40,7 @@ EVENT_ASSETS = [
     TUSHARE_SHARE_FLOAT_ASSET,
     TUSHARE_STK_HOLDERNUMBER_ASSET,
     TUSHARE_DISCLOSURE_DATE_ASSET,
+    TUSHARE_BLOCK_TRADE_ASSET,  # Plan §5 expansion
 ]
 METHOD_BY_DATASET = {
     "anns": "anns",
@@ -47,6 +49,7 @@ METHOD_BY_DATASET = {
     "share_float": "share_float",
     "stk_holdernumber": "stk_holdernumber",
     "disclosure_date": "disclosure_date",
+    "block_trade": "block_trade",  # Plan §5 expansion
 }
 FETCH_PARAMS_BY_DATASET = {
     "anns": {
@@ -91,6 +94,13 @@ FETCH_PARAMS_BY_DATASET = {
         "end_date": "20260415",
         "fields": "bad",
     },
+    "block_trade": {  # Plan §5 expansion
+        "ts_code": "000001.SZ",
+        "trade_date": "20260415",
+        "start_date": "20260415",
+        "end_date": "20260415",
+        "fields": "bad",
+    },
 }
 
 
@@ -116,6 +126,9 @@ class FakeTushareEventClient:
 
     def disclosure_date(self, **kwargs: Any) -> Any:
         return self._record_call("disclosure_date", kwargs)
+
+    def block_trade(self, **kwargs: Any) -> Any:  # Plan §5 expansion
+        return self._record_call("block_trade", kwargs)
 
     def _record_call(self, method_name: str, kwargs: dict[str, Any]) -> Any:
         self.calls.append((method_name, kwargs))
@@ -199,7 +212,11 @@ def _fields_csv(asset: Any) -> str:
 
 
 def _raw_partition_call_params(asset: Any) -> dict[str, str]:
-    date_param = "trade_date" if asset.dataset == "suspend_d" else "ann_date"
+    # Plan §5 expansion — block_trade also partitions on trade_date.
+    if asset.dataset in {"suspend_d", "block_trade"}:
+        date_param = "trade_date"
+    else:
+        date_param = "ann_date"
     return {date_param: "20260415", "fields": _fields_csv(asset)}
 
 

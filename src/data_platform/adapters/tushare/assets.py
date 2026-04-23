@@ -30,6 +30,11 @@ TUSHARE_DIVIDEND_ASSET_NAME = "tushare_dividend"
 TUSHARE_SHARE_FLOAT_ASSET_NAME = "tushare_share_float"
 TUSHARE_STK_HOLDERNUMBER_ASSET_NAME = "tushare_stk_holdernumber"
 TUSHARE_DISCLOSURE_DATE_ASSET_NAME = "tushare_disclosure_date"
+# Plan §5 expansion: 4 new datasets (stk_limit / block_trade / moneyflow / forecast)
+TUSHARE_STK_LIMIT_ASSET_NAME = "tushare_stk_limit"
+TUSHARE_BLOCK_TRADE_ASSET_NAME = "tushare_block_trade"
+TUSHARE_MONEYFLOW_ASSET_NAME = "tushare_moneyflow"
+TUSHARE_FORECAST_ASSET_NAME = "tushare_forecast"
 
 ALLOW_NULL_IDENTITY_METADATA_KEY = b"data_platform.allow_null_identity"
 ALLOW_NULL_IDENTITY_METADATA_VALUE = b"true"
@@ -304,6 +309,89 @@ TUSHARE_DISCLOSURE_DATE_SCHEMA = pa.schema(
     ]
 )
 
+# Plan §5 expansion: stk_limit — every-trading-day price-limit band.
+# Market-data class (identity: ts_code + trade_date). Numeric fields
+# stay pa.string() per TUSHARE_RAW_NUMERIC_TYPE; staging model casts.
+TUSHARE_STK_LIMIT_SCHEMA = pa.schema(
+    [
+        ("ts_code", pa.string()),
+        ("trade_date", pa.string()),
+        ("up_limit", TUSHARE_RAW_NUMERIC_TYPE),
+        ("down_limit", TUSHARE_RAW_NUMERIC_TYPE),
+    ]
+)
+
+# Plan §5 expansion: block_trade — block trade executions. Event
+# class with multi-row-per-(ts_code, trade_date) semantics (same
+# pattern as anns: allow_null_identity on ts_code so identity
+# tolerates repeats). No dbt unique test; downstream consumers
+# disambiguate by buyer/seller/price/vol at their own layer.
+TUSHARE_BLOCK_TRADE_SCHEMA = pa.schema(
+    [
+        _string_field("ts_code", allow_null_identity=True),
+        ("trade_date", pa.string()),
+        ("price", TUSHARE_RAW_NUMERIC_TYPE),
+        ("vol", TUSHARE_RAW_NUMERIC_TYPE),
+        ("amount", TUSHARE_RAW_NUMERIC_TYPE),
+        ("buyer", pa.string()),
+        ("seller", pa.string()),
+    ]
+)
+
+# Plan §5 expansion: moneyflow — per-stock daily fund flow breakdown
+# by order size bucket (sm / md / lg / elg × buy / sell + net_mf).
+# Market-data class (identity: ts_code + trade_date). 18 numeric
+# columns all pa.string().
+TUSHARE_MONEYFLOW_SCHEMA = pa.schema(
+    [
+        ("ts_code", pa.string()),
+        ("trade_date", pa.string()),
+        ("buy_sm_vol", TUSHARE_RAW_NUMERIC_TYPE),
+        ("buy_sm_amount", TUSHARE_RAW_NUMERIC_TYPE),
+        ("sell_sm_vol", TUSHARE_RAW_NUMERIC_TYPE),
+        ("sell_sm_amount", TUSHARE_RAW_NUMERIC_TYPE),
+        ("buy_md_vol", TUSHARE_RAW_NUMERIC_TYPE),
+        ("buy_md_amount", TUSHARE_RAW_NUMERIC_TYPE),
+        ("sell_md_vol", TUSHARE_RAW_NUMERIC_TYPE),
+        ("sell_md_amount", TUSHARE_RAW_NUMERIC_TYPE),
+        ("buy_lg_vol", TUSHARE_RAW_NUMERIC_TYPE),
+        ("buy_lg_amount", TUSHARE_RAW_NUMERIC_TYPE),
+        ("sell_lg_vol", TUSHARE_RAW_NUMERIC_TYPE),
+        ("sell_lg_amount", TUSHARE_RAW_NUMERIC_TYPE),
+        ("buy_elg_vol", TUSHARE_RAW_NUMERIC_TYPE),
+        ("buy_elg_amount", TUSHARE_RAW_NUMERIC_TYPE),
+        ("sell_elg_vol", TUSHARE_RAW_NUMERIC_TYPE),
+        ("sell_elg_amount", TUSHARE_RAW_NUMERIC_TYPE),
+        ("net_mf_vol", TUSHARE_RAW_NUMERIC_TYPE),
+        ("net_mf_amount", TUSHARE_RAW_NUMERIC_TYPE),
+    ]
+)
+
+# Plan §5 expansion: forecast — earnings forecast notification.
+# Multi-version via update_flag; identity = ts_code + ann_date +
+# end_date + update_flag. NOT FINANCIAL family: forecast lacks
+# f_ann_date / report_type / comp_type, so it gets its own
+# FORECAST_DATASET_FIELDS + FORECAST_VERSION_FIELDS below. Numeric
+# fields stay pa.string() (coarse percentage ranges and profit
+# bands; no need for decimal(38,18) scale).
+TUSHARE_FORECAST_SCHEMA = pa.schema(
+    [
+        ("ts_code", pa.string()),
+        ("ann_date", pa.string()),
+        ("end_date", pa.string()),
+        ("type", pa.string()),
+        ("p_change_min", TUSHARE_RAW_NUMERIC_TYPE),
+        ("p_change_max", TUSHARE_RAW_NUMERIC_TYPE),
+        ("net_profit_min", TUSHARE_RAW_NUMERIC_TYPE),
+        ("net_profit_max", TUSHARE_RAW_NUMERIC_TYPE),
+        ("last_parent_net", TUSHARE_RAW_NUMERIC_TYPE),
+        ("first_ann_date", pa.string()),
+        ("summary", pa.string()),
+        ("change_reason", pa.string()),
+        ("update_flag", pa.string()),
+    ]
+)
+
 
 def _financial_schema(numeric_fields: tuple[str, ...]) -> pa.Schema:
     return pa.schema(
@@ -420,6 +508,15 @@ TUSHARE_CASHFLOW_FIELDS = tuple(TUSHARE_CASHFLOW_SCHEMA.names)
 TUSHARE_CASHFLOW_FIELDS_CSV = ",".join(TUSHARE_CASHFLOW_FIELDS)
 TUSHARE_FINA_INDICATOR_FIELDS = tuple(TUSHARE_FINA_INDICATOR_SCHEMA.names)
 TUSHARE_FINA_INDICATOR_FIELDS_CSV = ",".join(TUSHARE_FINA_INDICATOR_FIELDS)
+# Plan §5 expansion: 4 new datasets' FIELDS + FIELDS_CSV exports.
+TUSHARE_STK_LIMIT_FIELDS = tuple(TUSHARE_STK_LIMIT_SCHEMA.names)
+TUSHARE_STK_LIMIT_FIELDS_CSV = ",".join(TUSHARE_STK_LIMIT_FIELDS)
+TUSHARE_BLOCK_TRADE_FIELDS = tuple(TUSHARE_BLOCK_TRADE_SCHEMA.names)
+TUSHARE_BLOCK_TRADE_FIELDS_CSV = ",".join(TUSHARE_BLOCK_TRADE_FIELDS)
+TUSHARE_MONEYFLOW_FIELDS = tuple(TUSHARE_MONEYFLOW_SCHEMA.names)
+TUSHARE_MONEYFLOW_FIELDS_CSV = ",".join(TUSHARE_MONEYFLOW_FIELDS)
+TUSHARE_FORECAST_FIELDS = tuple(TUSHARE_FORECAST_SCHEMA.names)
+TUSHARE_FORECAST_FIELDS_CSV = ",".join(TUSHARE_FORECAST_FIELDS)
 
 REFERENCE_DATA_IDENTITY_FIELDS: dict[str, tuple[str, ...]] = {
     "index_basic": ("ts_code",),
@@ -439,6 +536,8 @@ EVENT_METADATA_FIELDS: dict[str, tuple[str, ...]] = {
     "share_float": TUSHARE_SHARE_FLOAT_FIELDS,
     "stk_holdernumber": TUSHARE_STK_HOLDERNUMBER_FIELDS,
     "disclosure_date": TUSHARE_DISCLOSURE_DATE_FIELDS,
+    # Plan §5 expansion — block_trade follows the anns multi-row pattern.
+    "block_trade": TUSHARE_BLOCK_TRADE_FIELDS,
 }
 
 FINANCIAL_DATASET_FIELDS: dict[str, tuple[str, ...]] = {
@@ -447,6 +546,19 @@ FINANCIAL_DATASET_FIELDS: dict[str, tuple[str, ...]] = {
     "cashflow": TUSHARE_CASHFLOW_FIELDS,
     "fina_indicator": TUSHARE_FINA_INDICATOR_FIELDS,
 }
+
+# Plan §5 expansion: forecast is NOT FINANCIAL (its field set omits
+# f_ann_date / report_type / comp_type). It's a separate family with
+# its own version-tracking identity keyed on update_flag.
+FORECAST_DATASET_FIELDS: dict[str, tuple[str, ...]] = {
+    "forecast": TUSHARE_FORECAST_FIELDS,
+}
+FORECAST_VERSION_FIELDS: tuple[str, ...] = (
+    "ts_code",
+    "ann_date",
+    "end_date",
+    "update_flag",
+)
 
 TUSHARE_STOCK_BASIC_ASSET = AssetSpec(
     name=TUSHARE_STOCK_BASIC_ASSET_NAME,
@@ -616,6 +728,37 @@ TUSHARE_FINA_INDICATOR_ASSET = AssetSpec(
     schema=TUSHARE_FINA_INDICATOR_SCHEMA,
 )
 
+# Plan §5 expansion: 4 new AssetSpec instances — appended below
+# existing 24 so downstream list iteration order is stable for the
+# older datasets.
+TUSHARE_STK_LIMIT_ASSET = AssetSpec(
+    name=TUSHARE_STK_LIMIT_ASSET_NAME,
+    dataset="stk_limit",
+    partition="daily",
+    schema=TUSHARE_STK_LIMIT_SCHEMA,
+)
+
+TUSHARE_BLOCK_TRADE_ASSET = AssetSpec(
+    name=TUSHARE_BLOCK_TRADE_ASSET_NAME,
+    dataset="block_trade",
+    partition="daily",
+    schema=TUSHARE_BLOCK_TRADE_SCHEMA,
+)
+
+TUSHARE_MONEYFLOW_ASSET = AssetSpec(
+    name=TUSHARE_MONEYFLOW_ASSET_NAME,
+    dataset="moneyflow",
+    partition="daily",
+    schema=TUSHARE_MONEYFLOW_SCHEMA,
+)
+
+TUSHARE_FORECAST_ASSET = AssetSpec(
+    name=TUSHARE_FORECAST_ASSET_NAME,
+    dataset="forecast",
+    partition="daily",
+    schema=TUSHARE_FORECAST_SCHEMA,
+)
+
 TUSHARE_ASSETS = [
     TUSHARE_STOCK_BASIC_ASSET,
     TUSHARE_DAILY_ASSET,
@@ -641,6 +784,11 @@ TUSHARE_ASSETS = [
     TUSHARE_BALANCESHEET_ASSET,
     TUSHARE_CASHFLOW_ASSET,
     TUSHARE_FINA_INDICATOR_ASSET,
+    # Plan §5 expansion
+    TUSHARE_STK_LIMIT_ASSET,
+    TUSHARE_BLOCK_TRADE_ASSET,
+    TUSHARE_MONEYFLOW_ASSET,
+    TUSHARE_FORECAST_ASSET,
 ]
 
 __all__ = [
@@ -770,4 +918,28 @@ __all__ = [
     "TUSHARE_TRADE_CAL_SCHEMA",
     "TUSHARE_WEEKLY_ASSET",
     "TUSHARE_WEEKLY_ASSET_NAME",
+    # Plan §5 expansion — 4 new datasets (stk_limit / block_trade /
+    # moneyflow / forecast) + forecast family containers.
+    "FORECAST_DATASET_FIELDS",
+    "FORECAST_VERSION_FIELDS",
+    "TUSHARE_BLOCK_TRADE_ASSET",
+    "TUSHARE_BLOCK_TRADE_ASSET_NAME",
+    "TUSHARE_BLOCK_TRADE_FIELDS",
+    "TUSHARE_BLOCK_TRADE_FIELDS_CSV",
+    "TUSHARE_BLOCK_TRADE_SCHEMA",
+    "TUSHARE_FORECAST_ASSET",
+    "TUSHARE_FORECAST_ASSET_NAME",
+    "TUSHARE_FORECAST_FIELDS",
+    "TUSHARE_FORECAST_FIELDS_CSV",
+    "TUSHARE_FORECAST_SCHEMA",
+    "TUSHARE_MONEYFLOW_ASSET",
+    "TUSHARE_MONEYFLOW_ASSET_NAME",
+    "TUSHARE_MONEYFLOW_FIELDS",
+    "TUSHARE_MONEYFLOW_FIELDS_CSV",
+    "TUSHARE_MONEYFLOW_SCHEMA",
+    "TUSHARE_STK_LIMIT_ASSET",
+    "TUSHARE_STK_LIMIT_ASSET_NAME",
+    "TUSHARE_STK_LIMIT_FIELDS",
+    "TUSHARE_STK_LIMIT_FIELDS_CSV",
+    "TUSHARE_STK_LIMIT_SCHEMA",
 ]

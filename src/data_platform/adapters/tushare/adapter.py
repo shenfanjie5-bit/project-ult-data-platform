@@ -24,6 +24,8 @@ from data_platform.adapters.tushare.assets import (
     EVENT_METADATA_FIELDS,
     FINANCIAL_DATASET_FIELDS,
     FINANCIAL_VERSION_FIELDS,
+    FORECAST_DATASET_FIELDS,
+    FORECAST_VERSION_FIELDS,
     REFERENCE_DATA_IDENTITY_FIELDS,
     TUSHARE_ASSETS,
     TUSHARE_STOCK_BASIC_ASSET_NAME,
@@ -33,9 +35,26 @@ from data_platform.raw import RawArtifact, RawWriter
 TOKEN_ENV_VAR = "DP_TUSHARE_TOKEN"
 STOCK_BASIC_IDENTITY_FIELDS = ("ts_code",)
 MARKET_DATA_IDENTITY_FIELDS = ("ts_code", "trade_date")
-MARKET_DATASETS = frozenset({"daily", "weekly", "monthly", "adj_factor", "daily_basic"})
-EVENT_DATASETS = frozenset(EVENT_METADATA_FIELDS)
+MARKET_DATASETS = frozenset(
+    {
+        "daily",
+        "weekly",
+        "monthly",
+        "adj_factor",
+        "daily_basic",
+        # Plan §5 expansion — stk_limit (per-day price-limit band) +
+        # moneyflow (per-day fund flow breakdown) follow the same
+        # (ts_code, trade_date) identity as daily_basic.
+        "stk_limit",
+        "moneyflow",
+    }
+)
+EVENT_DATASETS = frozenset(EVENT_METADATA_FIELDS)  # includes block_trade via Plan §5
 FINANCIAL_DATASETS = frozenset(FINANCIAL_DATASET_FIELDS)
+# Plan §5 expansion — forecast is its own family (NOT financial;
+# field set lacks f_ann_date / report_type / comp_type). See
+# assets.FORECAST_DATASET_FIELDS / FORECAST_VERSION_FIELDS.
+FORECAST_DATASETS = frozenset(FORECAST_DATASET_FIELDS)
 FINANCIAL_REQUIRED_FIELDS = (
     FINANCIAL_VERSION_FIELDS[0],
     FINANCIAL_VERSION_FIELDS[1],
@@ -55,8 +74,11 @@ STOCK_TS_CODE_DATASETS = frozenset(
         "daily_basic",
         "stock_company",
         "namechange",
-        *EVENT_DATASETS,
+        *EVENT_DATASETS,  # includes block_trade per Plan §5
         *FINANCIAL_DATASETS,
+        *FORECAST_DATASETS,  # Plan §5 — forecast keyed on ts_code
+        "stk_limit",  # Plan §5 — market-like, ts_code identity
+        "moneyflow",  # Plan §5 — market-like, ts_code identity
     }
 )
 DATE_IDENTITY_FIELDS = frozenset(
@@ -165,6 +187,19 @@ class _TushareClient(Protocol):
     def fina_indicator(self, **kwargs: Any) -> Any:
         """Return financial indicator rows from Tushare Pro."""
 
+    # Plan §5 expansion — 4 new dataset fetch methods.
+    def stk_limit(self, **kwargs: Any) -> Any:
+        """Return per-day price-limit band rows from Tushare Pro."""
+
+    def block_trade(self, **kwargs: Any) -> Any:
+        """Return block-trade execution rows from Tushare Pro."""
+
+    def moneyflow(self, **kwargs: Any) -> Any:
+        """Return per-day fund-flow breakdown rows from Tushare Pro."""
+
+    def forecast(self, **kwargs: Any) -> Any:
+        """Return earnings-forecast notification rows from Tushare Pro."""
+
 
 class TushareAdapter(BaseAdapter):
     """Tushare reference adapter exposing Raw Zone structured assets."""
@@ -218,6 +253,10 @@ class TushareAdapter(BaseAdapter):
             return _to_event_table(spec.asset.dataset, result, spec.asset.schema)
         if spec.asset.dataset in FINANCIAL_DATASET_FIELDS:
             return _to_financial_table(spec.asset.dataset, result, spec.asset.schema)
+        # Plan §5 expansion — forecast has multi-version identity but
+        # field set distinct from FINANCIAL, so it gets its own branch.
+        if spec.asset.dataset in FORECAST_DATASET_FIELDS:
+            return _to_forecast_table(spec.asset.dataset, result, spec.asset.schema)
         return _to_asset_table(result, spec.asset, spec.identity_fields)
 
     def _get_client(self) -> _TushareClient:
@@ -380,6 +419,41 @@ def _to_event_table(dataset: str, result: Any, schema: pa.Schema) -> pa.Table:
         msg = f"Tushare {asset.dataset} response returned an empty table"
         raise UpstreamEmptyResult(msg)
     _validate_event_date_columns(table, asset, event_date_fields)
+    return table
+
+
+def _to_forecast_table(dataset: str, result: Any, schema: pa.Schema) -> pa.Table:
+    """Plan §5 — route forecast through its own table builder.
+
+    Mirrors ``_to_event_table`` shape but pulls identity from
+    ``FORECAST_IDENTITY_FIELDS`` (which carries the version-aware
+    ``FORECAST_VERSION_FIELDS`` tuple, i.e. ts_code + ann_date +
+    end_date + update_flag) and date columns from
+    ``FORECAST_DATE_FIELDS``. Not reusing ``_to_event_table`` because
+    forecast is not semantically an event (it's a multi-version
+    notification about a future financial report); conflating the two
+    loses the distinction in stack traces + makes ``EVENT_IDENTITY_FIELDS``
+    misleading.
+    """
+    try:
+        spec = _FETCH_SPECS_BY_DATASET[dataset]
+        identity_fields = FORECAST_IDENTITY_FIELDS[dataset]
+        forecast_date_fields = FORECAST_DATE_FIELDS[dataset]
+    except KeyError as exc:
+        msg = f"unsupported Tushare forecast dataset: {dataset!r}"
+        raise ValueError(msg) from exc
+
+    asset = AssetSpec(
+        name=spec.asset.name,
+        dataset=spec.asset.dataset,
+        partition=spec.asset.partition,
+        schema=schema,
+    )
+    table = _to_asset_table(result, asset, identity_fields)
+    if table.num_rows == 0:
+        msg = f"Tushare {asset.dataset} response returned an empty table"
+        raise UpstreamEmptyResult(msg)
+    _validate_event_date_columns(table, asset, forecast_date_fields)
     return table
 
 
@@ -764,6 +838,21 @@ EVENT_IDENTITY_FIELDS: dict[str, tuple[str, ...]] = {
     "share_float": ("ts_code", "ann_date", "float_date"),
     "stk_holdernumber": ("ts_code", "ann_date", "end_date"),
     "disclosure_date": ("ts_code", "ann_date", "end_date"),
+    # Plan §5 expansion — block_trade follows the anns precedent: same
+    # (ts_code, trade_date) CAN repeat (multiple block trades same day,
+    # distinct buyer/seller/price/vol/amount), so identity widens to
+    # the full row shape to make dbt unique_combination_of_columns
+    # enforceable without suppressing the real-world multiplicity.
+    # anns does exactly this with (ts_code, ann_date, title, url).
+    "block_trade": (
+        "ts_code",
+        "trade_date",
+        "buyer",
+        "seller",
+        "price",
+        "vol",
+        "amount",
+    ),
 }
 EVENT_DATE_FIELDS: dict[str, tuple[str, ...]] = {
     "anns": ("ann_date",),
@@ -772,6 +861,20 @@ EVENT_DATE_FIELDS: dict[str, tuple[str, ...]] = {
     "share_float": ("ann_date", "float_date"),
     "stk_holdernumber": ("ann_date", "end_date"),
     "disclosure_date": ("ann_date", "end_date"),
+    "block_trade": ("trade_date",),  # Plan §5
+}
+# Plan §5 expansion — forecast's identity keyed on (ts_code, ann_date,
+# end_date, update_flag). Distinct from FINANCIAL_VERSION_FIELDS
+# because forecast lacks f_ann_date / report_type / comp_type.
+FORECAST_IDENTITY_FIELDS: dict[str, tuple[str, ...]] = {
+    "forecast": FORECAST_VERSION_FIELDS,
+}
+# Plan §5 expansion — date columns that the forecast fetcher validates
+# as non-null + ISO-shape. ann_date is the announcement timestamp;
+# end_date is the report period the forecast refers to; first_ann_date
+# is the earliest announcement (may be null when update_flag='0').
+FORECAST_DATE_FIELDS: dict[str, tuple[str, ...]] = {
+    "forecast": ("ann_date", "end_date"),
 }
 _METHOD_BY_DATASET = {
     "stock_basic": "stock_basic",
@@ -798,6 +901,11 @@ _METHOD_BY_DATASET = {
     "balancesheet": "balancesheet",
     "cashflow": "cashflow",
     "fina_indicator": "fina_indicator",
+    # Plan §5 expansion — 4 new dataset -> tushare.pro method names.
+    "stk_limit": "stk_limit",
+    "block_trade": "block_trade",
+    "moneyflow": "moneyflow",
+    "forecast": "forecast",
 }
 _IDENTITY_FIELDS_BY_DATASET = {
     "stock_basic": STOCK_BASIC_IDENTITY_FIELDS,
@@ -805,6 +913,7 @@ _IDENTITY_FIELDS_BY_DATASET = {
     **REFERENCE_DATA_IDENTITY_FIELDS,
     **EVENT_IDENTITY_FIELDS,
     **{dataset: FINANCIAL_REQUIRED_FIELDS for dataset in FINANCIAL_DATASETS},
+    **FORECAST_IDENTITY_FIELDS,  # Plan §5
 }
 _PARTITION_DATE_FIELD_BY_DATASET = {
     **{dataset: "trade_date" for dataset in MARKET_DATASETS},
@@ -819,6 +928,8 @@ _PARTITION_DATE_FIELD_BY_DATASET = {
     "share_float": "ann_date",
     "stk_holdernumber": "ann_date",
     "disclosure_date": "ann_date",
+    "block_trade": "trade_date",  # Plan §5
+    "forecast": "ann_date",  # Plan §5
     **{dataset: "end_date" for dataset in FINANCIAL_DATASETS},
 }
 _PARTITION_REQUEST_PARAMS_BY_DATASET = {
@@ -834,6 +945,8 @@ _PARTITION_REQUEST_PARAMS_BY_DATASET = {
     "share_float": ("ann_date",),
     "stk_holdernumber": ("ann_date",),
     "disclosure_date": ("ann_date",),
+    "block_trade": ("trade_date",),  # Plan §5
+    "forecast": ("ann_date", "end_date", "period"),  # Plan §5
     **{dataset: ("period",) for dataset in FINANCIAL_DATASETS},
 }
 _DATE_PARAM_NAMES_BY_DATASET = {
@@ -856,6 +969,10 @@ _DATE_PARAM_NAMES_BY_DATASET = {
         "modify_date",
         "start_date",
     ),
+    # Plan §5 expansion — date param names Tushare's stk_limit /
+    # block_trade / moneyflow / forecast APIs expose.
+    "block_trade": ("trade_date", "start_date", "end_date"),
+    "forecast": ("ann_date", "end_date", "start_date", "period"),
     **{
         dataset: ("ann_date", "start_date", "end_date", "period")
         for dataset in FINANCIAL_DATASETS
@@ -888,6 +1005,7 @@ __all__ = [
     "UpstreamDataQualityError",
     "_to_event_table",
     "_to_financial_table",
+    "_to_forecast_table",
     "_to_reference_table",
     "main",
     "run_stock_basic",
