@@ -635,10 +635,15 @@ tests/spike/iceberg_write_chain
 - [ ] 并发 overwrite 至少有 1 次抛 `CommitFailedException` 且最终表可读
 - [ ] `docs/spike/iceberg-write-chain.md` 已生成且含 "P1a Iceberg 写入链 spike 成功率: 100%"
 
+#### 实现状态 / 验收状态（2026-04-24）
+- **实现已落地**：`tests/spike/test_iceberg_write_chain.py` 包含 3 个用例 + `@pytest.mark.spike` marker（在 `pyproject.toml` 注册）；`docs/spike/iceberg-write-chain.md` 骨架文件也已存在。
+- **验收未通过**：spike fixture 在 `DATABASE_URL` / `DP_PG_DSN` 缺失时 `pytest.skip`；sandbox 运行 `pytest -m spike tests/spike/test_iceberg_write_chain.py -v` 结果为 `sss`；`docs/spike/iceberg-write-chain.md` 仍是 `Completed cases: 0/3 / Conclusion: pending`。
+- **上一条 ✅ 的先决条件**：在真实 PG 环境下跑一次 `pytest -m spike` 让 3 用例 PASS 且 spike 报告被重写为 "P1a Iceberg 写入链 spike 成功率: 100%"。
+
 #### 验证命令
 ```bash
 cd /Users/fanjie/Desktop/Cowork/project-ult/data-platform
-pytest -m spike tests/spike/test_iceberg_write_chain.py -v
+DATABASE_URL=postgresql://... pytest -m spike tests/spike/test_iceberg_write_chain.py -v
 cat docs/spike/iceberg-write-chain.md
 ```
 
@@ -682,11 +687,16 @@ scripts/smoke + tests/integration
 - [ ] 测试日志显示 "P1a smoke OK" 字样
 - [ ] `pytest tests/integration/test_p1a_smoke.py` 通过
 
+#### 实现状态 / 验收状态（2026-04-24）
+- **实现已落地**：`scripts/smoke_p1a.sh` + `tests/integration/test_p1a_smoke.py` + `Makefile` 的 `smoke-p1a:` target 都已存在。
+- **验收未通过**：`tests/integration/test_p1a_smoke.py::postgres_dsn` fixture 在 `DATABASE_URL` 缺失时 `pytest.skip`；sandbox 运行 `pytest tests/integration/test_p1a_smoke.py` 结果为 `s......`（skip + 保护性测试 pass，正向链路未执行）。
+- **上一条 ✅ 的先决条件**：在真实 PG 环境下 `DATABASE_URL=postgresql://... make smoke-p1a` 一次成功并留下日志（含 "P1a smoke OK" 字样 + 总耗时 `< 5 分钟`）。
+
 #### 验证命令
 ```bash
 cd /Users/fanjie/Desktop/Cowork/project-ult/data-platform
-make smoke-p1a
-pytest tests/integration/test_p1a_smoke.py -v
+DATABASE_URL=postgresql://... make smoke-p1a
+DATABASE_URL=postgresql://... pytest tests/integration/test_p1a_smoke.py -v
 ```
 
 #### 依赖
