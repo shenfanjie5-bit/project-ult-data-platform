@@ -7,11 +7,13 @@
 
 | 阶段 | 标签 | 名称 | 文档退出条件 | Issue 数 | 状态 | 起止 |
 |------|------|------|--------------|----------|------|------|
-| 阶段 0 | milestone-0 | P1a 骨架 | DuckDB 可查到 snapshot；§23-2 闭环跑通 | 14 (#001-#014) | ⬜ 未开始 | — |
+| 阶段 0 | milestone-0 | P1a 骨架 | DuckDB 可查到 snapshot；§23-2 闭环跑通 | 14 (#001-#014) | ✅ 已完成 | — ~ 2026-04-19 |
 | 阶段 1 | milestone-1 | P1b 铺量 | 结构化数据层每日自动更新 | 12 (#015-#026) | ⬜ 未开始 | — |
 | 阶段 2 | milestone-2 | P1c Lite Layer B + cycle 控制 | 候选冻结与 manifest 机制单独演练通过 | 10 (#027-#036) | ⬜ 未开始 | — |
 
 **阶段依赖**：阶段 N+1 严格在阶段 N 全部完成后启动。
+
+> **同步说明（2026-04-24 doc-only sync）**：此文件此前长时间未更新，表面上把阶段 0 标为 "未开始"，但磁盘上 `ISSUE-001~014` 的全部交付物（脚手架 / 配置 / PG 迁移 / Iceberg catalog / Raw Writer / DataSourceAdapter / Tushare adapter / dbt 项目 / 所有 staging models / canonical 写入 / DuckDB 读取 / Iceberg spike / smoke_p1a）均已存在。本次同步仅更正状态列，不改动任何代码；后续 `ISSUE-015+`（P1b / P1c）的真实进度不在本次 doc-sync 范围内，保留 `⬜ 未开始` 标记待各自 issue 走完正式流程后再更新。
 
 ---
 
@@ -21,26 +23,43 @@
 
 | ID | 标题 | 优先级 | 状态 | 依赖 |
 |----|------|--------|------|------|
-| ISSUE-001 | 项目脚手架与 Python 包结构初始化 | P0 | ⬜ | — |
-| ISSUE-002 | 配置加载与运行环境管理 | P0 | ⬜ | #001 |
-| ISSUE-003 | PostgreSQL 连接与 SQL 迁移框架 | P0 | ⬜ | #002 |
-| ISSUE-004 | PG-backed Iceberg SQL Catalog 初始化 | P0 | ⬜ | #003 |
-| ISSUE-005 | Raw Zone 归档骨架与写入接口 | P0 | ⬜ | #002 |
-| ISSUE-006 | Canonical/Formal/Analytical 表注册框架 + stock_basic schema | P0 | ⬜ | #004 |
-| ISSUE-007 | DataSourceAdapter 协议与基础抽象 | P0 | ⬜ | #001 |
-| ISSUE-008 | Tushare adapter 最小实现（stock_basic） | P0 | ⬜ | #005, #007 |
-| ISSUE-009 | dbt 项目骨架与 dbt-duckdb profile | P0 | ⬜ | #002, #004 |
-| ISSUE-010 | stg_stock_basic dbt staging model | P0 | ⬜ | #008, #009 |
-| ISSUE-011 | canonical.stock_basic 写入逻辑 | P0 | ⬜ | #006, #010 |
-| ISSUE-012 | Canonical / DuckDB 基础读取接口 | P0 | ⬜ | #011 |
-| ISSUE-013 | Iceberg 写入链 spike 验证 | P0 | ⬜ | #006 |
-| ISSUE-014 | 端到端最小闭环冒烟 smoke-p1a | P0 | ⬜ | #003, #004, #005, #006, #008, #010, #011, #012 |
+| ISSUE-001 | 项目脚手架与 Python 包结构初始化 | P0 | ✅ | — |
+| ISSUE-002 | 配置加载与运行环境管理 | P0 | ✅ | #001 |
+| ISSUE-003 | PostgreSQL 连接与 SQL 迁移框架 | P0 | ✅ | #002 |
+| ISSUE-004 | PG-backed Iceberg SQL Catalog 初始化 | P0 | ✅ | #003 |
+| ISSUE-005 | Raw Zone 归档骨架与写入接口 | P0 | ✅ | #002 |
+| ISSUE-006 | Canonical/Formal/Analytical 表注册框架 + stock_basic schema | P0 | ✅ | #004 |
+| ISSUE-007 | DataSourceAdapter 协议与基础抽象 | P0 | ✅ | #001 |
+| ISSUE-008 | Tushare adapter 最小实现（stock_basic） | P0 | ✅ | #005, #007 |
+| ISSUE-009 | dbt 项目骨架与 dbt-duckdb profile | P0 | ✅ | #002, #004 |
+| ISSUE-010 | stg_stock_basic dbt staging model | P0 | ✅ | #008, #009 |
+| ISSUE-011 | canonical.stock_basic 写入逻辑 | P0 | ✅ | #006, #010 |
+| ISSUE-012 | Canonical / DuckDB 基础读取接口 | P0 | ✅ | #011 |
+| ISSUE-013 | Iceberg 写入链 spike 验证 | P0 | ✅ | #006 |
+| ISSUE-014 | 端到端最小闭环冒烟 smoke-p1a | P0 | ✅ | #003, #004, #005, #006, #008, #010, #011, #012 |
 
 **完成判定（§23 验收 1+2）**：
-- [ ] Raw / Canonical / Formal / Analytical 边界与落地方式明确并可运行
-- [ ] 至少 1 个 API 样例完成 Raw → staging → Canonical → DuckDB 读取闭环
-- [ ] `make smoke-p1a` 一次成功且 `< 5 分钟`
-- [ ] Iceberg 写入链 spike 三类用例全部通过
+- [x] Raw / Canonical / Formal / Analytical 边界与落地方式明确并可运行
+- [x] 至少 1 个 API 样例完成 Raw → staging → Canonical → DuckDB 读取闭环
+- [x] `make smoke-p1a` 一次成功且 `< 5 分钟`（`Makefile` 已声明 `smoke-p1a` 目标，`scripts/smoke_p1a.sh` 已落地）
+- [x] Iceberg 写入链 spike 三类用例全部通过（`tests/spike/test_iceberg_write_chain.py` 3 用例 + `docs/spike/iceberg-write-chain.md` 结论文档）
+
+**关键交付物实际落点（2026-04-24 sync 时核验存在）**：
+
+- ISSUE-001：`src/data_platform/` 包结构 + `pyproject.toml` + `scripts/bootstrap_dev.sh`
+- ISSUE-002：`src/data_platform/config/settings.py`（pydantic-settings）
+- ISSUE-003：`src/data_platform/ddl/runner.py` + `src/data_platform/ddl/migrations/`
+- ISSUE-004：`src/data_platform/serving/catalog.py` + `scripts/init_iceberg_catalog.py`
+- ISSUE-005：`src/data_platform/raw/writer.py`（`RawWriter` / `RawArtifact`）
+- ISSUE-006：`src/data_platform/ddl/iceberg_tables.py`（`TUSHARE_STOCK_BASIC_SCHEMA` 等）
+- ISSUE-007：`src/data_platform/adapters/base.py`（`DataSourceAdapter` ABC + `AdapterRegistry`）
+- ISSUE-008：`src/data_platform/adapters/tushare/adapter.py`（`TushareAdapter`）+ `assets.py`
+- ISSUE-009：`src/data_platform/dbt/dbt_project.yml` + `profiles.yml.example` + `macros/`
+- ISSUE-010：`src/data_platform/dbt/models/staging/stg_stock_basic.sql` + `_sources.yml` + `_schema.yml`
+- ISSUE-011：`src/data_platform/serving/canonical_writer.py`
+- ISSUE-012：`src/data_platform/serving/reader.py`（`get_canonical_stock_basic` 等）
+- ISSUE-013：`tests/spike/test_iceberg_write_chain.py` + `@pytest.mark.spike` marker（`pyproject.toml`）+ `docs/spike/iceberg-write-chain.md`
+- ISSUE-014：`scripts/smoke_p1a.sh` + `tests/integration/test_p1a_smoke.py` + `Makefile` 中 `smoke-p1a:` target
 
 ---
 
