@@ -1113,6 +1113,8 @@ models:
     columns:
       - name: ts_code
         description: Raw Tushare block_trade.ts_code staged from the latest manifest artifact.
+        tests:
+          - not_null
       - name: trade_date
         description: Raw Tushare block_trade.trade_date staged from the latest manifest artifact.
         tests:
@@ -1208,12 +1210,18 @@ models:
   - name: stg_forecast
     description: >
       Staging view over the latest Raw Zone Tushare forecast artifact.
-      Multi-version via update_flag; identity = ts_code + ann_date +
-      end_date + update_flag (distinct from FINANCIAL_VERSION_FIELDS —
-      forecast lacks f_ann_date / report_type / comp_type).
+      Multi-version via update_flag AND type; identity = ts_code +
+      ann_date + end_date + update_flag + type (distinct from
+      FINANCIAL_VERSION_FIELDS — forecast lacks f_ann_date /
+      report_type / comp_type). Codex review #1 P2 fix: adding `type`
+      to identity because 2990/5389 corpus forecast files (55%) have
+      rows that share (ts_code, ann_date, end_date, update_flag) but
+      differ in `type` (e.g. "续亏" and "不确定" forecast flavors for
+      the same report period); without `type` the unique test false-
+      fires on real data.
     tests:
       - unique_combination_of_columns:
-          combination_of_columns: ["ts_code", "ann_date", "end_date", "update_flag"]
+          combination_of_columns: ["ts_code", "ann_date", "end_date", "update_flag", "type"]
     columns:
       - name: ts_code
         description: Raw Tushare forecast.ts_code staged from the latest manifest artifact.
@@ -1231,6 +1239,8 @@ models:
           - parsable_yyyymmdd_or_date
       - name: type
         description: Raw Tushare forecast.type staged from the latest manifest artifact.
+        tests:
+          - not_null
       - name: p_change_min
         description: Raw Tushare forecast.p_change_min staged from the latest manifest artifact.
       - name: p_change_max

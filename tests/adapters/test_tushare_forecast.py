@@ -121,12 +121,19 @@ def test_forecast_asset_and_staging_model_registered() -> None:
     assets_by_name = {asset.name: asset for asset in adapter.get_assets()}
 
     assert isinstance(adapter, DataSourceAdapter)
-    # Plan §5: forecast has its own family, distinct from FINANCIAL_VERSION_FIELDS.
+    # Plan §5: forecast has its own family, distinct from
+    # FINANCIAL_VERSION_FIELDS. Codex review #1 P2 fix: identity
+    # includes `type` — 55% of corpus forecast files have rows that
+    # share (ts_code, ann_date, end_date, update_flag) but differ in
+    # type (e.g. "续亏" + "不确定" flavors for the same period). The
+    # tuple order here must match FORECAST_IDENTITY_FIELDS in
+    # adapter.py so the adapter's dedup path keeps all real rows.
     assert FORECAST_VERSION_FIELDS == (
         "ts_code",
         "ann_date",
         "end_date",
         "update_flag",
+        "type",
     )
     assert FORECAST_DATASET_FIELDS == {
         "forecast": tuple(TUSHARE_FORECAST_ASSET.schema.names)
@@ -157,10 +164,16 @@ def test_fetch_forecast_returns_declared_schema() -> None:
 
 
 def test_forecast_versions_are_not_deduplicated() -> None:
-    # Two rows same (ts_code, ann_date, end_date) but different update_flag —
-    # both should survive because identity includes update_flag.
+    # Codex review #1 P2: three rows — two share all of (ts_code,
+    # ann_date, end_date, update_flag) but differ in `type` (mirrors
+    # the 000056.SZ/20240710/20240630 "续亏" + "不确定" corpus case);
+    # the third has a different update_flag. All three must survive
+    # because identity = (ts_code, ann_date, end_date, update_flag,
+    # type).
+    base = _forecast_row(ann_date="20260415", update_flag="0")
     rows = [
-        _forecast_row(ann_date="20260415", update_flag="0"),
+        {**base, "type": "续亏"},
+        {**base, "type": "不确定"},
         _forecast_row(ann_date="20260415", update_flag="1"),
     ]
     client = FakeTushareForecastClient(pd.DataFrame(rows))
@@ -168,11 +181,14 @@ def test_forecast_versions_are_not_deduplicated() -> None:
 
     table = adapter.fetch(TUSHARE_FORECAST_ASSET.name, {"period": "20260331"})
 
-    assert table.num_rows == 2
-    assert table["ts_code"].to_pylist() == ["000000.SZ", "000000.SZ"]
-    assert table["ann_date"].to_pylist() == ["20260415", "20260415"]
-    assert table["end_date"].to_pylist() == ["20260331", "20260331"]
-    assert table["update_flag"].to_pylist() == ["0", "1"]
+    assert table.num_rows == 3
+    assert table["ts_code"].to_pylist() == ["000000.SZ"] * 3
+    assert table["ann_date"].to_pylist() == ["20260415"] * 3
+    assert table["end_date"].to_pylist() == ["20260331"] * 3
+    # Rows 0 and 1 share update_flag='0' but have different type;
+    # row 2 has update_flag='1'.
+    assert table["update_flag"].to_pylist() == ["0", "0", "1"]
+    assert table["type"].to_pylist() == ["续亏", "不确定", "预增"]
 
 
 def test_cli_writes_forecast_raw_artifact_and_manifest(

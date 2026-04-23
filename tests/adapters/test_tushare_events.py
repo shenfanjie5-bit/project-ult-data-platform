@@ -399,3 +399,19 @@ def test_event_table_rejects_unannotated_empty_ts_code() -> None:
 
     with pytest.raises(AdapterFetchError, match="null identity field: ts_code"):
         adapter.fetch(TUSHARE_DIVIDEND_ASSET.name, {"ann_date": "20260415"})
+
+
+def test_block_trade_rejects_null_ts_code() -> None:
+    """Codex review #1 P2 regression guard: block_trade.ts_code is NOT
+    allow_null_identity. A block trade by definition has a counterparty
+    security — accepting ts_code=None would let a malformed upstream
+    row into Raw Zone with no way to tie it back to an instrument.
+    Unlike anns (where exchange-wide bulk announcements can legitimately
+    lack a security key), block_trade must reject null ts_code."""
+    frame = _event_frame(TUSHARE_BLOCK_TRADE_ASSET, 1)
+    frame.loc[0, "ts_code"] = None
+    client = _client_for_asset(TUSHARE_BLOCK_TRADE_ASSET, frame)
+    adapter = TushareAdapter(token="test-token", client=client)
+
+    with pytest.raises(AdapterFetchError, match="null identity field: ts_code"):
+        adapter.fetch(TUSHARE_BLOCK_TRADE_ASSET.name, {"trade_date": "20260415"})

@@ -321,14 +321,24 @@ TUSHARE_STK_LIMIT_SCHEMA = pa.schema(
     ]
 )
 
-# Plan §5 expansion: block_trade — block trade executions. Event
-# class with multi-row-per-(ts_code, trade_date) semantics (same
-# pattern as anns: allow_null_identity on ts_code so identity
-# tolerates repeats). No dbt unique test; downstream consumers
-# disambiguate by buyer/seller/price/vol at their own layer.
+# Plan §5 expansion: block_trade — block trade executions.
+#
+# Identity widens to the full row shape ((ts_code, trade_date, buyer,
+# seller, price, vol, amount)) because the same (ts_code, trade_date)
+# CAN repeat (multiple distinct block trade executions on the same
+# day), mirroring how anns disambiguates multiple announcements per
+# (ts_code, ann_date) via (title, url).
+#
+# Codex review #1 P2 fix: ts_code is NOT allow_null_identity here.
+# anns allows null ts_code because an exchange-wide bulk announcement
+# can lack a security key; a block trade by definition has a
+# counterparty security — accepting ts_code=None would let a
+# malformed upstream row slip into Raw Zone with no way to match it
+# back to an instrument. Keep ts_code as a regular required string
+# and enforce not_null at the dbt staging layer.
 TUSHARE_BLOCK_TRADE_SCHEMA = pa.schema(
     [
-        _string_field("ts_code", allow_null_identity=True),
+        ("ts_code", pa.string()),
         ("trade_date", pa.string()),
         ("price", TUSHARE_RAW_NUMERIC_TYPE),
         ("vol", TUSHARE_RAW_NUMERIC_TYPE),
@@ -549,7 +559,17 @@ FINANCIAL_DATASET_FIELDS: dict[str, tuple[str, ...]] = {
 
 # Plan §5 expansion: forecast is NOT FINANCIAL (its field set omits
 # f_ann_date / report_type / comp_type). It's a separate family with
-# its own version-tracking identity keyed on update_flag.
+# its own version-tracking identity keyed on update_flag + type.
+#
+# Codex review #1 P2 fix: `type` is part of the identity. Empirically
+# 2990 / 5389 corpus forecast files (55%) have the same
+# (ts_code, ann_date, end_date, update_flag) across multiple rows
+# that differ only in `type` (e.g. 000056.SZ/20240710/20240630/
+# update_flag=0 ships both "续亏" and "不确定" forecasts side-by-side —
+# a company can emit multiple forecast flavors for the same report
+# period, and each is a distinct semantic record). Without `type` in
+# identity the dbt unique test would false-fire on real data and the
+# adapter would deduplicate legitimate rows.
 FORECAST_DATASET_FIELDS: dict[str, tuple[str, ...]] = {
     "forecast": TUSHARE_FORECAST_FIELDS,
 }
@@ -558,6 +578,7 @@ FORECAST_VERSION_FIELDS: tuple[str, ...] = (
     "ann_date",
     "end_date",
     "update_flag",
+    "type",
 )
 
 TUSHARE_STOCK_BASIC_ASSET = AssetSpec(
