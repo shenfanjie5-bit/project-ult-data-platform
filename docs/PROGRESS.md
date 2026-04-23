@@ -49,9 +49,9 @@
 
 **完成判定（§23 验收 1+2）**：
 - [x] Raw / Canonical / Formal / Analytical 边界与落地方式明确并可运行
-- [x] 至少 1 个 API 样例完成 Raw → staging → Canonical → DuckDB 读取闭环（实现已落地；正向 smoke 证据待一次真实 PG 环境下 `make smoke-p1a` 成功运行）
-- [ ] `make smoke-p1a` 一次成功且 `< 5 分钟`（`Makefile` 已声明 `smoke-p1a` 目标，`scripts/smoke_p1a.sh` 已落地；`tests/integration/test_p1a_smoke.py` 在缺 `DATABASE_URL` 时 `pytest.skip`，sandbox 当前跑出 `s......`，未留下 `<5 分钟` pass 证据）
-- [ ] Iceberg 写入链 spike 三类用例全部通过（`tests/spike/test_iceberg_write_chain.py` 3 用例 + `@pytest.mark.spike` marker 已落地；在缺 `DATABASE_URL` / `DP_PG_DSN` 时 `pytest.skip`，sandbox 当前跑出 `sss`；`docs/spike/iceberg-write-chain.md` 仍为 `Completed cases: 0/3 / Conclusion: pending`，待一次真实 PG 环境下 `pytest -m spike` 改写为 3/3 pass 版本）
+- [ ] 至少 1 个 API 样例完成 Raw → staging → Canonical → DuckDB 读取闭环（**实现已落地（ISSUE-001~012 staging / canonical / serving 模块可 import、单元测试可独立跑过），但"一条 API 完整闭环 pass"这件事本身就是 ISSUE-014 正向 smoke 的验收范围；仓内目前没有 `make smoke-p1a` 成功日志，所以本条保持 `[ ]` 直到下一条 checkbox 先满足**）
+- [ ] `make smoke-p1a` 一次成功且 `< 5 分钟`（`Makefile` 已声明 `smoke-p1a` 目标，`scripts/smoke_p1a.sh` 已落地；`scripts/smoke_p1a.sh` 要求 **`DP_PG_DSN`** 环境变量，脚本第 26 行明确写 "DATABASE_URL is not used by this destructive smoke path"；sandbox 下 `DP_PG_DSN` 未设时脚本以 exit 2 失败，留下的 `<5 分钟` pass 证据为零。pytest 对位验证 `tests/integration/test_p1a_smoke.py` 用的是 **`DATABASE_URL`**（fixture 读 `os.environ.get("DATABASE_URL")`），sandbox 跑出 `s......` 也是 skip。）
+- [ ] Iceberg 写入链 spike 三类用例全部通过（`tests/spike/test_iceberg_write_chain.py` 3 用例 + `@pytest.mark.spike` marker 已落地；spike fixture 在缺 `DATABASE_URL` / `DP_PG_DSN` 时 `pytest.skip`，sandbox 当前跑出 `sss`；`docs/spike/iceberg-write-chain.md` 仍为 `Completed cases: 0/3 / Conclusion: pending`，待一次真实 PG 环境下 `pytest -m spike` 改写为 3/3 pass 版本）
 
 **关键交付物实际落点（2026-04-24 sync 时核验存在）**：
 
@@ -68,7 +68,7 @@
 - ISSUE-011：`src/data_platform/serving/canonical_writer.py`
 - ISSUE-012：`src/data_platform/serving/reader.py`（`get_canonical_stock_basic` 等）
 - ISSUE-013：`tests/spike/test_iceberg_write_chain.py` + `@pytest.mark.spike` marker（`pyproject.toml`）+ `docs/spike/iceberg-write-chain.md`（**报告仍为 `Completed cases: 0/3 / Conclusion: pending`，待真实 PG 环境下重写**）
-- ISSUE-014：`scripts/smoke_p1a.sh` + `tests/integration/test_p1a_smoke.py` + `Makefile` 中 `smoke-p1a:` target（**正向 smoke 依赖 `DATABASE_URL`；sandbox 运行 `s......` 为 skip，不是成功证据**）
+- ISSUE-014：`scripts/smoke_p1a.sh` + `tests/integration/test_p1a_smoke.py` + `Makefile` 中 `smoke-p1a:` target（**正向 smoke 有两条验证路径、两个不同的环境变量**：`make smoke-p1a` 走 `scripts/smoke_p1a.sh`，要求 `DP_PG_DSN`（脚本 line 26 明确 "DATABASE_URL is not used by this destructive smoke path"）；`pytest tests/integration/test_p1a_smoke.py` 走 `postgres_dsn` fixture，要求 `DATABASE_URL`。sandbox 下两者都 skip，`s......` 不是成功证据。）
 
 ---
 

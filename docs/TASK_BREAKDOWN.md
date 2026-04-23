@@ -689,13 +689,20 @@ scripts/smoke + tests/integration
 
 #### 实现状态 / 验收状态（2026-04-24）
 - **实现已落地**：`scripts/smoke_p1a.sh` + `tests/integration/test_p1a_smoke.py` + `Makefile` 的 `smoke-p1a:` target 都已存在。
-- **验收未通过**：`tests/integration/test_p1a_smoke.py::postgres_dsn` fixture 在 `DATABASE_URL` 缺失时 `pytest.skip`；sandbox 运行 `pytest tests/integration/test_p1a_smoke.py` 结果为 `s......`（skip + 保护性测试 pass，正向链路未执行）。
-- **上一条 ✅ 的先决条件**：在真实 PG 环境下 `DATABASE_URL=postgresql://... make smoke-p1a` 一次成功并留下日志（含 "P1a smoke OK" 字样 + 总耗时 `< 5 分钟`）。
+- **两条验证路径，环境变量要求不同**：
+  - `make smoke-p1a` → `scripts/smoke_p1a.sh` → 要求 `DP_PG_DSN`；脚本第 26 行明确 "DATABASE_URL is not used by this destructive smoke path"。
+  - `pytest tests/integration/test_p1a_smoke.py` → `postgres_dsn` fixture → 要求 `DATABASE_URL`（fixture 读 `os.environ.get("DATABASE_URL")`，line ~38）。
+- **验收未通过**：两条路径都在 sandbox 下 skip。运行 `pytest tests/integration/test_p1a_smoke.py` 结果为 `s......`（fixture skip + 保护性测试 pass，正向链路未执行）；`make smoke-p1a` 在 sandbox 下 `DP_PG_DSN` 未设时以 exit 2 失败或（若设 `DP_SMOKE_P1A_ALLOW_SKIP=1`）直接 skip。
+- **上一条 ✅ 的先决条件**：在真实 PG 环境下
+  - `DP_PG_DSN=postgresql://... make smoke-p1a` 一次成功并留下日志（含 "P1a smoke OK" 字样 + 总耗时 `< 5 分钟`）；
+  - 且 `DATABASE_URL=postgresql://... pytest tests/integration/test_p1a_smoke.py -v` 全部 PASS。
 
 #### 验证命令
 ```bash
 cd /Users/fanjie/Desktop/Cowork/project-ult/data-platform
-DATABASE_URL=postgresql://... make smoke-p1a
+# make 路径：shell 脚本读 DP_PG_DSN，DATABASE_URL 被脚本明确忽略
+DP_PG_DSN=postgresql://... make smoke-p1a
+# pytest 路径：fixture 读 DATABASE_URL
 DATABASE_URL=postgresql://... pytest tests/integration/test_p1a_smoke.py -v
 ```
 
