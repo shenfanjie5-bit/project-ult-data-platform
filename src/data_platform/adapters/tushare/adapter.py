@@ -946,7 +946,7 @@ _PARTITION_REQUEST_PARAMS_BY_DATASET = {
     "stk_holdernumber": ("ann_date",),
     "disclosure_date": ("ann_date",),
     "block_trade": ("trade_date",),  # Plan §5
-    "forecast": ("ann_date", "end_date", "period"),  # Plan §5
+    "forecast": ("ann_date",),  # Plan §5 — single partition date (like anns)
     **{dataset: ("period",) for dataset in FINANCIAL_DATASETS},
 }
 _DATE_PARAM_NAMES_BY_DATASET = {

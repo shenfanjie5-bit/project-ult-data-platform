@@ -18,7 +18,9 @@ from data_platform.adapters.tushare import (  # noqa: E402
     TUSHARE_ADJ_FACTOR_ASSET,
     TUSHARE_DAILY_ASSET,
     TUSHARE_DAILY_BASIC_ASSET,
+    TUSHARE_MONEYFLOW_ASSET,
     TUSHARE_MONTHLY_ASSET,
+    TUSHARE_STK_LIMIT_ASSET,
     TUSHARE_WEEKLY_ASSET,
     TushareAdapter,
 )
@@ -27,6 +29,8 @@ from data_platform.adapters.tushare.assets import (  # noqa: E402
     TUSHARE_ADJ_FACTOR_FIELDS_CSV,
     TUSHARE_BAR_FIELDS_CSV,
     TUSHARE_DAILY_BASIC_FIELDS_CSV,
+    TUSHARE_MONEYFLOW_FIELDS_CSV,
+    TUSHARE_STK_LIMIT_FIELDS_CSV,
 )
 
 
@@ -37,6 +41,9 @@ MARKET_ASSETS = [
     TUSHARE_MONTHLY_ASSET,
     TUSHARE_ADJ_FACTOR_ASSET,
     TUSHARE_DAILY_BASIC_ASSET,
+    # Plan §5 expansion
+    TUSHARE_STK_LIMIT_ASSET,
+    TUSHARE_MONEYFLOW_ASSET,
 ]
 
 METHOD_BY_ASSET_NAME = {
@@ -45,6 +52,9 @@ METHOD_BY_ASSET_NAME = {
     TUSHARE_MONTHLY_ASSET.name: "monthly",
     TUSHARE_ADJ_FACTOR_ASSET.name: "adj_factor",
     TUSHARE_DAILY_BASIC_ASSET.name: "daily_basic",
+    # Plan §5 expansion
+    TUSHARE_STK_LIMIT_ASSET.name: "stk_limit",
+    TUSHARE_MONEYFLOW_ASSET.name: "moneyflow",
 }
 
 FIELDS_CSV_BY_ASSET_NAME = {
@@ -53,6 +63,9 @@ FIELDS_CSV_BY_ASSET_NAME = {
     TUSHARE_MONTHLY_ASSET.name: TUSHARE_BAR_FIELDS_CSV,
     TUSHARE_ADJ_FACTOR_ASSET.name: TUSHARE_ADJ_FACTOR_FIELDS_CSV,
     TUSHARE_DAILY_BASIC_ASSET.name: TUSHARE_DAILY_BASIC_FIELDS_CSV,
+    # Plan §5 expansion
+    TUSHARE_STK_LIMIT_ASSET.name: TUSHARE_STK_LIMIT_FIELDS_CSV,
+    TUSHARE_MONEYFLOW_ASSET.name: TUSHARE_MONEYFLOW_FIELDS_CSV,
 }
 
 
@@ -75,6 +88,13 @@ class FakeTushareMarketClient:
 
     def daily_basic(self, **kwargs: Any) -> Any:
         return self._record_call("daily_basic", kwargs)
+
+    # Plan §5 expansion
+    def stk_limit(self, **kwargs: Any) -> Any:
+        return self._record_call("stk_limit", kwargs)
+
+    def moneyflow(self, **kwargs: Any) -> Any:
+        return self._record_call("moneyflow", kwargs)
 
     def _record_call(self, method_name: str, kwargs: dict[str, Any]) -> Any:
         self.calls.append((method_name, kwargs))
