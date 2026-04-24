@@ -3,10 +3,11 @@
 Per SUBPROJECT_TESTING_STANDARD.md §3.2 + §13.3 + iron rule #4: a module
 with public interfaces must have a non-empty canonical contract tier.
 
-data-platform's contract surface is the four headline runtime functions
+data-platform's contract surface is the five headline runtime functions
 listed in §10 and main-core/CLAUDE.md (downstream consumers depend on
 these signatures):
 
+- list_cycles(*, limit=..., status=...)
 - get_formal_latest(object_type)
 - get_formal_by_id(cycle_id, object_type)
 - submit_candidate(payload)
@@ -27,6 +28,16 @@ class TestRuntimeApiSignatures:
     Adding optional kwargs is fine; reordering, renaming or dropping
     required params is a breaking change for downstream consumers.
     """
+
+    def test_list_cycles_signature(self) -> None:
+        from data_platform.cycle import list_cycles
+
+        sig = inspect.signature(list_cycles)
+        params = sig.parameters
+        assert params["limit"].kind is inspect.Parameter.KEYWORD_ONLY
+        assert params["limit"].default == 100
+        assert params["status"].kind is inspect.Parameter.KEYWORD_ONLY
+        assert params["status"].default is None
 
     def test_get_formal_latest_signature(self) -> None:
         from data_platform.serving.formal import get_formal_latest

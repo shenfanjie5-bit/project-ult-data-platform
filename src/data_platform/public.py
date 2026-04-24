@@ -9,8 +9,8 @@ singletons referenced by ``assembly/module-registry.yaml``
   and the four key API namespaces (raw / canonical / formal-serving /
   queue / cycle) all import cleanly. Never tries a real PostgreSQL or
   Iceberg connection — that is left to runtime / orchestrator.
-- ``smoke_hook`` — verifies the four headline public API functions
-  (get_formal_latest, get_formal_by_id, submit_candidate,
+- ``smoke_hook`` — verifies the five headline public API functions
+  (list_cycles, get_formal_latest, get_formal_by_id, submit_candidate,
   freeze_cycle_candidates) are importable + callable shape, without
   invoking them
 - ``init_hook`` — no-op (PostgreSQL / Iceberg / DuckDB are owned by the
@@ -93,7 +93,7 @@ class _HealthProbe:
 
 
 class _SmokeHook:
-    """Smoke hook — exercises the four headline public-API callables
+    """Smoke hook — exercises the five headline public-API callables
     are importable + carry the expected callable shape.
 
     No live PG/Iceberg call — this stays under the 1-second smoke
@@ -110,6 +110,7 @@ class _SmokeHook:
                 get_formal_latest,
                 get_formal_by_id,
             )
+            from data_platform.cycle import list_cycles
             from data_platform.queue.api import submit_candidate
             from data_platform.cycle.freeze import freeze_cycle_candidates
 
@@ -117,6 +118,7 @@ class _SmokeHook:
             # PostgreSQL connection — out of scope for smoke).
             checked = 0
             for fn in (
+                list_cycles,
                 get_formal_latest,
                 get_formal_by_id,
                 submit_candidate,

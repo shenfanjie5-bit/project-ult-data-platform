@@ -31,6 +31,7 @@ from data_platform.cycle.repository import (
     NoAcceptedCandidates,
     create_cycle,
     get_cycle,
+    list_cycles,
     transition_cycle_status,
 )
 
@@ -59,6 +60,7 @@ __all__ = [
     "get_latest_publish_manifest",
     "get_publish_manifest",
     "get_publish_manifest_for_snapshot",
+    "list_cycles",
     "publish_manifest",
     "transition_cycle_status",
     "validate_snapshot_id",

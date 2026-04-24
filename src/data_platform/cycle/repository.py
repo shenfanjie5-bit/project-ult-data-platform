@@ -272,6 +272,53 @@ def get_cycle(cycle_id: str) -> CycleMetadata:
         engine.dispose()
 
 
+def list_cycles(
+    *,
+    limit: int = 100,
+    status: CycleStatus | None = None,
+) -> tuple[CycleMetadata, ...]:
+    """Return recent cycle_metadata rows ordered newest first."""
+
+    validated_limit = _validate_cycle_limit(limit)
+    params: dict[str, Any] = {"limit": validated_limit}
+    where_clause = ""
+    if status is not None:
+        params["status"] = _validate_cycle_status(status)
+        where_clause = "WHERE status = CAST(:status AS data_platform.cycle_status)"
+
+    engine = _create_engine()
+    try:
+        with engine.connect() as connection:
+            rows = (
+                connection.execute(
+                    _text(
+                        f"""
+                    SELECT
+                        cycle_id,
+                        cycle_date,
+                        status,
+                        cutoff_submitted_at,
+                        cutoff_ingest_seq,
+                        candidate_count,
+                        selection_frozen_at,
+                        created_at,
+                        updated_at
+                    FROM {CYCLE_METADATA_TABLE}
+                    {where_clause}
+                    ORDER BY cycle_date DESC, cycle_id DESC
+                    LIMIT :limit
+                    """
+                    ),
+                    params,
+                )
+                .mappings()
+                .all()
+            )
+            return tuple(_metadata_from_row(row) for row in rows)
+    finally:
+        engine.dispose()
+
+
 def transition_cycle_status(cycle_id: str, status: CycleStatus) -> CycleMetadata:
     """Transition a cycle to the next allowed status."""
 
@@ -371,6 +418,16 @@ def _validate_transition(
     raise InvalidCycleTransition(cycle_id, current_status, target_status)
 
 
+def _validate_cycle_limit(limit: int) -> int:
+    if isinstance(limit, bool) or not isinstance(limit, int):
+        msg = f"limit must be an integer between 1 and 500: {limit!r}"
+        raise ValueError(msg)
+    if limit < 1 or limit > 500:
+        msg = f"limit must be an integer between 1 and 500: {limit!r}"
+        raise ValueError(msg)
+    return limit
+
+
 def _metadata_from_row(row: Mapping[str, Any]) -> CycleMetadata:
     return CycleMetadata(
         cycle_id=str(row["cycle_id"]),
@@ -395,5 +452,6 @@ __all__ = [
     "NoAcceptedCandidates",
     "create_cycle",
     "get_cycle",
+    "list_cycles",
     "transition_cycle_status",
 ]

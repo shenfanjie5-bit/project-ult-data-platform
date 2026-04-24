@@ -20,6 +20,7 @@ from data_platform.cycle import (
     InvalidCycleTransition,
     create_cycle,
     get_cycle,
+    list_cycles,
     publish_manifest,
     transition_cycle_status,
 )
@@ -168,6 +169,12 @@ def test_repository_rejects_invalid_cycle_id_before_database(cycle_id: str) -> N
         transition_cycle_status(cycle_id, "phase0")
 
 
+@pytest.mark.parametrize("limit", [0, -1, 501, True, "10"])
+def test_list_cycles_rejects_invalid_limit_before_database(limit: object) -> None:
+    with pytest.raises(ValueError, match="limit must be an integer"):
+        list_cycles(limit=limit)  # type: ignore[arg-type]
+
+
 def test_transition_rejects_invalid_target_status_before_database() -> None:
     with pytest.raises(InvalidCycleTransition):
         transition_cycle_status("CYCLE_20260416", "unknown")  # type: ignore[arg-type]
@@ -272,6 +279,25 @@ def test_get_cycle_raises_not_found_for_valid_missing_cycle(
 ) -> None:
     with pytest.raises(CycleNotFound):
         get_cycle("CYCLE_20260416")
+
+
+def test_list_cycles_orders_newest_first_and_filters_status(
+    cycle_repository_env: str,
+) -> None:
+    create_cycle(date(2026, 4, 16))
+    create_cycle(date(2026, 4, 17))
+    transition_cycle_status("CYCLE_20260417", "phase0")
+
+    cycles = list_cycles()
+
+    assert [cycle.cycle_id for cycle in cycles] == [
+        "CYCLE_20260417",
+        "CYCLE_20260416",
+    ]
+    assert [cycle.cycle_id for cycle in list_cycles(limit=1)] == ["CYCLE_20260417"]
+    assert [cycle.cycle_id for cycle in list_cycles(status="phase0")] == [
+        "CYCLE_20260417"
+    ]
 
 
 def test_legal_cycle_status_transitions_pass(cycle_repository_env: str) -> None:
