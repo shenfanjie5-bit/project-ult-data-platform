@@ -64,6 +64,35 @@ def test_frontend_api_cycle_index_points_to_published_artifact_cycle() -> None:
     )
 
 
+def test_frontend_api_canonical_data_artifact_exposes_rows() -> None:
+    payload = _load_json(ARTIFACT_ROOT / "data" / "canonical" / "stock_basic.json")
+
+    assert payload["columns"] == [
+        "ts_code",
+        "symbol",
+        "name",
+        "area",
+        "industry",
+        "list_status",
+    ]
+    assert isinstance(payload["items"], list)
+    assert payload["items"][0]["ts_code"] == "600519.SH"
+
+
+def test_frontend_api_raw_data_artifact_exposes_rows() -> None:
+    payload = _load_json(ARTIFACT_ROOT / "data" / "raw" / "tushare_stock_basic.json")
+
+    assert payload["columns"] == [
+        "source",
+        "ts_code",
+        "name",
+        "trade_date",
+        "raw_loaded_at",
+    ]
+    assert isinstance(payload["items"], list)
+    assert payload["items"][0]["source"] == "tushare"
+
+
 def _load_formal_payload(object_type: str) -> dict[str, Any]:
     formal_object = _load_json(ARTIFACT_ROOT / "formal" / object_type / "latest.json")
     assert formal_object["object_type"] == object_type
