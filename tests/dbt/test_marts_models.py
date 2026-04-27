@@ -29,6 +29,9 @@ MART_MODEL_NAMES = [
     "mart_fact_price_bar",
     "mart_fact_financial_indicator",
     "mart_fact_event",
+    "mart_fact_market_daily_feature",
+    "mart_fact_index_price_bar",
+    "mart_fact_forecast_event",
 ]
 
 
@@ -109,6 +112,39 @@ def test_marts_sql_and_schema_contracts_are_present() -> None:
         _schema_column(declared_models["mart_fact_event"], "event_date")
     )
 
+    market_tests = declared_models["mart_fact_market_daily_feature"]["tests"]
+    market_unique_test = next(
+        test["unique_combination_of_columns"]
+        for test in market_tests
+        if _model_test_name(test) == "unique_combination_of_columns"
+    )
+    assert market_unique_test["combination_of_columns"] == ["ts_code", "trade_date"]
+
+    index_price_tests = declared_models["mart_fact_index_price_bar"]["tests"]
+    index_price_unique_test = next(
+        test["unique_combination_of_columns"]
+        for test in index_price_tests
+        if _model_test_name(test) == "unique_combination_of_columns"
+    )
+    assert index_price_unique_test["combination_of_columns"] == ["index_code", "trade_date"]
+    assert "accepted_values" in _test_names(
+        _schema_column(declared_models["mart_fact_index_price_bar"], "is_open")
+    )
+
+    forecast_tests = declared_models["mart_fact_forecast_event"]["tests"]
+    forecast_unique_test = next(
+        test["unique_combination_of_columns"]
+        for test in forecast_tests
+        if _model_test_name(test) == "unique_combination_of_columns"
+    )
+    assert forecast_unique_test["combination_of_columns"] == [
+        "ts_code",
+        "ann_date",
+        "end_date",
+        "update_flag",
+        "forecast_type",
+    ]
+
 
 def test_marts_models_execute_with_duckdb_raw_fixture(tmp_path: Path) -> None:
     duckdb = pytest.importorskip("duckdb")
@@ -164,6 +200,25 @@ def test_marts_models_execute_with_duckdb_raw_fixture(tmp_path: Path) -> None:
             row[1]
             for row in connection.execute("pragma table_info('mart_fact_event')").fetchall()
         ]
+        market_summary = connection.execute(
+            """
+            select count(*), typeof(any_value(close)), typeof(any_value(up_limit)),
+                   typeof(any_value(net_mf_amount))
+            from mart_fact_market_daily_feature
+            """
+        ).fetchone()
+        index_price_row = connection.execute(
+            """
+            select index_code, is_open, typeof(close), typeof(amount)
+            from mart_fact_index_price_bar
+            """
+        ).fetchone()
+        forecast_row = connection.execute(
+            """
+            select forecast_type, typeof(p_change_min), typeof(net_profit_max), update_flag
+            from mart_fact_forecast_event
+            """
+        ).fetchone()
     finally:
         connection.close()
 
@@ -195,6 +250,14 @@ def test_marts_models_execute_with_duckdb_raw_fixture(tmp_path: Path) -> None:
     )
     assert event_summary == (6, 6)
     assert {"body", "content", "text"}.isdisjoint(event_columns)
+    assert market_summary == (1, "DECIMAL(38,18)", "DECIMAL(38,18)", "DECIMAL(38,18)")
+    assert index_price_row == ("000300.SH", True, "DECIMAL(38,18)", "DECIMAL(38,18)")
+    assert forecast_row == (
+        "type-fixture",
+        "DECIMAL(38,18)",
+        "DECIMAL(38,18)",
+        "0",
+    )
 
 
 def test_price_mart_rejects_malformed_numeric_values() -> None:

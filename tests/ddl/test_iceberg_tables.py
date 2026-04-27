@@ -236,6 +236,9 @@ def test_ensure_tables_is_idempotent() -> None:
         "canonical.entity_alias",
         "canonical.fact_event",
         "canonical.fact_financial_indicator",
+        "canonical.fact_forecast_event",
+        "canonical.fact_index_price_bar",
+        "canonical.fact_market_daily_feature",
         "canonical.fact_price_bar",
         "canonical.stock_basic",
     ]

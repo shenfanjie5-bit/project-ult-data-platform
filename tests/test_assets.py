@@ -63,6 +63,9 @@ def test_build_assets_links_raw_staging_marts_and_canonical_specs() -> None:
         ("dbt", "mart_fact_price_bar"),
         ("dbt", "mart_fact_financial_indicator"),
         ("dbt", "mart_fact_event"),
+        ("dbt", "mart_fact_market_daily_feature"),
+        ("dbt", "mart_fact_index_price_bar"),
+        ("dbt", "mart_fact_forecast_event"),
     }
 
     assert by_key[raw_key].kind == "raw"
@@ -79,6 +82,9 @@ def test_build_assets_links_raw_staging_marts_and_canonical_specs() -> None:
         "canonical.fact_price_bar",
         "canonical.fact_financial_indicator",
         "canonical.fact_event",
+        "canonical.fact_market_daily_feature",
+        "canonical.fact_index_price_bar",
+        "canonical.fact_forecast_event",
     ]
     assert by_key[canonical_marts_key].metadata["serialization_required"] is True
     assert by_key[canonical_marts_key].callable_import_path.endswith(
@@ -189,12 +195,18 @@ def test_assets_cli_outputs_stable_json_with_canonical_marts(
         "canonical.fact_price_bar",
         "canonical.fact_financial_indicator",
         "canonical.fact_event",
+        "canonical.fact_market_daily_feature",
+        "canonical.fact_index_price_bar",
+        "canonical.fact_forecast_event",
     ]
     assert ("canonical", "dim_security") not in canonical_keys
     assert ("canonical", "dim_index") not in canonical_keys
     assert ("canonical", "fact_price_bar") not in canonical_keys
     assert ("canonical", "fact_financial_indicator") not in canonical_keys
     assert ("canonical", "fact_event") not in canonical_keys
+    assert ("canonical", "fact_market_daily_feature") not in canonical_keys
+    assert ("canonical", "fact_index_price_bar") not in canonical_keys
+    assert ("canonical", "fact_forecast_event") not in canonical_keys
 
 
 def test_assets_cli_filters_by_kind(capsys: pytest.CaptureFixture[str]) -> None:

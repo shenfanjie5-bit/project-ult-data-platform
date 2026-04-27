@@ -176,7 +176,7 @@ def test_load_canonical_marts_writes_all_tables_in_fixed_order(tmp_path: Path) -
     assert [result.table for result in results] == [
         spec.identifier for spec in CANONICAL_MART_LOAD_SPECS
     ]
-    assert [result.row_count for result in results] == [1, 1, 1, 1, 1]
+    assert [result.row_count for result in results] == [1] * len(CANONICAL_MART_LOAD_SPECS)
     assert all(result.snapshot_id for result in results)
 
     for load_spec, table_spec in zip(
@@ -332,7 +332,7 @@ def test_cli_writes_marts_result_json(
     assert [item["table"] for item in payload] == [
         spec.identifier for spec in CANONICAL_MART_LOAD_SPECS
     ]
-    assert [item["row_count"] for item in payload] == [1, 1, 1, 1, 1]
+    assert [item["row_count"] for item in payload] == [1] * len(CANONICAL_MART_LOAD_SPECS)
 
 
 def test_cli_reports_failure_as_json(
@@ -521,6 +521,95 @@ def write_mart_relations(duckdb_path: Path) -> None:
                 NULL::DATE AS related_date,
                 'https://example.test/report'::VARCHAR AS reference_url,
                 '10:30:00'::VARCHAR AS rec_time,
+                'run-001'::VARCHAR AS source_run_id,
+                TIMESTAMP '2026-04-15 10:30:00' AS raw_loaded_at
+            """
+        )
+        connection.execute(
+            """
+            CREATE OR REPLACE TABLE mart_fact_market_daily_feature AS
+            SELECT
+                '000001.SZ'::VARCHAR AS ts_code,
+                DATE '2026-04-15' AS trade_date,
+                CAST(10.500000000000000000 AS DECIMAL(38, 18)) AS close,
+                CAST(1.000000000000000000 AS DECIMAL(38, 18)) AS turnover_rate,
+                CAST(1.100000000000000000 AS DECIMAL(38, 18)) AS turnover_rate_f,
+                CAST(1.200000000000000000 AS DECIMAL(38, 18)) AS volume_ratio,
+                CAST(8.000000000000000000 AS DECIMAL(38, 18)) AS pe,
+                CAST(9.000000000000000000 AS DECIMAL(38, 18)) AS pe_ttm,
+                CAST(1.300000000000000000 AS DECIMAL(38, 18)) AS pb,
+                CAST(2.000000000000000000 AS DECIMAL(38, 18)) AS ps,
+                CAST(2.100000000000000000 AS DECIMAL(38, 18)) AS ps_ttm,
+                CAST(3.000000000000000000 AS DECIMAL(38, 18)) AS dv_ratio,
+                CAST(3.100000000000000000 AS DECIMAL(38, 18)) AS dv_ttm,
+                CAST(1000.000000000000000000 AS DECIMAL(38, 18)) AS total_share,
+                CAST(800.000000000000000000 AS DECIMAL(38, 18)) AS float_share,
+                CAST(600.000000000000000000 AS DECIMAL(38, 18)) AS free_share,
+                CAST(100000.000000000000000000 AS DECIMAL(38, 18)) AS total_mv,
+                CAST(80000.000000000000000000 AS DECIMAL(38, 18)) AS circ_mv,
+                CAST(11.550000000000000000 AS DECIMAL(38, 18)) AS up_limit,
+                CAST(9.450000000000000000 AS DECIMAL(38, 18)) AS down_limit,
+                CAST(10.000000000000000000 AS DECIMAL(38, 18)) AS buy_sm_vol,
+                CAST(100.000000000000000000 AS DECIMAL(38, 18)) AS buy_sm_amount,
+                CAST(9.000000000000000000 AS DECIMAL(38, 18)) AS sell_sm_vol,
+                CAST(90.000000000000000000 AS DECIMAL(38, 18)) AS sell_sm_amount,
+                CAST(20.000000000000000000 AS DECIMAL(38, 18)) AS buy_md_vol,
+                CAST(200.000000000000000000 AS DECIMAL(38, 18)) AS buy_md_amount,
+                CAST(18.000000000000000000 AS DECIMAL(38, 18)) AS sell_md_vol,
+                CAST(180.000000000000000000 AS DECIMAL(38, 18)) AS sell_md_amount,
+                CAST(30.000000000000000000 AS DECIMAL(38, 18)) AS buy_lg_vol,
+                CAST(300.000000000000000000 AS DECIMAL(38, 18)) AS buy_lg_amount,
+                CAST(25.000000000000000000 AS DECIMAL(38, 18)) AS sell_lg_vol,
+                CAST(250.000000000000000000 AS DECIMAL(38, 18)) AS sell_lg_amount,
+                CAST(40.000000000000000000 AS DECIMAL(38, 18)) AS buy_elg_vol,
+                CAST(400.000000000000000000 AS DECIMAL(38, 18)) AS buy_elg_amount,
+                CAST(35.000000000000000000 AS DECIMAL(38, 18)) AS sell_elg_vol,
+                CAST(350.000000000000000000 AS DECIMAL(38, 18)) AS sell_elg_amount,
+                CAST(13.000000000000000000 AS DECIMAL(38, 18)) AS net_mf_vol,
+                CAST(130.000000000000000000 AS DECIMAL(38, 18)) AS net_mf_amount,
+                'run-001'::VARCHAR AS source_run_id,
+                TIMESTAMP '2026-04-15 10:30:00' AS raw_loaded_at
+            """
+        )
+        connection.execute(
+            """
+            CREATE OR REPLACE TABLE mart_fact_index_price_bar AS
+            SELECT
+                '000300.SH'::VARCHAR AS index_code,
+                DATE '2026-04-15' AS trade_date,
+                CAST(4000.000000000000000000 AS DECIMAL(38, 18)) AS open,
+                CAST(4050.000000000000000000 AS DECIMAL(38, 18)) AS high,
+                CAST(3980.000000000000000000 AS DECIMAL(38, 18)) AS low,
+                CAST(4020.000000000000000000 AS DECIMAL(38, 18)) AS close,
+                CAST(3990.000000000000000000 AS DECIMAL(38, 18)) AS pre_close,
+                CAST(30.000000000000000000 AS DECIMAL(38, 18)) AS change,
+                CAST(0.750000000000000000 AS DECIMAL(38, 18)) AS pct_chg,
+                CAST(200000.000000000000000000 AS DECIMAL(38, 18)) AS vol,
+                CAST(900000.000000000000000000 AS DECIMAL(38, 18)) AS amount,
+                'SSE'::VARCHAR AS exchange,
+                TRUE AS is_open,
+                DATE '2026-04-14' AS pretrade_date,
+                'run-001'::VARCHAR AS source_run_id,
+                TIMESTAMP '2026-04-15 10:30:00' AS raw_loaded_at
+            """
+        )
+        connection.execute(
+            """
+            CREATE OR REPLACE TABLE mart_fact_forecast_event AS
+            SELECT
+                '000001.SZ'::VARCHAR AS ts_code,
+                DATE '2026-04-15' AS ann_date,
+                DATE '2026-03-31' AS end_date,
+                'increase'::VARCHAR AS forecast_type,
+                CAST(5.000000000000000000 AS DECIMAL(38, 18)) AS p_change_min,
+                CAST(10.000000000000000000 AS DECIMAL(38, 18)) AS p_change_max,
+                CAST(100.000000000000000000 AS DECIMAL(38, 18)) AS net_profit_min,
+                CAST(110.000000000000000000 AS DECIMAL(38, 18)) AS net_profit_max,
+                CAST(90.000000000000000000 AS DECIMAL(38, 18)) AS last_parent_net,
+                DATE '2026-04-14' AS first_ann_date,
+                'Forecast summary'::VARCHAR AS summary,
+                'Demand change'::VARCHAR AS change_reason,
+                '0'::VARCHAR AS update_flag,
                 'run-001'::VARCHAR AS source_run_id,
                 TIMESTAMP '2026-04-15 10:30:00' AS raw_loaded_at
             """

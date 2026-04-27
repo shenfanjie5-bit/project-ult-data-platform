@@ -1253,6 +1253,8 @@ models:
         description: Raw Tushare forecast.last_parent_net staged from the latest manifest artifact.
       - name: first_ann_date
         description: Raw Tushare forecast.first_ann_date staged from the latest manifest artifact.
+        tests:
+          - parsable_yyyymmdd_or_date
       - name: summary
         description: Raw Tushare forecast.summary staged from the latest manifest artifact.
       - name: change_reason

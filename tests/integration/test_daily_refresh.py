@@ -94,7 +94,9 @@ def test_mock_daily_refresh_is_repeatable_and_writes_report(
 
     canonical_step = _step(report, "canonical")
     write_results = canonical_step["metadata"]["write_results"]
-    assert [item["row_count"] for item in write_results] == [1, 1, 1, 1, 1, 1]
+    assert [item["row_count"] for item in write_results] == [
+        1
+    ] * (1 + len(CANONICAL_MART_LOAD_SPECS))
     assert canonical_step["metadata"]["skipped_writes"] == []
 
     raw_health_step = _step(report, "raw_health")

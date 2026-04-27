@@ -41,6 +41,7 @@ DATE_FIELD_NAMES = {
     "ex_date",
     "exp_date",
     "f_ann_date",
+    "first_ann_date",
     "float_date",
     "imp_ann_date",
     "in_date",
@@ -66,6 +67,52 @@ PRICE_NUMERIC_FIELD_NAMES = {
     "pct_chg",
     "vol",
     "amount",
+}
+DAILY_BASIC_NUMERIC_FIELD_NAMES = {
+    "close",
+    "turnover_rate",
+    "turnover_rate_f",
+    "volume_ratio",
+    "pe",
+    "pe_ttm",
+    "pb",
+    "ps",
+    "ps_ttm",
+    "dv_ratio",
+    "dv_ttm",
+    "total_share",
+    "float_share",
+    "free_share",
+    "total_mv",
+    "circ_mv",
+}
+STK_LIMIT_NUMERIC_FIELD_NAMES = {"up_limit", "down_limit"}
+MONEYFLOW_NUMERIC_FIELD_NAMES = {
+    "buy_sm_vol",
+    "buy_sm_amount",
+    "sell_sm_vol",
+    "sell_sm_amount",
+    "buy_md_vol",
+    "buy_md_amount",
+    "sell_md_vol",
+    "sell_md_amount",
+    "buy_lg_vol",
+    "buy_lg_amount",
+    "sell_lg_vol",
+    "sell_lg_amount",
+    "buy_elg_vol",
+    "buy_elg_amount",
+    "sell_elg_vol",
+    "sell_elg_amount",
+    "net_mf_vol",
+    "net_mf_amount",
+}
+FORECAST_NUMERIC_FIELD_NAMES = {
+    "p_change_min",
+    "p_change_max",
+    "net_profit_min",
+    "net_profit_max",
+    "last_parent_net",
 }
 FIXTURE_DECIMAL_STRING = "1.123456789012345678"
 
@@ -554,7 +601,7 @@ def _sample_value(dataset: str, field: pa.Field) -> str | Decimal | None:
     if field.name == "ts_code":
         # index_basic ts_code must match index_member index_code for
         # referential integrity (relationship test checks this FK).
-        if dataset == "index_basic":
+        if dataset in {"index_basic", "index_daily"}:
             return "000300.SH"
         return "000001.SZ"
     if field.name == "index_code":
@@ -567,9 +614,22 @@ def _sample_value(dataset: str, field: pa.Field) -> str | Decimal | None:
         return "L"
     if field.name in {"report_type", "comp_type", "is_open"}:
         return "1"
+    if dataset == "trade_cal" and field.name == "exchange":
+        return "SSE"
     if field.name == "update_flag":
         return "0"
-    if dataset in PRICE_DATASETS and field.name in PRICE_NUMERIC_FIELD_NAMES:
+    if (
+        dataset in PRICE_DATASETS | {"index_daily"}
+        and field.name in PRICE_NUMERIC_FIELD_NAMES
+    ):
+        return FIXTURE_DECIMAL_STRING
+    if dataset == "daily_basic" and field.name in DAILY_BASIC_NUMERIC_FIELD_NAMES:
+        return FIXTURE_DECIMAL_STRING
+    if dataset == "stk_limit" and field.name in STK_LIMIT_NUMERIC_FIELD_NAMES:
+        return FIXTURE_DECIMAL_STRING
+    if dataset == "moneyflow" and field.name in MONEYFLOW_NUMERIC_FIELD_NAMES:
+        return FIXTURE_DECIMAL_STRING
+    if dataset == "forecast" and field.name in FORECAST_NUMERIC_FIELD_NAMES:
         return FIXTURE_DECIMAL_STRING
     if dataset == "adj_factor" and field.name == "adj_factor":
         return FIXTURE_DECIMAL_STRING

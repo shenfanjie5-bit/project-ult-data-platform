@@ -259,12 +259,116 @@ CANONICAL_FACT_EVENT_SPEC: Final[TableSpec] = TableSpec(
     ),
 )
 
+CANONICAL_FACT_MARKET_DAILY_FEATURE_SPEC: Final[TableSpec] = TableSpec(
+    namespace=CANONICAL_NAMESPACE,
+    name="fact_market_daily_feature",
+    schema=pa.schema(
+        [
+            pa.field("ts_code", pa.string()),
+            pa.field("trade_date", pa.date32()),
+            pa.field("close", DECIMAL_TYPE),
+            pa.field("turnover_rate", DECIMAL_TYPE),
+            pa.field("turnover_rate_f", DECIMAL_TYPE),
+            pa.field("volume_ratio", DECIMAL_TYPE),
+            pa.field("pe", DECIMAL_TYPE),
+            pa.field("pe_ttm", DECIMAL_TYPE),
+            pa.field("pb", DECIMAL_TYPE),
+            pa.field("ps", DECIMAL_TYPE),
+            pa.field("ps_ttm", DECIMAL_TYPE),
+            pa.field("dv_ratio", DECIMAL_TYPE),
+            pa.field("dv_ttm", DECIMAL_TYPE),
+            pa.field("total_share", DECIMAL_TYPE),
+            pa.field("float_share", DECIMAL_TYPE),
+            pa.field("free_share", DECIMAL_TYPE),
+            pa.field("total_mv", DECIMAL_TYPE),
+            pa.field("circ_mv", DECIMAL_TYPE),
+            pa.field("up_limit", DECIMAL_TYPE),
+            pa.field("down_limit", DECIMAL_TYPE),
+            pa.field("buy_sm_vol", DECIMAL_TYPE),
+            pa.field("buy_sm_amount", DECIMAL_TYPE),
+            pa.field("sell_sm_vol", DECIMAL_TYPE),
+            pa.field("sell_sm_amount", DECIMAL_TYPE),
+            pa.field("buy_md_vol", DECIMAL_TYPE),
+            pa.field("buy_md_amount", DECIMAL_TYPE),
+            pa.field("sell_md_vol", DECIMAL_TYPE),
+            pa.field("sell_md_amount", DECIMAL_TYPE),
+            pa.field("buy_lg_vol", DECIMAL_TYPE),
+            pa.field("buy_lg_amount", DECIMAL_TYPE),
+            pa.field("sell_lg_vol", DECIMAL_TYPE),
+            pa.field("sell_lg_amount", DECIMAL_TYPE),
+            pa.field("buy_elg_vol", DECIMAL_TYPE),
+            pa.field("buy_elg_amount", DECIMAL_TYPE),
+            pa.field("sell_elg_vol", DECIMAL_TYPE),
+            pa.field("sell_elg_amount", DECIMAL_TYPE),
+            pa.field("net_mf_vol", DECIMAL_TYPE),
+            pa.field("net_mf_amount", DECIMAL_TYPE),
+            pa.field("source_run_id", pa.string()),
+            pa.field("raw_loaded_at", TIMESTAMP_TYPE),
+            pa.field("canonical_loaded_at", TIMESTAMP_TYPE),
+        ]
+    ),
+)
+
+CANONICAL_FACT_INDEX_PRICE_BAR_SPEC: Final[TableSpec] = TableSpec(
+    namespace=CANONICAL_NAMESPACE,
+    name="fact_index_price_bar",
+    schema=pa.schema(
+        [
+            pa.field("index_code", pa.string()),
+            pa.field("trade_date", pa.date32()),
+            pa.field("open", DECIMAL_TYPE),
+            pa.field("high", DECIMAL_TYPE),
+            pa.field("low", DECIMAL_TYPE),
+            pa.field("close", DECIMAL_TYPE),
+            pa.field("pre_close", DECIMAL_TYPE),
+            pa.field("change", DECIMAL_TYPE),
+            pa.field("pct_chg", DECIMAL_TYPE),
+            pa.field("vol", DECIMAL_TYPE),
+            pa.field("amount", DECIMAL_TYPE),
+            pa.field("exchange", pa.string()),
+            pa.field("is_open", pa.bool_()),
+            pa.field("pretrade_date", pa.date32()),
+            pa.field("source_run_id", pa.string()),
+            pa.field("raw_loaded_at", TIMESTAMP_TYPE),
+            pa.field("canonical_loaded_at", TIMESTAMP_TYPE),
+        ]
+    ),
+)
+
+CANONICAL_FACT_FORECAST_EVENT_SPEC: Final[TableSpec] = TableSpec(
+    namespace=CANONICAL_NAMESPACE,
+    name="fact_forecast_event",
+    schema=pa.schema(
+        [
+            pa.field("ts_code", pa.string()),
+            pa.field("ann_date", pa.date32()),
+            pa.field("end_date", pa.date32()),
+            pa.field("forecast_type", pa.string()),
+            pa.field("p_change_min", DECIMAL_TYPE),
+            pa.field("p_change_max", DECIMAL_TYPE),
+            pa.field("net_profit_min", DECIMAL_TYPE),
+            pa.field("net_profit_max", DECIMAL_TYPE),
+            pa.field("last_parent_net", DECIMAL_TYPE),
+            pa.field("first_ann_date", pa.date32()),
+            pa.field("summary", pa.string()),
+            pa.field("change_reason", pa.string()),
+            pa.field("update_flag", pa.string()),
+            pa.field("source_run_id", pa.string()),
+            pa.field("raw_loaded_at", TIMESTAMP_TYPE),
+            pa.field("canonical_loaded_at", TIMESTAMP_TYPE),
+        ]
+    ),
+)
+
 CANONICAL_MART_TABLE_SPECS: Final[tuple[TableSpec, ...]] = (
     CANONICAL_DIM_SECURITY_SPEC,
     CANONICAL_DIM_INDEX_SPEC,
     CANONICAL_FACT_PRICE_BAR_SPEC,
     CANONICAL_FACT_FINANCIAL_INDICATOR_SPEC,
     CANONICAL_FACT_EVENT_SPEC,
+    CANONICAL_FACT_MARKET_DAILY_FEATURE_SPEC,
+    CANONICAL_FACT_INDEX_PRICE_BAR_SPEC,
+    CANONICAL_FACT_FORECAST_EVENT_SPEC,
 )
 
 DEFAULT_TABLE_SPECS: Final[tuple[TableSpec, ...]] = (

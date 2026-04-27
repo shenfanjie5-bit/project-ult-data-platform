@@ -130,6 +130,83 @@ models:
         tests:
           - not_null
 
+  - name: int_market_daily_features
+    description: Security daily market features joined from daily_basic, stk_limit, and moneyflow.
+    tests:
+      - unique_combination_of_columns:
+          combination_of_columns: ["ts_code", "trade_date"]
+    columns:
+      - name: ts_code
+        tests:
+          - not_null
+          - relationships:
+              to: ref('int_security_master')
+              field: ts_code
+      - name: trade_date
+        tests:
+          - not_null
+      - name: source_run_id
+        tests:
+          - not_null
+      - name: raw_loaded_at
+        tests:
+          - not_null
+
+  - name: int_index_price_bars
+    description: Index OHLCV records enriched with one normalized trade calendar record for the same trading date.
+    tests:
+      - unique_combination_of_columns:
+          combination_of_columns: ["index_code", "trade_date"]
+    columns:
+      - name: index_code
+        tests:
+          - not_null
+          - relationships:
+              to: ref('stg_index_basic')
+              field: ts_code
+              config:
+                severity: error
+      - name: trade_date
+        tests:
+          - not_null
+      - name: source_run_id
+        tests:
+          - not_null
+      - name: raw_loaded_at
+        tests:
+          - not_null
+
+  - name: int_forecast_events
+    description: Earnings forecast notifications normalized without collapsing Tushare forecast versions.
+    tests:
+      - unique_combination_of_columns:
+          combination_of_columns: ["ts_code", "ann_date", "end_date", "update_flag", "forecast_type"]
+    columns:
+      - name: ts_code
+        tests:
+          - not_null
+          - relationships:
+              to: ref('int_security_master')
+              field: ts_code
+      - name: ann_date
+        tests:
+          - not_null
+      - name: end_date
+        tests:
+          - not_null
+      - name: forecast_type
+        tests:
+          - not_null
+      - name: update_flag
+        tests:
+          - not_null
+      - name: source_run_id
+        tests:
+          - not_null
+      - name: raw_loaded_at
+        tests:
+          - not_null
+
   - name: int_event_timeline
     description: Event metadata timeline for announcements, suspensions, dividends, float changes, holders, and disclosure dates.
     tests:

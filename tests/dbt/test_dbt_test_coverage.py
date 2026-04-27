@@ -174,6 +174,9 @@ def test_mart_custom_data_tests_reject_forbidden_columns() -> None:
             """
         )
         connection.execute("create table mart_fact_event(event_type varchar, body varchar)")
+        connection.execute("create table mart_fact_market_daily_feature(ts_code varchar)")
+        connection.execute("create table mart_fact_index_price_bar(index_code varchar)")
+        connection.execute("create table mart_fact_forecast_event(ts_code varchar)")
         connection.execute(
             """
             insert into mart_fact_financial_indicator values

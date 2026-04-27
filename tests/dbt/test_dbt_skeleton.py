@@ -15,7 +15,10 @@ INTERMEDIATE_DIR = DBT_PROJECT_DIR / "models" / "intermediate"
 INTERMEDIATE_MODEL_NAMES = [
     "int_event_timeline",
     "int_financial_reports_latest",
+    "int_forecast_events",
     "int_index_membership",
+    "int_index_price_bars",
+    "int_market_daily_features",
     "int_price_bars_adjusted",
     "int_security_master",
 ]
@@ -23,7 +26,10 @@ MART_MODEL_NAMES = [
     "mart_dim_index",
     "mart_dim_security",
     "mart_fact_event",
+    "mart_fact_forecast_event",
     "mart_fact_financial_indicator",
+    "mart_fact_index_price_bar",
+    "mart_fact_market_daily_feature",
     "mart_fact_price_bar",
 ]
 

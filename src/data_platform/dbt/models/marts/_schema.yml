@@ -144,3 +144,84 @@ models:
       - name: raw_loaded_at
         tests:
           - not_null
+
+  - name: mart_fact_market_daily_feature
+    description: Canonical daily security market feature fact table.
+    tests:
+      - unique_combination_of_columns:
+          combination_of_columns: ["ts_code", "trade_date"]
+    columns:
+      - name: ts_code
+        tests:
+          - not_null
+          - relationships:
+              to: ref('mart_dim_security')
+              field: ts_code
+      - name: trade_date
+        tests:
+          - not_null
+      - name: source_run_id
+        tests:
+          - not_null
+      - name: raw_loaded_at
+        tests:
+          - not_null
+
+  - name: mart_fact_index_price_bar
+    description: Canonical index price bar fact table enriched with trade calendar fields.
+    tests:
+      - unique_combination_of_columns:
+          combination_of_columns: ["index_code", "trade_date"]
+    columns:
+      - name: index_code
+        tests:
+          - not_null
+          - relationships:
+              to: ref('mart_dim_index')
+              field: index_code
+      - name: trade_date
+        tests:
+          - not_null
+      - name: is_open
+        tests:
+          - not_null
+          - accepted_values:
+              values: [true, false]
+              quote: false
+      - name: source_run_id
+        tests:
+          - not_null
+      - name: raw_loaded_at
+        tests:
+          - not_null
+
+  - name: mart_fact_forecast_event
+    description: Canonical earnings forecast fact table retaining Tushare forecast versions.
+    tests:
+      - unique_combination_of_columns:
+          combination_of_columns: ["ts_code", "ann_date", "end_date", "update_flag", "forecast_type"]
+    columns:
+      - name: ts_code
+        tests:
+          - not_null
+          - relationships:
+              to: ref('mart_dim_security')
+              field: ts_code
+      - name: ann_date
+        tests:
+          - not_null
+      - name: end_date
+        tests:
+          - not_null
+      - name: forecast_type
+        tests:
+          - not_null
+      - name: update_flag
+        tests:
+          - not_null
+      - name: source_run_id
+        tests:
+          - not_null
+      - name: raw_loaded_at
+        tests:
+          - not_null

@@ -30,7 +30,10 @@ INTERMEDIATE_DIR = DBT_PROJECT_DIR / "models" / "intermediate"
 INTERMEDIATE_MODEL_NAMES = [
     "int_event_timeline",
     "int_financial_reports_latest",
+    "int_forecast_events",
     "int_index_membership",
+    "int_index_price_bars",
+    "int_market_daily_features",
     "int_price_bars_adjusted",
     "int_security_master",
 ]
@@ -85,6 +88,33 @@ def test_intermediate_sql_and_schema_contracts_are_present() -> None:
     assert index_code_relationship["to"] == "ref('stg_index_basic')"
     assert index_code_relationship["field"] == "ts_code"
     assert index_code_relationship["config"]["severity"] == "error"
+
+    market_sql = (INTERMEDIATE_DIR / "int_market_daily_features.sql").read_text()
+    assert "stg_daily_basic" in market_sql
+    assert "stg_stk_limit" in market_sql
+    assert "stg_moneyflow" in market_sql
+
+    index_price_columns = {
+        column["name"]: column for column in declared_models["int_index_price_bars"]["columns"]
+    }
+    index_price_relationship = _relationship_test(index_price_columns["index_code"])
+    assert index_price_relationship["to"] == "ref('stg_index_basic')"
+    assert index_price_relationship["field"] == "ts_code"
+    assert index_price_relationship["config"]["severity"] == "error"
+
+    forecast_tests = declared_models["int_forecast_events"]["tests"]
+    forecast_unique_test = next(
+        test["unique_combination_of_columns"]
+        for test in forecast_tests
+        if _model_test_name(test) == "unique_combination_of_columns"
+    )
+    assert forecast_unique_test["combination_of_columns"] == [
+        "ts_code",
+        "ann_date",
+        "end_date",
+        "update_flag",
+        "forecast_type",
+    ]
 
 
 def test_intermediate_models_execute_with_duckdb_raw_fixture(tmp_path: Path) -> None:
@@ -152,6 +182,24 @@ def test_intermediate_models_execute_with_duckdb_raw_fixture(tmp_path: Path) -> 
             row[1]
             for row in connection.execute("pragma table_info('int_event_timeline')").fetchall()
         ]
+        market_row = connection.execute(
+            """
+            select ts_code, trade_date, close, up_limit, net_mf_amount
+            from int_market_daily_features
+            """
+        ).fetchone()
+        index_price_row = connection.execute(
+            """
+            select index_code, trade_date, close, is_open, pretrade_date
+            from int_index_price_bars
+            """
+        ).fetchone()
+        forecast_row = connection.execute(
+            """
+            select ts_code, ann_date, end_date, forecast_type, p_change_min, update_flag
+            from int_forecast_events
+            """
+        ).fetchone()
     finally:
         connection.close()
 
@@ -195,6 +243,119 @@ def test_intermediate_models_execute_with_duckdb_raw_fixture(tmp_path: Path) -> 
         "suspend",
     ]
     assert {"body", "content", "text"}.isdisjoint(event_columns)
+    assert market_row == (
+        "000001.SZ",
+        date(2026, 4, 15),
+        "1.123456789012345678",
+        "1.123456789012345678",
+        "1.123456789012345678",
+    )
+    assert index_price_row == (
+        "000300.SH",
+        date(2026, 4, 15),
+        "1.123456789012345678",
+        "1",
+        date(2026, 4, 15),
+    )
+    assert forecast_row == (
+        "000001.SZ",
+        date(2026, 4, 15),
+        date(2026, 4, 15),
+        "type-fixture",
+        "1.123456789012345678",
+        "0",
+    )
+
+
+def test_index_price_bars_join_trade_calendar_by_exchange() -> None:
+    duckdb = pytest.importorskip("duckdb")
+
+    connection = duckdb.connect(":memory:")
+    try:
+        connection.execute(
+            """
+            create table stg_index_daily (
+                ts_code varchar,
+                trade_date date,
+                close varchar,
+                open varchar,
+                high varchar,
+                low varchar,
+                pre_close varchar,
+                change varchar,
+                pct_chg varchar,
+                vol varchar,
+                amount varchar,
+                source_run_id varchar,
+                raw_loaded_at timestamp
+            )
+            """
+        )
+        connection.execute(
+            """
+            insert into stg_index_daily values (
+                '399001.SZ',
+                date '2026-04-15',
+                '100.0',
+                '99.0',
+                '101.0',
+                '98.0',
+                '99.5',
+                '0.5',
+                '0.50',
+                '1000',
+                '100000',
+                'index-run',
+                timestamp '2026-04-15 18:00:00'
+            )
+            """
+        )
+        connection.execute(
+            """
+            create table stg_trade_cal (
+                exchange varchar,
+                cal_date date,
+                is_open varchar,
+                pretrade_date date,
+                source_run_id varchar,
+                raw_loaded_at timestamp
+            )
+            """
+        )
+        connection.execute(
+            """
+            insert into stg_trade_cal values
+                (
+                    'SSE',
+                    date '2026-04-15',
+                    '0',
+                    date '2026-04-14',
+                    'calendar-sse',
+                    timestamp '2026-04-15 18:00:00'
+                ),
+                (
+                    'SZSE',
+                    date '2026-04-15',
+                    '1',
+                    date '2026-04-14',
+                    'calendar-szse',
+                    timestamp '2026-04-15 18:00:00'
+                )
+            """
+        )
+
+        model_sql = _render_intermediate_model("int_index_price_bars")
+        connection.execute(f'create table "int_index_price_bars" as {model_sql}')
+        row = connection.execute(
+            """
+            select index_code, exchange, is_open, source_run_id
+            from int_index_price_bars
+            """
+        ).fetchone()
+    finally:
+        connection.close()
+
+    assert row == ("399001.SZ", "SZSE", "1", "index-run")
 
 
 def test_financial_intermediate_combines_latest_metrics_by_source(tmp_path: Path) -> None:
