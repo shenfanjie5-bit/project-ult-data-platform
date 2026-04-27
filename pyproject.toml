@@ -7,7 +7,7 @@ name = "project-ult-data-platform"
 version = "0.1.1"
 description = "Layer A canonical truth + Raw/Canonical/Formal serving + Layer B ingestion for project-ult."
 readme = "README.md"
-requires-python = ">=3.12"
+requires-python = ">=3.12,<3.14"
 dependencies = [
     "pyiceberg[sql-postgres,pyarrow]>=0.8,<2",
     "duckdb>=1.0,<2",

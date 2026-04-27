@@ -62,6 +62,38 @@ def test_dbt_wrapper_preserves_explicit_selection_args(tmp_path: Path) -> None:
     ]
 
 
+def test_dbt_wrapper_honors_explicit_compatible_executable(tmp_path: Path) -> None:
+    argv_file = tmp_path / "argv.txt"
+    env = _fake_dbt_env(tmp_path, argv_file)
+    compatible_bin = tmp_path / "compatible" / "dbt"
+    compatible_bin.parent.mkdir()
+    compatible_bin.write_text(
+        """#!/usr/bin/env bash
+set -euo pipefail
+printf 'compatible:%s\n' "$@" > "${DBT_ARGV_FILE}"
+""",
+        encoding="utf-8",
+    )
+    compatible_bin.chmod(0o755)
+    env["DP_DBT_EXECUTABLE"] = str(compatible_bin)
+
+    result = subprocess.run(
+        [str(PROJECT_ROOT / "scripts" / "dbt.sh"), "run", "--select", "stg_daily"],
+        cwd=PROJECT_ROOT,
+        env=env,
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+
+    assert result.returncode == 0, result.stdout + result.stderr
+    assert argv_file.read_text(encoding="utf-8").splitlines() == [
+        "compatible:run",
+        "compatible:--select",
+        "compatible:stg_daily",
+    ]
+
+
 def _fake_dbt_env(tmp_path: Path, argv_file: Path) -> dict[str, str]:
     bin_dir = tmp_path / "bin"
     bin_dir.mkdir()

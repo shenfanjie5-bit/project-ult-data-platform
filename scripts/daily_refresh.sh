@@ -3,16 +3,26 @@ set -euo pipefail
 
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 
-if [[ -d "${ROOT_DIR}/.venv/bin" ]]; then
-  export PATH="${ROOT_DIR}/.venv/bin:${PATH}"
-fi
+for venv_bin in \
+  "${ROOT_DIR}/.venv/bin" \
+  "${ROOT_DIR}/.venv-py313/bin" \
+  "${ROOT_DIR}/.venv-py312/bin"; do
+  if [[ -d "${venv_bin}" ]]; then
+    export PATH="${venv_bin}:${PATH}"
+  fi
+done
 
 if [[ -z "${PYTHON:-}" ]]; then
-  if [[ -x "${ROOT_DIR}/.venv/bin/python" ]]; then
-    PYTHON="${ROOT_DIR}/.venv/bin/python"
-  else
-    PYTHON="python3"
-  fi
+  for candidate in \
+    "${ROOT_DIR}/.venv-py312/bin/python" \
+    "${ROOT_DIR}/.venv-py313/bin/python" \
+    "${ROOT_DIR}/.venv/bin/python" \
+    "python3"; do
+    if command -v "${candidate}" >/dev/null 2>&1; then
+      PYTHON="${candidate}"
+      break
+    fi
+  done
 fi
 
 export PYTHONPATH="${ROOT_DIR}/src:${PYTHONPATH:-}"

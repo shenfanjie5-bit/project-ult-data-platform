@@ -42,6 +42,8 @@ from data_platform.serving.catalog import DEFAULT_NAMESPACES, ensure_namespaces
 StepStatus = Literal["ok", "skipped", "failed"]
 PROJECT_ROOT = Path(__file__).resolve().parents[2]
 DBT_SCRIPT = PROJECT_ROOT / "scripts" / "dbt.sh"
+DBT_EXECUTABLE_ENV = "DP_DBT_EXECUTABLE"
+DBT_BIN_ENV = "DBT_BIN"
 DATE_FORMAT = "%Y%m%d"
 DEFAULT_DBT_SELECTORS = ("staging", "intermediate", "marts")
 TRUTHY_VALUES = frozenset({"1", "true", "yes", "on"})
@@ -413,19 +415,20 @@ def _run_dbt_step(
 
 
 def _run_dbt_command(args: Sequence[str], settings: Settings) -> dict[str, Any]:
-    dbt_executable = shutil.which("dbt")
-    local_dbt = PROJECT_ROOT / ".venv" / "bin" / "dbt"
-    if dbt_executable is None and local_dbt.exists():
-        dbt_executable = str(local_dbt)
+    env = os.environ.copy()
+    dbt_executable = _resolve_dbt_executable(env)
     if dbt_executable is None:
-        msg = "dbt executable is not installed; expected dbt on PATH or .venv/bin/dbt"
+        msg = (
+            "dbt executable is not installed; expected DP_DBT_EXECUTABLE, dbt on PATH, "
+            ".venv-py312/bin/dbt, .venv-py313/bin/dbt, or .venv/bin/dbt"
+        )
         raise DailyRefreshStepError(msg, {"error": msg, "error_type": "missing_dbt"})
 
-    env = os.environ.copy()
     env.update(
         {
             "DP_RAW_ZONE_PATH": str(settings.raw_zone_path),
             "DP_DUCKDB_PATH": str(settings.duckdb_path),
+            DBT_EXECUTABLE_ENV: dbt_executable,
             "DP_ICEBERG_WAREHOUSE_PATH": str(settings.iceberg_warehouse_path),
             "DP_PG_DSN": str(settings.pg_dsn),
             "PYTHONPATH": f"{PROJECT_ROOT / 'src'}{os.pathsep}{env.get('PYTHONPATH', '')}",
@@ -454,6 +457,40 @@ def _run_dbt_command(args: Sequence[str], settings: Settings) -> dict[str, Any]:
         metadata["error_type"] = "dbt_command_failed"
         raise DailyRefreshStepError(msg, metadata)
     return metadata
+
+
+def _resolve_dbt_executable(env: Mapping[str, str] | None = None) -> str | None:
+    environ = os.environ if env is None else env
+    for key in (DBT_EXECUTABLE_ENV, DBT_BIN_ENV):
+        explicit = environ.get(key)
+        if explicit:
+            return _which_executable(explicit, path=environ.get("PATH"))
+
+    for candidate in (
+        PROJECT_ROOT / ".venv-py312" / "bin" / "dbt",
+        PROJECT_ROOT / ".venv-py313" / "bin" / "dbt",
+    ):
+        if candidate.is_file() and os.access(candidate, os.X_OK):
+            return str(candidate)
+
+    path_dbt = shutil.which("dbt", path=environ.get("PATH"))
+    if path_dbt is not None:
+        return path_dbt
+
+    local_dbt = PROJECT_ROOT / ".venv" / "bin" / "dbt"
+    if local_dbt.is_file() and os.access(local_dbt, os.X_OK):
+        return str(local_dbt)
+    return None
+
+
+def _which_executable(candidate: str, *, path: str | None) -> str | None:
+    resolved = shutil.which(candidate, path=path)
+    if resolved is not None:
+        return resolved
+    candidate_path = Path(candidate).expanduser()
+    if candidate_path.is_file() and os.access(candidate_path, os.X_OK):
+        return str(candidate_path)
+    return None
 
 
 def _run_canonical_step(
