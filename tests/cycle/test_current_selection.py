@@ -1,5 +1,8 @@
 from __future__ import annotations
 
+import json
+import os
+from collections.abc import Generator, Mapping
 from datetime import UTC, date, datetime
 from pathlib import Path
 from typing import Any
@@ -17,7 +20,11 @@ from data_platform.cycle.current_selection import (
     select_current_cycle,
 )
 from data_platform.cycle.models import CycleMetadata
+from data_platform.cycle.repository import create_cycle, get_cycle
 from data_platform.raw import RawWriter
+
+
+EXPECTED_MIGRATIONS = ["0001", "0002", "0003", "0004", "0005"]
 
 
 def test_selector_selects_latest_open_trade_day_and_records_evidence(
@@ -205,6 +212,180 @@ def test_selector_has_no_fixed_cycle_fallback(tmp_path: Path) -> None:
     assert "CYCLE_20260415" not in module_source
 
 
+def test_freeze_current_cycle_candidates_uses_default_postgresql_transaction(
+    tmp_path: Path,
+    cycle_repository_env: str,
+    cycle_engine: Any,
+) -> None:
+    assert cycle_repository_env
+    raw_zone_path = tmp_path / "raw"
+    writer = _writer(raw_zone_path, tmp_path)
+    _write_trade_cal(writer, date(2026, 4, 15), is_open="1")
+    _write_trade_cal(writer, date(2026, 4, 16), is_open="1")
+    _write_daily(writer, date(2026, 4, 16), DEFAULT_CURRENT_CYCLE_SYMBOLS)
+    _write_stock_basic(writer, date(2026, 4, 1), DEFAULT_CURRENT_CYCLE_SYMBOLS)
+    create_cycle(date(2026, 4, 16))
+    with cycle_engine.begin() as connection:
+        accepted = [
+            _insert_candidate(
+                connection,
+                validation_status="accepted",
+                candidate=f"current-cycle-wrapper-{index}",
+            )
+            for index in range(2)
+        ]
+
+    result = freeze_current_cycle_candidates(raw_zone_path=raw_zone_path)
+
+    assert result.selection.trade_date == date(2026, 4, 16)
+    assert result.selection.cycle_id == "CYCLE_20260416"
+    assert result.cycle_metadata.status == "phase0"
+    assert result.cycle_metadata.selection_frozen_at is not None
+    assert result.cycle_metadata.candidate_count == len(accepted)
+    assert result.frozen_candidate_ids == tuple(int(row["id"]) for row in accepted)
+    assert _selection_ids(cycle_engine, "CYCLE_20260416") == list(result.frozen_candidate_ids)
+    assert get_cycle("CYCLE_20260416") == result.cycle_metadata
+
+
+def test_freeze_current_cycle_candidates_rolls_back_default_pg_freeze_failure(
+    tmp_path: Path,
+    cycle_repository_env: str,
+    cycle_engine: Any,
+) -> None:
+    assert cycle_repository_env
+    raw_zone_path = tmp_path / "raw"
+    writer = _writer(raw_zone_path, tmp_path)
+    _write_trade_cal(writer, date(2026, 4, 16), is_open="1")
+    _write_daily(writer, date(2026, 4, 16), DEFAULT_CURRENT_CYCLE_SYMBOLS)
+    _write_stock_basic(writer, date(2026, 4, 1), DEFAULT_CURRENT_CYCLE_SYMBOLS)
+    create_cycle(date(2026, 4, 16))
+    with cycle_engine.begin() as connection:
+        _insert_candidate(
+            connection,
+            validation_status="accepted",
+            candidate="current-cycle-wrapper-rollback",
+        )
+        connection.exec_driver_sql(
+            """
+            CREATE OR REPLACE FUNCTION data_platform.raise_current_selection_failure()
+            RETURNS trigger
+            LANGUAGE plpgsql
+            AS $$
+            BEGIN
+                RAISE EXCEPTION 'forced current selection failure';
+            END;
+            $$;
+
+            CREATE TRIGGER force_current_selection_failure
+            BEFORE INSERT ON data_platform.cycle_candidate_selection
+            FOR EACH ROW
+            EXECUTE FUNCTION data_platform.raise_current_selection_failure();
+            """
+        )
+
+    with pytest.raises(CurrentCycleSelectionError) as exc_info:
+        freeze_current_cycle_candidates(raw_zone_path=raw_zone_path)
+
+    metadata = get_cycle("CYCLE_20260416")
+    assert exc_info.value.code == "pg_freeze_failed"
+    assert exc_info.value.cycle_id == "CYCLE_20260416"
+    assert _selection_ids(cycle_engine, "CYCLE_20260416") == []
+    assert metadata.status == "pending"
+    assert metadata.cutoff_submitted_at is None
+    assert metadata.cutoff_ingest_seq is None
+    assert metadata.candidate_count == 0
+    assert metadata.selection_frozen_at is None
+
+
+@pytest.fixture()
+def postgres_dsn() -> Generator[str]:
+    admin_dsn = os.environ.get("DATABASE_URL") or os.environ.get("DP_PG_DSN")
+    if not admin_dsn:
+        pytest.skip("current-cycle PG wrapper tests require DATABASE_URL or DP_PG_DSN")
+
+    sqlalchemy = pytest.importorskip(
+        "sqlalchemy",
+        reason="current-cycle PG wrapper tests require SQLAlchemy",
+    )
+    runner_module = pytest.importorskip(
+        "data_platform.ddl.runner",
+        reason="current-cycle PG wrapper tests require the migration runner",
+    )
+    make_url = pytest.importorskip(
+        "sqlalchemy.engine",
+        reason="current-cycle PG wrapper tests require SQLAlchemy",
+    ).make_url
+    sqlalchemy_error = pytest.importorskip(
+        "sqlalchemy.exc",
+        reason="current-cycle PG wrapper tests require SQLAlchemy",
+    ).SQLAlchemyError
+
+    admin_engine = _create_engine(admin_dsn, isolation_level="AUTOCOMMIT")
+    database_name = f"dp_current_selection_test_{uuid4().hex}"
+    try:
+        with admin_engine.connect() as connection:
+            connection.execute(sqlalchemy.text(f'CREATE DATABASE "{database_name}"'))
+    except sqlalchemy_error as exc:
+        admin_engine.dispose()
+        pytest.skip(
+            "current-cycle PG wrapper tests require permission to create "
+            f"test databases: {exc}"
+        )
+
+    test_dsn = (
+        make_url(runner_module._sqlalchemy_postgres_uri(admin_dsn))
+        .set(database=database_name)
+        .render_as_string(hide_password=False)
+    )
+    try:
+        yield test_dsn
+    finally:
+        with admin_engine.connect() as connection:
+            connection.execute(
+                sqlalchemy.text(
+                    """
+                    SELECT pg_terminate_backend(pid)
+                    FROM pg_stat_activity
+                    WHERE datname = :database_name
+                      AND pid <> pg_backend_pid()
+                    """
+                ),
+                {"database_name": database_name},
+            )
+            connection.execute(sqlalchemy.text(f'DROP DATABASE IF EXISTS "{database_name}"'))
+        admin_engine.dispose()
+
+
+@pytest.fixture()
+def migrated_postgres_dsn(postgres_dsn: str) -> str:
+    runner_module = pytest.importorskip(
+        "data_platform.ddl.runner",
+        reason="current-cycle PG wrapper tests require the migration runner",
+    )
+    applied_versions = runner_module.MigrationRunner().apply_pending(postgres_dsn)
+    assert applied_versions == EXPECTED_MIGRATIONS
+    assert runner_module.MigrationRunner().apply_pending(postgres_dsn) == []
+    return postgres_dsn
+
+
+@pytest.fixture()
+def cycle_repository_env(
+    migrated_postgres_dsn: str,
+    monkeypatch: pytest.MonkeyPatch,
+) -> Generator[str]:
+    monkeypatch.setenv("DP_PG_DSN", migrated_postgres_dsn)
+    yield migrated_postgres_dsn
+
+
+@pytest.fixture()
+def cycle_engine(migrated_postgres_dsn: str) -> Generator[Any]:
+    engine = _create_engine(migrated_postgres_dsn)
+    try:
+        yield engine
+    finally:
+        engine.dispose()
+
+
 def _writer(raw_zone_path: Path, tmp_path: Path) -> RawWriter:
     return RawWriter(
         raw_zone_path=raw_zone_path,
@@ -306,3 +487,82 @@ def _cycle_date(cycle_id: str) -> date:
     return date.fromisoformat(
         f"{cycle_id[6:10]}-{cycle_id[10:12]}-{cycle_id[12:14]}"
     )
+
+
+def _insert_candidate(
+    connection: Any,
+    *,
+    validation_status: str,
+    candidate: str,
+) -> Mapping[str, Any]:
+    payload = {
+        "payload_type": "Ex-1",
+        "submitted_by": "current-selection-test",
+        "candidate": candidate,
+    }
+    return connection.execute(
+        _text(
+            """
+            INSERT INTO data_platform.candidate_queue (
+                payload_type,
+                payload,
+                submitted_by,
+                validation_status,
+                rejection_reason
+            )
+            VALUES (
+                'Ex-1',
+                CAST(:payload AS jsonb),
+                'current-selection-test',
+                CAST(:validation_status AS data_platform.validation_status),
+                :rejection_reason
+            )
+            RETURNING id, submitted_at, ingest_seq, validation_status
+            """
+        ),
+        {
+            "payload": json.dumps(payload, allow_nan=False),
+            "validation_status": validation_status,
+            "rejection_reason": (
+                "rejected by current selection test"
+                if validation_status == "rejected"
+                else None
+            ),
+        },
+    ).mappings().one()
+
+
+def _selection_ids(engine: Any, cycle_id: str) -> list[int]:
+    with engine.connect() as connection:
+        rows = connection.execute(
+            _text(
+                """
+                SELECT candidate_id
+                FROM data_platform.cycle_candidate_selection
+                WHERE cycle_id = :cycle_id
+                ORDER BY candidate_id ASC
+                """
+            ),
+            {"cycle_id": cycle_id},
+        ).scalars()
+        return [int(row) for row in rows]
+
+
+def _create_engine(dsn: str, **kwargs: object) -> Any:
+    sqlalchemy = pytest.importorskip(
+        "sqlalchemy",
+        reason="current-cycle PG wrapper tests require SQLAlchemy",
+    )
+    runner_module = pytest.importorskip(
+        "data_platform.ddl.runner",
+        reason="current-cycle PG wrapper tests require the migration runner",
+    )
+    return sqlalchemy.create_engine(runner_module._sqlalchemy_postgres_uri(dsn), **kwargs)
+
+
+def _text(sql: str) -> Any:
+    sqlalchemy = pytest.importorskip(
+        "sqlalchemy",
+        reason="current-cycle PG wrapper tests require SQLAlchemy",
+    )
+    return sqlalchemy.text(sql)
