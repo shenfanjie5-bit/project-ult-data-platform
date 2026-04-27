@@ -147,6 +147,7 @@ def test_publish_manifest_rejects_recommendation_without_provenance_preflight() 
         ({"source_layer": "L7"}, "source_layer"),
         ({"source_kind": "fixture"}, "source_kind"),
         ({"source_kind": "historical"}, "source_kind"),
+        ({"source_kind": "smoke"}, "source_kind"),
         ({"source_kind": "synthetic"}, "source_kind"),
         ({"recommendation_snapshot_id": 15}, "snapshot id must match"),
         ({"audit_record_ids": []}, "audit_record_ids must not be empty"),

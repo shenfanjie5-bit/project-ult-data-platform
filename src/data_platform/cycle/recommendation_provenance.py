@@ -17,7 +17,7 @@ from data_platform.cycle.manifest import (
 RECOMMENDATION_PROVENANCE_SOURCE_LAYER: Final[str] = "L8"
 RECOMMENDATION_PROVENANCE_SOURCE_KIND: Final[str] = "current-cycle"
 _FORBIDDEN_PROVENANCE_KINDS: Final[frozenset[str]] = frozenset(
-    {"fixture", "historical", "synthetic"}
+    {"fixture", "historical", "smoke", "synthetic"}
 )
 
 
@@ -65,14 +65,14 @@ class RecommendationSnapshotProvenance:
         if self.source_layer != RECOMMENDATION_PROVENANCE_SOURCE_LAYER:
             msg = "recommendation_snapshot provenance source_layer must be 'L8'"
             raise InvalidFormalSnapshotManifest(msg)
-        if self.source_kind != RECOMMENDATION_PROVENANCE_SOURCE_KIND:
-            msg = "recommendation_snapshot provenance source_kind must be 'current-cycle'"
-            raise InvalidFormalSnapshotManifest(msg)
         if self.source_kind in _FORBIDDEN_PROVENANCE_KINDS:
             msg = (
-                "recommendation_snapshot provenance must not be fixture, "
-                "historical, or synthetic"
+                "recommendation_snapshot provenance source_kind must not be "
+                "fixture, historical, smoke, or synthetic"
             )
+            raise InvalidFormalSnapshotManifest(msg)
+        if self.source_kind != RECOMMENDATION_PROVENANCE_SOURCE_KIND:
+            msg = "recommendation_snapshot provenance source_kind must be 'current-cycle'"
             raise InvalidFormalSnapshotManifest(msg)
 
 
