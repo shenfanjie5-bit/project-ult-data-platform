@@ -13,6 +13,7 @@ from data_platform.cycle.freeze import freeze_cycle_candidates
 from data_platform.cycle.manifest import (
     CYCLE_PUBLISH_MANIFEST_TABLE,
     CyclePublishManifest,
+    FORMAL_RECOMMENDATION_SNAPSHOT,
     FormalTableSnapshot,
     InvalidFormalSnapshotManifest,
     ManifestAlreadyPublished,
@@ -22,6 +23,12 @@ from data_platform.cycle.manifest import (
     get_publish_manifest,
     publish_manifest,
     validate_snapshot_id,
+)
+from data_platform.cycle.recommendation_provenance import (
+    RECOMMENDATION_PROVENANCE_SOURCE_KIND,
+    RECOMMENDATION_PROVENANCE_SOURCE_LAYER,
+    RecommendationSnapshotProvenance,
+    preflight_recommendation_snapshot_publish,
 )
 from data_platform.cycle.repository import (
     CycleAlreadyFrozen,
@@ -47,6 +54,7 @@ __all__ = [
     "CycleNotFound",
     "CyclePublishManifest",
     "CycleStatus",
+    "FORMAL_RECOMMENDATION_SNAPSHOT",
     "FormalTableSnapshot",
     "InvalidCycleId",
     "InvalidCycleTransition",
@@ -54,6 +62,9 @@ __all__ = [
     "ManifestAlreadyPublished",
     "NoAcceptedCandidates",
     "PublishManifestNotFound",
+    "RECOMMENDATION_PROVENANCE_SOURCE_KIND",
+    "RECOMMENDATION_PROVENANCE_SOURCE_LAYER",
+    "RecommendationSnapshotProvenance",
     "create_cycle",
     "freeze_cycle_candidates",
     "get_cycle",
@@ -61,6 +72,7 @@ __all__ = [
     "get_publish_manifest",
     "get_publish_manifest_for_snapshot",
     "list_cycles",
+    "preflight_recommendation_snapshot_publish",
     "publish_manifest",
     "transition_cycle_status",
     "validate_snapshot_id",

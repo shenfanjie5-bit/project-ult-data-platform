@@ -21,6 +21,7 @@ from data_platform.formal_registry import (
 
 CYCLE_PUBLISH_MANIFEST_TABLE: Final[str] = "data_platform.cycle_publish_manifest"
 _FORMAL_NAMESPACE_PREFIX: Final[str] = "formal."
+FORMAL_RECOMMENDATION_SNAPSHOT: Final[str] = "formal.recommendation_snapshot"
 
 
 class PublishManifestNotFound(LookupError):
@@ -81,11 +82,18 @@ class CyclePublishManifest:
 def publish_manifest(
     cycle_id: str,
     formal_table_snapshots: Mapping[str, int | Mapping[str, int] | FormalTableSnapshot],
+    *,
+    recommendation_provenance: object | None = None,
 ) -> CyclePublishManifest:
     """Persist one cycle publish manifest and mark the cycle as published."""
 
     _cycle_date_from_id(cycle_id)
     snapshots = _normalize_snapshot_manifest(formal_table_snapshots)
+    _preflight_recommendation_snapshot_publish(
+        cycle_id=cycle_id,
+        snapshots=snapshots,
+        recommendation_provenance=recommendation_provenance,
+    )
     payload = json.dumps(_snapshot_payload(snapshots), allow_nan=False, sort_keys=True)
 
     from sqlalchemy.exc import IntegrityError
@@ -363,6 +371,23 @@ def _require_formal_snapshot_keys(
         raise InvalidFormalSnapshotManifest(msg)
 
 
+def _preflight_recommendation_snapshot_publish(
+    *,
+    cycle_id: str,
+    snapshots: Mapping[str, FormalTableSnapshot],
+    recommendation_provenance: object | None,
+) -> None:
+    from data_platform.cycle.recommendation_provenance import (
+        preflight_recommendation_snapshot_publish,
+    )
+
+    preflight_recommendation_snapshot_publish(
+        cycle_id=cycle_id,
+        recommendation_snapshot=snapshots[FORMAL_RECOMMENDATION_SNAPSHOT],
+        provenance=recommendation_provenance,
+    )
+
+
 def validate_snapshot_id(snapshot_id: object) -> int:
     """Validate a formal table snapshot id from API or manifest input."""
 
@@ -417,6 +442,7 @@ def _is_unique_violation(exc: Exception) -> bool:
 __all__ = [
     "CYCLE_PUBLISH_MANIFEST_TABLE",
     "CyclePublishManifest",
+    "FORMAL_RECOMMENDATION_SNAPSHOT",
     "FormalTableSnapshot",
     "InvalidFormalSnapshotManifest",
     "ManifestAlreadyPublished",

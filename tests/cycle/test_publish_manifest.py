@@ -18,6 +18,7 @@ from data_platform.cycle import (
     InvalidFormalSnapshotManifest,
     ManifestAlreadyPublished,
     PublishManifestNotFound,
+    RecommendationSnapshotProvenance,
     create_cycle,
     get_cycle,
     get_latest_publish_manifest,
@@ -50,6 +51,25 @@ def _snapshot_manifest(**overrides: object) -> dict[str, object]:
     for object_name, snapshot in overrides.items():
         snapshots[f"formal.{object_name}"] = snapshot
     return snapshots
+
+
+def _recommendation_provenance(
+    *,
+    cycle_id: str = "CYCLE_20260416",
+    snapshot_id: int = 14,
+    **overrides: object,
+) -> dict[str, object]:
+    proof: dict[str, object] = {
+        "cycle_id": cycle_id,
+        "current_cycle_id": cycle_id,
+        "source_layer": "L8",
+        "source_kind": "current-cycle",
+        "recommendation_snapshot_id": snapshot_id,
+        "audit_record_ids": ["audit-recommendation-1"],
+        "replay_record_ids": ["replay-recommendation-1"],
+    }
+    proof.update(overrides)
+    return proof
 
 
 def test_publish_manifest_models_expose_contract() -> None:
@@ -112,6 +132,52 @@ def test_publish_manifest_rejects_invalid_snapshot_manifest_before_database(
 def test_publish_manifest_rejects_invalid_cycle_id_before_database() -> None:
     with pytest.raises(InvalidCycleId):
         publish_manifest("bad", _snapshot_manifest())
+
+
+def test_publish_manifest_rejects_recommendation_without_provenance_preflight() -> None:
+    with pytest.raises(InvalidFormalSnapshotManifest, match="requires provenance preflight"):
+        publish_manifest("CYCLE_20260416", _snapshot_manifest())
+
+
+@pytest.mark.parametrize(
+    ("override", "message"),
+    [
+        ({"current_cycle_id": "CYCLE_20260415"}, "current cycle"),
+        ({"source_layer": "L7"}, "source_layer"),
+        ({"source_kind": "fixture"}, "source_kind"),
+        ({"source_kind": "historical"}, "source_kind"),
+        ({"source_kind": "synthetic"}, "source_kind"),
+        ({"recommendation_snapshot_id": 15}, "snapshot id must match"),
+        ({"audit_record_ids": []}, "audit_record_ids must not be empty"),
+        ({"replay_record_ids": []}, "replay_record_ids must not be empty"),
+    ],
+)
+def test_publish_manifest_rejects_invalid_recommendation_provenance_before_database(
+    override: dict[str, object],
+    message: str,
+) -> None:
+    with pytest.raises(InvalidFormalSnapshotManifest, match=message):
+        publish_manifest(
+            "CYCLE_20260416",
+            _snapshot_manifest(),
+            recommendation_provenance=_recommendation_provenance(**override),
+        )
+
+
+def test_recommendation_provenance_model_accepts_current_cycle_l8_binding() -> None:
+    proof = RecommendationSnapshotProvenance(
+        cycle_id="CYCLE_20260416",
+        current_cycle_id="CYCLE_20260416",
+        source_layer="L8",
+        source_kind="current-cycle",
+        recommendation_snapshot_id=14,
+        audit_record_ids=("audit-recommendation-1",),
+        replay_record_ids=("replay-recommendation-1",),
+    )
+
+    assert proof.cycle_id == "CYCLE_20260416"
+    assert proof.audit_record_ids == ("audit-recommendation-1",)
+    assert proof.replay_record_ids == ("replay-recommendation-1",)
 
 
 def test_migration_creates_cycle_publish_manifest_schema(
@@ -178,6 +244,7 @@ def test_publish_manifest_inserts_row_and_updates_cycle_status(
     manifest = publish_manifest(
         "CYCLE_20260416",
         _snapshot_manifest(recommendation_snapshot={"snapshot_id": 123}),
+        recommendation_provenance=_recommendation_provenance(snapshot_id=123),
     )
 
     assert manifest.published_cycle_id == "CYCLE_20260416"
@@ -215,10 +282,18 @@ def test_repeated_publish_raises_and_preserves_original_manifest(
 ) -> None:
     create_cycle(date(2026, 4, 16))
     _advance_cycle_to_phase3("CYCLE_20260416")
-    original = publish_manifest("CYCLE_20260416", _snapshot_manifest(recommendation_snapshot=123))
+    original = publish_manifest(
+        "CYCLE_20260416",
+        _snapshot_manifest(recommendation_snapshot=123),
+        recommendation_provenance=_recommendation_provenance(snapshot_id=123),
+    )
 
     with pytest.raises(ManifestAlreadyPublished):
-        publish_manifest("CYCLE_20260416", _snapshot_manifest(recommendation_snapshot=999))
+        publish_manifest(
+            "CYCLE_20260416",
+            _snapshot_manifest(recommendation_snapshot=999),
+            recommendation_provenance=_recommendation_provenance(snapshot_id=999),
+        )
 
     assert get_publish_manifest("CYCLE_20260416") == original
     assert (
@@ -258,7 +333,11 @@ def test_publish_manifest_rejects_cycles_before_phase3(
     _move_cycle_to_status("CYCLE_20260416", status)
 
     with pytest.raises(InvalidCycleTransition):
-        publish_manifest("CYCLE_20260416", _snapshot_manifest())
+        publish_manifest(
+            "CYCLE_20260416",
+            _snapshot_manifest(),
+            recommendation_provenance=_recommendation_provenance(),
+        )
 
     assert get_cycle("CYCLE_20260416").status == status
     assert _manifest_count(cycle_engine) == 0
@@ -268,7 +347,11 @@ def test_publish_manifest_missing_cycle_raises_not_found(
     cycle_repository_env: str,
 ) -> None:
     with pytest.raises(PublishManifestNotFound):
-        publish_manifest("CYCLE_20260416", _snapshot_manifest())
+        publish_manifest(
+            "CYCLE_20260416",
+            _snapshot_manifest(),
+            recommendation_provenance=_recommendation_provenance(),
+        )
 
 
 def test_get_publish_manifest_missing_row_raises_not_found(
@@ -346,7 +429,11 @@ def test_publish_manifest_insert_failure_rolls_back_status_update(
         reason="PostgreSQL publish manifest tests require SQLAlchemy",
     ).SQLAlchemyError
     with pytest.raises(sqlalchemy_error):
-        publish_manifest("CYCLE_20260416", _snapshot_manifest())
+        publish_manifest(
+            "CYCLE_20260416",
+            _snapshot_manifest(),
+            recommendation_provenance=_recommendation_provenance(),
+        )
 
     assert get_cycle("CYCLE_20260416").status == "phase3"
     assert _manifest_count(cycle_engine) == 0
@@ -360,8 +447,19 @@ def test_get_latest_publish_manifest_orders_by_postgres_manifest_metadata(
     create_cycle(date(2026, 4, 17))
     _advance_cycle_to_phase3("CYCLE_20260416")
     _advance_cycle_to_phase3("CYCLE_20260417")
-    publish_manifest("CYCLE_20260416", _snapshot_manifest(recommendation_snapshot=123))
-    publish_manifest("CYCLE_20260417", _snapshot_manifest(recommendation_snapshot=456))
+    publish_manifest(
+        "CYCLE_20260416",
+        _snapshot_manifest(recommendation_snapshot=123),
+        recommendation_provenance=_recommendation_provenance(snapshot_id=123),
+    )
+    publish_manifest(
+        "CYCLE_20260417",
+        _snapshot_manifest(recommendation_snapshot=456),
+        recommendation_provenance=_recommendation_provenance(
+            cycle_id="CYCLE_20260417",
+            snapshot_id=456,
+        ),
+    )
 
     with cycle_engine.begin() as connection:
         connection.execute(
