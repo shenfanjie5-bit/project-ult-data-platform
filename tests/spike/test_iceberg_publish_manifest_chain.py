@@ -95,7 +95,14 @@ def test_pg_catalog_formal_write_manifest_serving_atomicity(
     failed_cycle_id = _create_phase3_cycle(date(2026, 4, 18))
     _install_publish_status_failure_trigger(publish_chain_context.engine)
     with pytest.raises(SQLAlchemyError):
-        publish_manifest(failed_cycle_id, v3_snapshots)
+        publish_manifest(
+            failed_cycle_id,
+            v3_snapshots,
+            recommendation_provenance=_recommendation_provenance(
+                failed_cycle_id,
+                v3_snapshots["formal.recommendation_snapshot"],
+            ),
+        )
 
     latest_after_failure = get_formal_latest("recommendation_snapshot")
     assert latest_after_failure.cycle_id == "CYCLE_20260417"
@@ -202,7 +209,26 @@ def _publish_snapshot_set(cycle_date: date, snapshots: dict[str, int]) -> None:
     from data_platform.cycle import publish_manifest
 
     cycle_id = _create_phase3_cycle(cycle_date)
-    publish_manifest(cycle_id, snapshots)
+    publish_manifest(
+        cycle_id,
+        snapshots,
+        recommendation_provenance=_recommendation_provenance(
+            cycle_id,
+            snapshots["formal.recommendation_snapshot"],
+        ),
+    )
+
+
+def _recommendation_provenance(cycle_id: str, snapshot_id: int) -> dict[str, object]:
+    return {
+        "cycle_id": cycle_id,
+        "current_cycle_id": cycle_id,
+        "source_layer": "L8",
+        "source_kind": "current-cycle",
+        "recommendation_snapshot_id": snapshot_id,
+        "audit_record_ids": [f"audit-publish-chain-{cycle_id}-{snapshot_id}"],
+        "replay_record_ids": [f"replay-publish-chain-{cycle_id}-{snapshot_id}"],
+    }
 
 
 def _create_phase3_cycle(cycle_date: date) -> str:

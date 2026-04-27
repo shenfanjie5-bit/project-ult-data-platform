@@ -473,7 +473,26 @@ def _publish_formal_manifest(
     cycle = create_cycle(cycle_date)
     for status in ("phase0", "phase1", "phase2", "phase3"):
         transition_cycle_status(cycle.cycle_id, status)
-    publish_manifest(cycle.cycle_id, snapshots)
+    publish_manifest(
+        cycle.cycle_id,
+        snapshots,
+        recommendation_provenance=_recommendation_provenance(
+            cycle.cycle_id,
+            snapshots[FORMAL_RECOMMENDATION],
+        ),
+    )
+
+
+def _recommendation_provenance(cycle_id: str, snapshot_id: int) -> dict[str, object]:
+    return {
+        "cycle_id": cycle_id,
+        "current_cycle_id": cycle_id,
+        "source_layer": "L8",
+        "source_kind": "current-cycle",
+        "recommendation_snapshot_id": snapshot_id,
+        "audit_record_ids": [f"audit-formal-serving-{cycle_id}-{snapshot_id}"],
+        "replay_record_ids": [f"replay-formal-serving-{cycle_id}-{snapshot_id}"],
+    }
 
 
 def _create_engine(dsn: str, **kwargs: object) -> Any:

@@ -359,6 +359,15 @@ def test_published_cycle_cannot_transition_to_failed(cycle_repository_env: str) 
             "formal.alpha_result_snapshot": 3,
             "formal.recommendation_snapshot": 4,
         },
+        recommendation_provenance={
+            "cycle_id": cycle_id,
+            "current_cycle_id": cycle_id,
+            "source_layer": "L8",
+            "source_kind": "current-cycle",
+            "recommendation_snapshot_id": 4,
+            "audit_record_ids": ["audit-cycle-metadata-published-transition"],
+            "replay_record_ids": ["replay-cycle-metadata-published-transition"],
+        },
     )
 
     with pytest.raises(InvalidCycleTransition):

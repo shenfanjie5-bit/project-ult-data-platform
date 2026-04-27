@@ -150,6 +150,10 @@ def test_failed_publish_does_not_advance_latest_manifest(
         publish_manifest(
             failed_cycle_id,
             _snapshot_manifest(formal_context.identifier, v3_snapshot_id),
+            recommendation_provenance=_recommendation_provenance(
+                failed_cycle_id,
+                v3_snapshot_id,
+            ),
         )
 
     latest_object = get_formal_latest(formal_context.object_type)
@@ -374,7 +378,23 @@ def _publish_snapshot(cycle_date: date, identifier: str, snapshot_id: int) -> No
     from data_platform.cycle import publish_manifest
 
     cycle_id = _create_phase3_cycle(cycle_date)
-    publish_manifest(cycle_id, _snapshot_manifest(identifier, snapshot_id))
+    publish_manifest(
+        cycle_id,
+        _snapshot_manifest(identifier, snapshot_id),
+        recommendation_provenance=_recommendation_provenance(cycle_id, snapshot_id),
+    )
+
+
+def _recommendation_provenance(cycle_id: str, snapshot_id: int) -> dict[str, object]:
+    return {
+        "cycle_id": cycle_id,
+        "current_cycle_id": cycle_id,
+        "source_layer": "L8",
+        "source_kind": "current-cycle",
+        "recommendation_snapshot_id": snapshot_id,
+        "audit_record_ids": [f"audit-formal-consistency-{cycle_id}-{snapshot_id}"],
+        "replay_record_ids": [f"replay-formal-consistency-{cycle_id}-{snapshot_id}"],
+    }
 
 
 def _snapshot_manifest(identifier: str, snapshot_id: int) -> dict[str, int]:

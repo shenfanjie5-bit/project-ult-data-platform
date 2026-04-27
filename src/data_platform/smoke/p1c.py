@@ -213,6 +213,15 @@ def _write_formal_snapshot_and_publish(
             "formal.alpha_result_snapshot": snapshot_id,
             P1C_FORMAL_TABLE_IDENTIFIER: snapshot_id,
         },
+        recommendation_provenance={
+            "cycle_id": cycle_id,
+            "current_cycle_id": cycle_id,
+            "source_layer": "L8",
+            "source_kind": "current-cycle",
+            "recommendation_snapshot_id": snapshot_id,
+            "audit_record_ids": [f"audit-p1c-smoke-{cycle_id}-{smoke_run_id}"],
+            "replay_record_ids": [f"replay-p1c-smoke-{cycle_id}-{smoke_run_id}"],
+        },
     )
 
 
