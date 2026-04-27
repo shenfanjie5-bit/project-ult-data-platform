@@ -48,7 +48,9 @@ def postgres_dsn() -> Iterator[str]:
         admin_engine.dispose()
         pytest.skip(f"P1a smoke integration requires a usable PostgreSQL DATABASE_URL: {exc}")
 
-    test_dsn = str(make_url(admin_dsn).set(database=database_name))
+    test_dsn = make_url(admin_dsn).set(database=database_name).render_as_string(
+        hide_password=False
+    )
     try:
         yield test_dsn
     finally:

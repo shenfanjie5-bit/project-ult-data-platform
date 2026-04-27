@@ -3,7 +3,7 @@ set -euo pipefail
 
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 
-if [[ -d "${ROOT_DIR}/.venv/bin" ]]; then
+if ! command -v dbt >/dev/null 2>&1 && [[ -d "${ROOT_DIR}/.venv/bin" ]]; then
   export PATH="${ROOT_DIR}/.venv/bin:${PATH}"
 fi
 

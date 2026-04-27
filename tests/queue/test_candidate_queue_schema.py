@@ -75,8 +75,10 @@ def postgres_dsn() -> Generator[str]:
             f"test databases: {exc}"
         )
 
-    test_dsn = str(
-        make_url(runner_module._sqlalchemy_postgres_uri(admin_dsn)).set(database=database_name)
+    test_dsn = (
+        make_url(runner_module._sqlalchemy_postgres_uri(admin_dsn))
+        .set(database=database_name)
+        .render_as_string(hide_password=False)
     )
     try:
         yield test_dsn
