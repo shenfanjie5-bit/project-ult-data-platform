@@ -25,7 +25,7 @@ from data_platform.queue import CandidateQueueItem, submit_candidate
 from data_platform.queue.worker import validate_pending_candidates
 
 
-P1C_FORMAL_OBJECT_TYPE: Final[str] = "p1c_smoke_object"
+P1C_FORMAL_OBJECT_TYPE: Final[str] = "recommendation_snapshot"
 P1C_FORMAL_TABLE_IDENTIFIER: Final[str] = f"formal.{P1C_FORMAL_OBJECT_TYPE}"
 P1C_SUBMITTED_BY: Final[str] = "p1c-smoke"
 P1C_CANDIDATE_COUNT: Final[int] = 3
@@ -205,7 +205,15 @@ def _write_formal_snapshot_and_publish(
         candidate_count=candidate_count,
         smoke_run_id=smoke_run_id,
     )
-    return publish_manifest(cycle_id, {P1C_FORMAL_TABLE_IDENTIFIER: snapshot_id})
+    return publish_manifest(
+        cycle_id,
+        {
+            "formal.world_state_snapshot": snapshot_id,
+            "formal.official_alpha_pool": snapshot_id,
+            "formal.alpha_result_snapshot": snapshot_id,
+            P1C_FORMAL_TABLE_IDENTIFIER: snapshot_id,
+        },
+    )
 
 
 def _write_formal_fixture_snapshot(

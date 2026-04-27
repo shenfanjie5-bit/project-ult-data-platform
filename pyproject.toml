@@ -36,7 +36,7 @@ dev = [
 # stage 2.3 follow-up #1 sub-rule). Required by tests/contract/
 # test_contracts_alignment.py for cross-repo enum alignment.
 contracts-schemas = [
-    "project-ult-contracts @ git+https://github.com/shenfanjie5-bit/project-ult-contracts.git@v0.1.2",
+    "project-ult-contracts @ git+https://github.com/shenfanjie5-bit/project-ult-contracts.git@v0.1.3",
 ]
 # Shared regression fixtures bundled with project-ult-audit-eval.
 # Pinned to v0.2.4 (project-wide canonical_entity_id format

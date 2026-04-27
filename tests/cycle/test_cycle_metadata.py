@@ -349,7 +349,15 @@ def test_published_cycle_cannot_transition_to_failed(cycle_repository_env: str) 
     cycle_id = "CYCLE_20260416"
     for status in ["phase0", "phase1", "phase2", "phase3"]:
         transition_cycle_status(cycle_id, status)
-    publish_manifest(cycle_id, {"formal.recommendation_set": 123})
+    publish_manifest(
+        cycle_id,
+        {
+            "formal.world_state_snapshot": 1,
+            "formal.official_alpha_pool": 2,
+            "formal.alpha_result_snapshot": 3,
+            "formal.recommendation_snapshot": 4,
+        },
+    )
 
     with pytest.raises(InvalidCycleTransition):
         transition_cycle_status(cycle_id, "failed")

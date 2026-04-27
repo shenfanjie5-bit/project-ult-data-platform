@@ -13,6 +13,7 @@ from dataclasses import dataclass
 from datetime import UTC, date, datetime
 from pathlib import Path
 from typing import Any, TypeAlias
+from urllib.parse import unquote, urlparse
 
 import fcntl
 import pyarrow as pa  # type: ignore[import-untyped]
@@ -274,7 +275,7 @@ class RawReader:
             return []
 
         artifacts = [
-            _artifact_from_dict(item)
+            _artifact_from_dict(item, raw_zone_root=self.raw_zone_path)
             for item in _manifest_artifacts(_read_manifest(manifest_path))
         ]
         artifacts.sort(key=lambda artifact: artifact.written_at)
@@ -354,10 +355,16 @@ def _is_ulid(value: str) -> bool:
 
 
 def _ensure_path_stays_under(path: Path, root: Path) -> None:
+    if not _path_stays_under(path, root):
+        raise RawZonePathError(f"path escapes raw zone root: {path}")
+
+
+def _path_stays_under(path: Path, root: Path) -> bool:
     try:
         path.expanduser().resolve(strict=False).relative_to(root.expanduser().resolve(strict=False))
-    except ValueError as exc:
-        raise RawZonePathError(f"path escapes raw zone root: {path}") from exc
+    except ValueError:
+        return False
+    return True
 
 
 def _ensure_not_in_iceberg_warehouse(path: Path, iceberg_warehouse_path: Path | None) -> None:
@@ -386,16 +393,56 @@ def _artifact_to_dict(artifact: RawArtifact) -> dict[str, Any]:
     }
 
 
-def _artifact_from_dict(value: dict[str, Any]) -> RawArtifact:
+def _artifact_from_dict(
+    value: dict[str, Any],
+    *,
+    raw_zone_root: Path | None = None,
+) -> RawArtifact:
+    path_ref = str(value["path"])
+    path = Path(path_ref) if raw_zone_root is None else _artifact_path_from_ref(
+        path_ref,
+        raw_zone_root,
+    )
     return RawArtifact(
         source_id=str(value["source_id"]),
         dataset=str(value["dataset"]),
         partition_date=date.fromisoformat(str(value["partition_date"])),
         run_id=str(value["run_id"]),
-        path=Path(str(value["path"])),
+        path=path,
         row_count=int(value["row_count"]),
         written_at=datetime.fromisoformat(str(value["written_at"])),
     )
+
+
+def _artifact_path_from_ref(ref: str, raw_zone_root: Path) -> Path:
+    if not ref or ref != ref.strip():
+        msg = f"raw artifact ref must be a non-empty path: {ref!r}"
+        raise ValueError(msg)
+
+    parsed = urlparse(ref)
+    if parsed.scheme and parsed.scheme != "file":
+        msg = f"raw artifact ref uses unsupported scheme: {parsed.scheme!r}"
+        raise ValueError(msg)
+    if parsed.scheme == "file":
+        if parsed.netloc:
+            msg = f"raw artifact file ref must not include a network location: {ref!r}"
+            raise ValueError(msg)
+        path = Path(unquote(parsed.path))
+    else:
+        path = Path(ref)
+
+    if any(part in {"", ".", ".."} for part in path.parts):
+        msg = f"raw artifact ref must not contain traversal segments: {ref!r}"
+        raise ValueError(msg)
+
+    if not path.is_absolute() and not _path_stays_under(path, raw_zone_root):
+        path = raw_zone_root / path
+
+    _ensure_path_stays_under(path, raw_zone_root)
+    if path.exists() and not path.is_file():
+        msg = f"raw artifact ref must point to a file when it exists: {ref!r}"
+        raise ValueError(msg)
+    return path
 
 
 def _read_manifest(manifest_path: Path) -> dict[str, Any]:

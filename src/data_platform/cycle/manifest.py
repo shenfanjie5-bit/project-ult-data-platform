@@ -14,6 +14,10 @@ from data_platform.cycle.repository import (
     _create_engine,
     _text,
 )
+from data_platform.formal_registry import (
+    REQUIRED_FORMAL_OBJECT_NAMES,
+    validate_formal_object_name,
+)
 
 CYCLE_PUBLISH_MANIFEST_TABLE: Final[str] = "data_platform.cycle_publish_manifest"
 _FORMAL_NAMESPACE_PREFIX: Final[str] = "formal."
@@ -291,10 +295,12 @@ def _normalize_snapshot_manifest(
         msg = "formal_table_snapshots must not be empty"
         raise InvalidFormalSnapshotManifest(msg)
 
-    return {
+    snapshots = {
         _validate_formal_table_key(table): _coerce_snapshot(table, value)
         for table, value in formal_table_snapshots.items()
     }
+    _require_formal_snapshot_keys(snapshots)
+    return snapshots
 
 
 def _coerce_snapshot(table: object, value: object) -> FormalTableSnapshot:
@@ -336,7 +342,25 @@ def _validate_formal_table_key(table: object) -> str:
     if any(part == "" for part in table.split(".")):
         msg = f"formal table key must not contain empty namespace parts: {table!r}"
         raise InvalidFormalSnapshotManifest(msg)
+    object_name = table.removeprefix(_FORMAL_NAMESPACE_PREFIX)
+    try:
+        validate_formal_object_name(object_name)
+    except ValueError as exc:
+        raise InvalidFormalSnapshotManifest(str(exc)) from exc
     return table
+
+
+def _require_formal_snapshot_keys(
+    snapshots: Mapping[str, FormalTableSnapshot],
+) -> None:
+    required_keys = {
+        f"{_FORMAL_NAMESPACE_PREFIX}{name}"
+        for name in REQUIRED_FORMAL_OBJECT_NAMES
+    }
+    missing = sorted(required_keys - set(snapshots))
+    if missing:
+        msg = f"formal_table_snapshots missing required keys: {missing}"
+        raise InvalidFormalSnapshotManifest(msg)
 
 
 def validate_snapshot_id(snapshot_id: object) -> int:

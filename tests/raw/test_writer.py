@@ -6,7 +6,7 @@ import os
 import threading
 import uuid
 from concurrent.futures import ThreadPoolExecutor
-from datetime import date
+from datetime import UTC, date, datetime
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -259,6 +259,101 @@ def test_list_artifacts_returns_written_at_ascending(
     assert artifacts[0].written_at <= artifacts[1].written_at
 
 
+def test_raw_reader_accepts_safe_relative_manifest_artifact_ref(
+    raw_zone_path: Path,
+    source_id: str,
+) -> None:
+    run_id = str(uuid.uuid4())
+    partition_path = raw_zone_path / source_id / "stock_basic" / "dt=20260415"
+    artifact_path = partition_path / f"{run_id}.json.gz"
+    artifact_path.parent.mkdir(parents=True)
+    artifact_path.write_bytes(b"placeholder")
+    _write_manifest_with_path_ref(
+        partition_path,
+        source_id=source_id,
+        run_id=run_id,
+        path_ref=f"{source_id}/stock_basic/dt=20260415/{run_id}.json.gz",
+    )
+
+    artifacts = RawReader(raw_zone_path).list_artifacts(
+        source_id,
+        "stock_basic",
+        PARTITION_DATE,
+    )
+
+    assert [artifact.path for artifact in artifacts] == [artifact_path]
+
+
+@pytest.mark.parametrize(
+    "path_ref",
+    [
+        "",
+        "../escape.json.gz",
+        "artifact://outside/root.json.gz",
+        "s3://bucket/root.json.gz",
+        "/tmp/root.json.gz",
+    ],
+)
+def test_raw_reader_rejects_invalid_manifest_artifact_refs(
+    raw_zone_path: Path,
+    source_id: str,
+    path_ref: str,
+) -> None:
+    partition_path = raw_zone_path / source_id / "stock_basic" / "dt=20260415"
+    partition_path.mkdir(parents=True)
+    _write_manifest_with_path_ref(
+        partition_path,
+        source_id=source_id,
+        run_id=str(uuid.uuid4()),
+        path_ref=path_ref,
+    )
+
+    with pytest.raises(ValueError):
+        RawReader(raw_zone_path).list_artifacts(source_id, "stock_basic", PARTITION_DATE)
+
+
+def test_raw_reader_rejects_symlink_escape_manifest_artifact_ref(
+    raw_zone_path: Path,
+    tmp_path: Path,
+    source_id: str,
+) -> None:
+    run_id = str(uuid.uuid4())
+    partition_path = raw_zone_path / source_id / "stock_basic" / "dt=20260415"
+    partition_path.mkdir(parents=True)
+    outside = tmp_path / "outside"
+    outside.mkdir()
+    (outside / f"{run_id}.json.gz").write_bytes(b"outside")
+    (raw_zone_path / "linked").symlink_to(outside)
+    _write_manifest_with_path_ref(
+        partition_path,
+        source_id=source_id,
+        run_id=run_id,
+        path_ref=f"linked/{run_id}.json.gz",
+    )
+
+    with pytest.raises(RawZonePathError):
+        RawReader(raw_zone_path).list_artifacts(source_id, "stock_basic", PARTITION_DATE)
+
+
+def test_raw_reader_rejects_manifest_artifact_ref_to_directory(
+    raw_zone_path: Path,
+    source_id: str,
+) -> None:
+    run_id = str(uuid.uuid4())
+    partition_path = raw_zone_path / source_id / "stock_basic" / "dt=20260415"
+    artifact_dir = partition_path / f"{run_id}.json.gz"
+    artifact_dir.mkdir(parents=True)
+    _write_manifest_with_path_ref(
+        partition_path,
+        source_id=source_id,
+        run_id=run_id,
+        path_ref=f"{source_id}/stock_basic/dt=20260415/{run_id}.json.gz",
+    )
+
+    with pytest.raises(ValueError, match="must point to a file"):
+        RawReader(raw_zone_path).list_artifacts(source_id, "stock_basic", PARTITION_DATE)
+
+
 def test_concurrent_same_run_id_allows_one_artifact(
     raw_zone_path: Path,
     source_id: str,
@@ -318,3 +413,32 @@ def test_concurrent_different_run_ids_all_appear_in_manifest(
 
     assert {artifact.run_id for artifact in artifacts} == written_run_ids
     assert len(artifacts) == len(run_ids)
+
+
+def _write_manifest_with_path_ref(
+    partition_path: Path,
+    *,
+    source_id: str,
+    run_id: str,
+    path_ref: str,
+) -> None:
+    manifest = {
+        "source_id": source_id,
+        "dataset": "stock_basic",
+        "partition_date": PARTITION_DATE.isoformat(),
+        "artifacts": [
+            {
+                "source_id": source_id,
+                "dataset": "stock_basic",
+                "partition_date": PARTITION_DATE.isoformat(),
+                "run_id": run_id,
+                "path": path_ref,
+                "row_count": 1,
+                "written_at": datetime.now(UTC).isoformat(),
+            }
+        ],
+    }
+    (partition_path / "_manifest.json").write_text(
+        json.dumps(manifest, indent=2, sort_keys=True) + "\n",
+        encoding="utf-8",
+    )

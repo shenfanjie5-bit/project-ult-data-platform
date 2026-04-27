@@ -23,7 +23,11 @@ pytestmark = pytest.mark.skipif(
 )
 
 
-FORMAL_IDENTIFIER = "formal.recommendation_set"
+FORMAL_IDENTIFIER = "formal.recommendation_snapshot"
+FORMAL_WORLD_STATE = "formal.world_state_snapshot"
+FORMAL_ALPHA_POOL = "formal.official_alpha_pool"
+FORMAL_ALPHA_RESULT = "formal.alpha_result_snapshot"
+FORMAL_RECOMMENDATION = "formal.recommendation_snapshot"
 
 
 @pytest.fixture()
@@ -48,7 +52,7 @@ def test_formal_object_model_exposes_contract(
     )
     formal_object = formal_module.FormalObject(
         cycle_id="CYCLE_20260416",
-        object_type="recommendation_set",
+        object_type="recommendation_snapshot",
         snapshot_id=123,
         payload=payload,
     )
@@ -72,9 +76,15 @@ def test_formal_object_model_exposes_contract(
 
 
 def test_formal_table_identifier_validates_object_type(formal_module: Any) -> None:
-    assert formal_module.formal_table_identifier("recommendation_set") == FORMAL_IDENTIFIER
+    assert formal_module.formal_table_identifier("recommendation_snapshot") == FORMAL_IDENTIFIER
 
-    for object_type in ["formal.recommendation_set", "recommendation-set", "", " raw "]:
+    for object_type in [
+        "formal.recommendation_snapshot",
+        "recommendation-set",
+        "unknown_object",
+        "",
+        " raw ",
+    ]:
         with pytest.raises(formal_module.FormalObjectTypeInvalid):
             formal_module.formal_table_identifier(object_type)
 
@@ -120,8 +130,8 @@ def test_latest_and_by_id_read_manifest_snapshots_not_formal_head(
         }[cycle_id],
     )
 
-    latest = formal_module.get_formal_latest("recommendation_set")
-    old = formal_module.get_formal_by_id("CYCLE_20260416", "recommendation_set")
+    latest = formal_module.get_formal_latest("recommendation_snapshot")
+    old = formal_module.get_formal_by_id("CYCLE_20260416", "recommendation_snapshot")
 
     assert latest.cycle_id == "CYCLE_20260417"
     assert latest.snapshot_id == latest_snapshot_id
@@ -171,7 +181,7 @@ def test_by_snapshot_reads_only_published_snapshot(
 
     formal_object = formal_module.get_formal_by_snapshot(
         published_snapshot_id,
-        "recommendation_set",
+        "recommendation_snapshot",
     )
 
     assert formal_object.cycle_id == "CYCLE_20260416"
@@ -206,7 +216,10 @@ def test_by_snapshot_rejects_unpublished_current_head_before_reading_table(
     )
 
     with pytest.raises(formal_module.FormalSnapshotNotPublished):
-        formal_module.get_formal_by_snapshot(unpublished_snapshot_id, "recommendation_set")
+        formal_module.get_formal_by_snapshot(
+            unpublished_snapshot_id,
+            "recommendation_snapshot",
+        )
 
 
 def test_by_snapshot_uses_db_backed_manifest_lookup(
@@ -222,16 +235,16 @@ def test_by_snapshot_uses_db_backed_manifest_lookup(
     for day in range(1, 26):
         _publish_formal_manifest(
             date(2026, 1, day),
-            {"formal.other_object": 70000 + day},
+            _snapshot_manifest(recommendation_snapshot=70000 + day),
         )
     _publish_formal_manifest(
         date(2026, 2, 1),
-        {FORMAL_IDENTIFIER: target_snapshot_id},
+        _snapshot_manifest(recommendation_snapshot=target_snapshot_id),
     )
     for day in range(2, 10):
         _publish_formal_manifest(
             date(2026, 2, day),
-            {"formal.other_object": 80000 + day},
+            _snapshot_manifest(recommendation_snapshot=80000 + day),
         )
 
     read_calls: list[tuple[str, int]] = []
@@ -254,7 +267,7 @@ def test_by_snapshot_uses_db_backed_manifest_lookup(
 
     formal_object = formal_module.get_formal_by_snapshot(
         target_snapshot_id,
-        "recommendation_set",
+        "recommendation_snapshot",
     )
 
     assert formal_object.cycle_id == target_cycle_id
@@ -275,7 +288,7 @@ def test_by_snapshot_uses_db_backed_manifest_lookup(
     with pytest.raises(formal_module.FormalSnapshotNotPublished):
         formal_module.get_formal_by_snapshot(
             unpublished_snapshot_id,
-            "recommendation_set",
+            "recommendation_snapshot",
         )
 
 
@@ -293,9 +306,9 @@ def test_missing_manifest_raises_formal_manifest_not_found(
     monkeypatch.setattr(formal_module, "get_publish_manifest", missing_cycle)
 
     with pytest.raises(formal_module.FormalManifestNotFound):
-        formal_module.get_formal_latest("recommendation_set")
+        formal_module.get_formal_latest("recommendation_snapshot")
     with pytest.raises(formal_module.FormalManifestNotFound):
-        formal_module.get_formal_by_id("CYCLE_20260416", "recommendation_set")
+        formal_module.get_formal_by_id("CYCLE_20260416", "recommendation_snapshot")
 
 
 def test_manifest_without_object_type_raises_table_snapshot_not_found(
@@ -305,7 +318,6 @@ def test_manifest_without_object_type_raises_table_snapshot_not_found(
     manifest = make_manifest(
         "CYCLE_20260416",
         snapshot_id=123,
-        table_identifier="formal.other_object",
     )
 
     def fail_read_iceberg_snapshot(table_identifier: str, snapshot_id: int) -> object:
@@ -319,7 +331,7 @@ def test_manifest_without_object_type_raises_table_snapshot_not_found(
     )
 
     with pytest.raises(formal_module.FormalTableSnapshotNotFound):
-        formal_module.get_formal_latest("recommendation_set")
+        formal_module.get_formal_latest("dashboard_snapshot")
 
 
 def formal_schema(pa_module: Any) -> Any:
@@ -348,12 +360,25 @@ def make_manifest(
         published_cycle_id=cycle_id,
         published_at=datetime(2026, 4, 16, 10, 30, tzinfo=UTC),
         formal_table_snapshots={
+            **_snapshot_manifest(),
             table_identifier: FormalTableSnapshot(
                 table=table_identifier,
                 snapshot_id=snapshot_id,
-            )
+            ),
         },
     )
+
+
+def _snapshot_manifest(**overrides: object) -> dict[str, object]:
+    snapshots: dict[str, object] = {
+        FORMAL_WORLD_STATE: 11,
+        FORMAL_ALPHA_POOL: 12,
+        FORMAL_ALPHA_RESULT: 13,
+        FORMAL_RECOMMENDATION: 14,
+    }
+    for object_name, snapshot in overrides.items():
+        snapshots[f"formal.{object_name}"] = snapshot
+    return snapshots
 
 
 @pytest.fixture()

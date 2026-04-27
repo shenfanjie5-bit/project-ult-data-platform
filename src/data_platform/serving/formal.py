@@ -18,6 +18,7 @@ from data_platform.cycle.manifest import (
     validate_snapshot_id,
 )
 import data_platform.serving.reader as serving_reader
+from data_platform.formal_registry import validate_formal_object_name
 
 
 FORMAL_NAMESPACE: Final[str] = "formal"
@@ -127,6 +128,7 @@ def formal_table_identifier(object_type: str) -> str:
     """Return the manifest key and Iceberg identifier for one formal object type."""
 
     try:
+        validate_formal_object_name(object_type)
         serving_reader._validate_identifier(object_type)
     except (TypeError, ValueError) as exc:
         raise FormalObjectTypeInvalid(object_type) from exc

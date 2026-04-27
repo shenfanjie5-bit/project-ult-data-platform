@@ -25,7 +25,7 @@ pytestmark = pytest.mark.skipif(
     reason="formal manifest consistency tests require PyArrow, PyIceberg, and SQLAlchemy",
 )
 
-OBJECT_TYPE = "manifest_consistency_object"
+OBJECT_TYPE = "recommendation_snapshot"
 FORMAL_IDENTIFIER = f"formal.{OBJECT_TYPE}"
 
 
@@ -147,7 +147,10 @@ def test_failed_publish_does_not_advance_latest_manifest(
         reason="formal manifest consistency tests require SQLAlchemy",
     ).SQLAlchemyError
     with pytest.raises(sqlalchemy_error):
-        publish_manifest(failed_cycle_id, {formal_context.identifier: v3_snapshot_id})
+        publish_manifest(
+            failed_cycle_id,
+            _snapshot_manifest(formal_context.identifier, v3_snapshot_id),
+        )
 
     latest_object = get_formal_latest(formal_context.object_type)
 
@@ -371,7 +374,18 @@ def _publish_snapshot(cycle_date: date, identifier: str, snapshot_id: int) -> No
     from data_platform.cycle import publish_manifest
 
     cycle_id = _create_phase3_cycle(cycle_date)
-    publish_manifest(cycle_id, {identifier: snapshot_id})
+    publish_manifest(cycle_id, _snapshot_manifest(identifier, snapshot_id))
+
+
+def _snapshot_manifest(identifier: str, snapshot_id: int) -> dict[str, int]:
+    snapshots = {
+        "formal.world_state_snapshot": snapshot_id,
+        "formal.official_alpha_pool": snapshot_id,
+        "formal.alpha_result_snapshot": snapshot_id,
+        "formal.recommendation_snapshot": snapshot_id,
+    }
+    snapshots[identifier] = snapshot_id
+    return snapshots
 
 
 def _create_phase3_cycle(cycle_date: date) -> str:

@@ -34,6 +34,22 @@ EXPECTED_MANIFEST_COLUMNS = [
     "published_at",
     "formal_table_snapshots",
 ]
+FORMAL_WORLD_STATE = "formal.world_state_snapshot"
+FORMAL_ALPHA_POOL = "formal.official_alpha_pool"
+FORMAL_ALPHA_RESULT = "formal.alpha_result_snapshot"
+FORMAL_RECOMMENDATION = "formal.recommendation_snapshot"
+
+
+def _snapshot_manifest(**overrides: object) -> dict[str, object]:
+    snapshots: dict[str, object] = {
+        FORMAL_WORLD_STATE: 11,
+        FORMAL_ALPHA_POOL: 12,
+        FORMAL_ALPHA_RESULT: 13,
+        FORMAL_RECOMMENDATION: 14,
+    }
+    for object_name, snapshot in overrides.items():
+        snapshots[f"formal.{object_name}"] = snapshot
+    return snapshots
 
 
 def test_publish_manifest_models_expose_contract() -> None:
@@ -47,40 +63,43 @@ def test_publish_manifest_models_expose_contract() -> None:
     assert [field.name for field in fields(CyclePublishManifest)] == (EXPECTED_MANIFEST_COLUMNS)
     assert CyclePublishManifest.__slots__ == tuple(EXPECTED_MANIFEST_COLUMNS)
 
-    snapshot = FormalTableSnapshot(table="formal.recommendation_set", snapshot_id=123)
+    snapshot = FormalTableSnapshot(table=FORMAL_RECOMMENDATION, snapshot_id=123)
     with pytest.raises(FrozenInstanceError):
         snapshot.snapshot_id = 456
 
     manifest = CyclePublishManifest(
         published_cycle_id="CYCLE_20260416",
         published_at=datetime.now(UTC),
-        formal_table_snapshots={"formal.recommendation_set": snapshot},
+        formal_table_snapshots=_snapshot_manifest(recommendation_snapshot=snapshot),
     )
     with pytest.raises(FrozenInstanceError):
         manifest.published_cycle_id = "CYCLE_20260417"
-    assert manifest.formal_table_snapshots["formal.recommendation_set"] == snapshot
+    assert manifest.formal_table_snapshots[FORMAL_RECOMMENDATION] == snapshot
 
 
 @pytest.mark.parametrize(
     "snapshots",
     [
         {},
-        {"canonical.recommendation_set": 123},
+        {"canonical.recommendation_snapshot": 123},
         {"formal.": 123},
-        {" formal.recommendation_set": 123},
-        {"formal.recommendation_set": 0},
-        {"formal.recommendation_set": -1},
-        {"formal.recommendation_set": True},
-        {"formal.recommendation_set": 12.3},
-        {"formal.recommendation_set": {}},
-        {"formal.recommendation_set": {"snapshot_id": 0}},
-        {"formal.recommendation_set": {"snapshot_id": "123"}},
+        {" formal.recommendation_snapshot": 123},
+        _snapshot_manifest(recommendation_snapshot=0),
+        _snapshot_manifest(recommendation_snapshot=-1),
+        _snapshot_manifest(recommendation_snapshot=True),
+        _snapshot_manifest(recommendation_snapshot=12.3),
+        _snapshot_manifest(recommendation_snapshot={}),
+        _snapshot_manifest(recommendation_snapshot={"snapshot_id": 0}),
+        _snapshot_manifest(recommendation_snapshot={"snapshot_id": "123"}),
         {
-            "formal.recommendation_set": FormalTableSnapshot(
-                table="formal.other_table",
+            **_snapshot_manifest(),
+            FORMAL_RECOMMENDATION: FormalTableSnapshot(
+                table=FORMAL_WORLD_STATE,
                 snapshot_id=123,
-            )
+            ),
         },
+        {**_snapshot_manifest(), "formal.unknown_object": 123},
+        {FORMAL_WORLD_STATE: 1, FORMAL_ALPHA_POOL: 2, FORMAL_ALPHA_RESULT: 3},
     ],
 )
 def test_publish_manifest_rejects_invalid_snapshot_manifest_before_database(
@@ -92,7 +111,7 @@ def test_publish_manifest_rejects_invalid_snapshot_manifest_before_database(
 
 def test_publish_manifest_rejects_invalid_cycle_id_before_database() -> None:
     with pytest.raises(InvalidCycleId):
-        publish_manifest("bad", {"formal.recommendation_set": 123})
+        publish_manifest("bad", _snapshot_manifest())
 
 
 def test_migration_creates_cycle_publish_manifest_schema(
@@ -158,29 +177,36 @@ def test_publish_manifest_inserts_row_and_updates_cycle_status(
 
     manifest = publish_manifest(
         "CYCLE_20260416",
-        {
-            "formal.recommendation_set": {"snapshot_id": 123},
-            "formal.score_set": 456,
-        },
+        _snapshot_manifest(recommendation_snapshot={"snapshot_id": 123}),
     )
 
     assert manifest.published_cycle_id == "CYCLE_20260416"
     assert isinstance(manifest.published_at, datetime)
     assert manifest.formal_table_snapshots == {
-        "formal.recommendation_set": FormalTableSnapshot(
-            table="formal.recommendation_set",
-            snapshot_id=123,
+        FORMAL_WORLD_STATE: FormalTableSnapshot(
+            table=FORMAL_WORLD_STATE,
+            snapshot_id=11,
         ),
-        "formal.score_set": FormalTableSnapshot(
-            table="formal.score_set",
-            snapshot_id=456,
+        FORMAL_ALPHA_POOL: FormalTableSnapshot(
+            table=FORMAL_ALPHA_POOL,
+            snapshot_id=12,
+        ),
+        FORMAL_ALPHA_RESULT: FormalTableSnapshot(
+            table=FORMAL_ALPHA_RESULT,
+            snapshot_id=13,
+        ),
+        FORMAL_RECOMMENDATION: FormalTableSnapshot(
+            table=FORMAL_RECOMMENDATION,
+            snapshot_id=123,
         ),
     }
     assert get_publish_manifest("CYCLE_20260416") == manifest
     assert get_cycle("CYCLE_20260416").status == "published"
     assert _stored_manifest_payload(cycle_engine, "CYCLE_20260416") == {
-        "formal.recommendation_set": {"snapshot_id": 123},
-        "formal.score_set": {"snapshot_id": 456},
+        FORMAL_WORLD_STATE: {"snapshot_id": 11},
+        FORMAL_ALPHA_POOL: {"snapshot_id": 12},
+        FORMAL_ALPHA_RESULT: {"snapshot_id": 13},
+        FORMAL_RECOMMENDATION: {"snapshot_id": 123},
     }
 
 
@@ -189,15 +215,15 @@ def test_repeated_publish_raises_and_preserves_original_manifest(
 ) -> None:
     create_cycle(date(2026, 4, 16))
     _advance_cycle_to_phase3("CYCLE_20260416")
-    original = publish_manifest("CYCLE_20260416", {"formal.recommendation_set": 123})
+    original = publish_manifest("CYCLE_20260416", _snapshot_manifest(recommendation_snapshot=123))
 
     with pytest.raises(ManifestAlreadyPublished):
-        publish_manifest("CYCLE_20260416", {"formal.recommendation_set": 999})
+        publish_manifest("CYCLE_20260416", _snapshot_manifest(recommendation_snapshot=999))
 
     assert get_publish_manifest("CYCLE_20260416") == original
     assert (
         get_publish_manifest("CYCLE_20260416")
-        .formal_table_snapshots["formal.recommendation_set"]
+        .formal_table_snapshots[FORMAL_RECOMMENDATION]
         .snapshot_id
         == 123
     )
@@ -232,7 +258,7 @@ def test_publish_manifest_rejects_cycles_before_phase3(
     _move_cycle_to_status("CYCLE_20260416", status)
 
     with pytest.raises(InvalidCycleTransition):
-        publish_manifest("CYCLE_20260416", {"formal.recommendation_set": 123})
+        publish_manifest("CYCLE_20260416", _snapshot_manifest())
 
     assert get_cycle("CYCLE_20260416").status == status
     assert _manifest_count(cycle_engine) == 0
@@ -242,7 +268,7 @@ def test_publish_manifest_missing_cycle_raises_not_found(
     cycle_repository_env: str,
 ) -> None:
     with pytest.raises(PublishManifestNotFound):
-        publish_manifest("CYCLE_20260416", {"formal.recommendation_set": 123})
+        publish_manifest("CYCLE_20260416", _snapshot_manifest())
 
 
 def test_get_publish_manifest_missing_row_raises_not_found(
@@ -277,7 +303,10 @@ def test_get_publish_manifest_rejects_stored_invalid_json_contract(
                 )
                 VALUES (
                     'CYCLE_20260416',
-                    '{"formal.recommendation_set": {"snapshot_id": "bad"}}'::jsonb
+                    '{"formal.world_state_snapshot": {"snapshot_id": 1},
+                      "formal.official_alpha_pool": {"snapshot_id": 2},
+                      "formal.alpha_result_snapshot": {"snapshot_id": 3},
+                      "formal.recommendation_snapshot": {"snapshot_id": "bad"}}'::jsonb
                 )
                 """
             )
@@ -317,7 +346,7 @@ def test_publish_manifest_insert_failure_rolls_back_status_update(
         reason="PostgreSQL publish manifest tests require SQLAlchemy",
     ).SQLAlchemyError
     with pytest.raises(sqlalchemy_error):
-        publish_manifest("CYCLE_20260416", {"formal.recommendation_set": 123})
+        publish_manifest("CYCLE_20260416", _snapshot_manifest())
 
     assert get_cycle("CYCLE_20260416").status == "phase3"
     assert _manifest_count(cycle_engine) == 0
@@ -331,8 +360,8 @@ def test_get_latest_publish_manifest_orders_by_postgres_manifest_metadata(
     create_cycle(date(2026, 4, 17))
     _advance_cycle_to_phase3("CYCLE_20260416")
     _advance_cycle_to_phase3("CYCLE_20260417")
-    publish_manifest("CYCLE_20260416", {"formal.recommendation_set": 123})
-    publish_manifest("CYCLE_20260417", {"formal.recommendation_set": 456})
+    publish_manifest("CYCLE_20260416", _snapshot_manifest(recommendation_snapshot=123))
+    publish_manifest("CYCLE_20260417", _snapshot_manifest(recommendation_snapshot=456))
 
     with cycle_engine.begin() as connection:
         connection.execute(
@@ -348,7 +377,7 @@ def test_get_latest_publish_manifest_orders_by_postgres_manifest_metadata(
     latest = get_latest_publish_manifest()
 
     assert latest.published_cycle_id == "CYCLE_20260417"
-    assert latest.formal_table_snapshots["formal.recommendation_set"].snapshot_id == 456
+    assert latest.formal_table_snapshots[FORMAL_RECOMMENDATION].snapshot_id == 456
 
 
 @pytest.fixture()

@@ -189,7 +189,7 @@ def test_read_iceberg_snapshot_uses_duckdb_time_travel(
         tmp_path
         / "warehouse"
         / "formal"
-        / "recommendation_set"
+        / "recommendation_snapshot"
         / "metadata"
         / "00002.metadata.json"
     )
@@ -216,7 +216,7 @@ def test_read_iceberg_snapshot_uses_duckdb_time_travel(
     )
     monkeypatch.setattr(reader, "with_duckdb_connection", fake_duckdb_connection)
 
-    payload = read_iceberg_snapshot("formal.recommendation_set", 123)
+    payload = read_iceberg_snapshot("formal.recommendation_snapshot", 123)
 
     assert payload == expected_payload
     assert len(executed_sql) == 1
@@ -233,8 +233,8 @@ def test_read_iceberg_snapshot_reads_pinned_snapshot_not_head(
     warehouse_path = tmp_path / "warehouse"
     catalog = InMemoryCatalog("test", warehouse=f"file://{warehouse_path}")
     catalog.create_namespace_if_not_exists(("formal",))
-    catalog.create_table("formal.recommendation_set", schema=schema)
-    table = catalog.load_table("formal.recommendation_set")
+    catalog.create_table("formal.recommendation_snapshot", schema=schema)
+    table = catalog.load_table("formal.recommendation_snapshot")
 
     table.overwrite(pa.table({"version": ["published"]}, schema=schema))
     published_snapshot = table.refresh().current_snapshot()
@@ -257,7 +257,7 @@ def test_read_iceberg_snapshot_reads_pinned_snapshot_not_head(
     reader._duckdb_connection.cache_clear()
     try:
         payload = read_iceberg_snapshot(
-            "formal.recommendation_set",
+            "formal.recommendation_snapshot",
             int(published_snapshot.snapshot_id),
         )
     finally:

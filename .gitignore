@@ -1,5 +1,6 @@
 # Python bytecode
 __pycache__/
+*.py[cod]
 *.pyc
 *.pyo
 *.egg-info/
