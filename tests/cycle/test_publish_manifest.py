@@ -142,6 +142,7 @@ def test_publish_manifest_rejects_recommendation_without_provenance_preflight() 
 @pytest.mark.parametrize(
     ("override", "message"),
     [
+        ({"cycle_id": "CYCLE_20260415"}, "published cycle"),
         ({"current_cycle_id": "CYCLE_20260415"}, "current cycle"),
         ({"source_layer": "L7"}, "source_layer"),
         ({"source_kind": "fixture"}, "source_kind"),
