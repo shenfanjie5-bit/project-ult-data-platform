@@ -8,6 +8,7 @@ consumers must bind to canonical dataset ids declared here.
 from __future__ import annotations
 
 import csv
+from collections.abc import Sequence
 from dataclasses import dataclass
 from importlib import resources
 import re
@@ -247,6 +248,25 @@ class TushareInterfaceRegistryEntry:
             raise ValueError(msg)
 
 
+class AmbiguousProviderInterface(ValueError):
+    """Raised when a provider doc API maps to multiple source interfaces."""
+
+    def __init__(
+        self,
+        provider: str,
+        doc_api: str,
+        source_interface_ids: Sequence[str],
+    ) -> None:
+        self.provider = provider
+        self.doc_api = doc_api
+        self.source_interface_ids = tuple(source_interface_ids)
+        super().__init__(
+            "provider doc_api is not unique; pass source_interface_id: "
+            f"provider={provider!r}, doc_api={doc_api!r}, "
+            f"source_interface_ids={sorted(self.source_interface_ids)!r}"
+        )
+
+
 def load_tushare_provider_catalog() -> tuple[SourceInterface, ...]:
     """Load the committed provider=tushare availability catalog."""
 
@@ -292,11 +312,44 @@ def catalog_summary() -> dict[str, object]:
 def mapping_for_provider_interface(
     provider: str,
     doc_api: str,
+    *,
+    source_interface_id: str | None = None,
 ) -> ProviderDatasetMapping | None:
-    """Return the canonical mapping for one source interface, if promoted."""
+    """Return the canonical mapping for one source interface, if promoted.
 
+    Prefer ``source_interface_id`` for runtime code. ``doc_api`` is accepted
+    only when the provider inventory proves it is unambiguous.
+    """
+
+    if source_interface_id is not None:
+        return mapping_for_source_interface_id(provider, source_interface_id)
+
+    catalog_matches = [
+        interface.source_interface_id
+        for interface in load_tushare_provider_catalog()
+        if interface.provider == provider and interface.doc_api == doc_api
+    ]
+    if len(catalog_matches) > 1:
+        raise AmbiguousProviderInterface(provider, doc_api, catalog_matches)
+    if len(catalog_matches) == 1:
+        return mapping_for_source_interface_id(provider, catalog_matches[0])
     for mapping in (*PROVIDER_MAPPINGS, *PROMOTION_CANDIDATE_MAPPINGS):
         if mapping.provider == provider and mapping.doc_api == doc_api:
+            return mapping
+    return None
+
+
+def mapping_for_source_interface_id(
+    provider: str,
+    source_interface_id: str,
+) -> ProviderDatasetMapping | None:
+    """Return the canonical mapping for one unique source interface id."""
+
+    for mapping in (*PROVIDER_MAPPINGS, *PROMOTION_CANDIDATE_MAPPINGS):
+        if (
+            mapping.provider == provider
+            and mapping.source_interface_id == source_interface_id
+        ):
             return mapping
     return None
 

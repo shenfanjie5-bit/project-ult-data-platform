@@ -7,6 +7,7 @@ from data_platform.provider_catalog.registry import (
     PROMOTION_CANDIDATE_MAPPINGS,
     RECONCILIATION_REQUIRED_METRICS,
     TUSHARE_INTERFACE_REGISTRY,
+    AmbiguousProviderInterface,
     CanonicalDataset,
     CanonicalField,
     ProviderDatasetMapping,
@@ -16,6 +17,7 @@ from data_platform.provider_catalog.registry import (
     catalog_summary,
     load_tushare_provider_catalog,
     mapping_for_provider_interface,
+    mapping_for_source_interface_id,
     tushare_interface_metadata_for_raw_dataset,
 )
 
@@ -26,6 +28,7 @@ __all__ = [
     "PROMOTION_CANDIDATE_MAPPINGS",
     "RECONCILIATION_REQUIRED_METRICS",
     "TUSHARE_INTERFACE_REGISTRY",
+    "AmbiguousProviderInterface",
     "CanonicalDataset",
     "CanonicalField",
     "ProviderDatasetMapping",
@@ -35,5 +38,6 @@ __all__ = [
     "catalog_summary",
     "load_tushare_provider_catalog",
     "mapping_for_provider_interface",
+    "mapping_for_source_interface_id",
     "tushare_interface_metadata_for_raw_dataset",
 ]

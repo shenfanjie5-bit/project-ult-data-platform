@@ -4,8 +4,11 @@ import csv
 from collections import Counter
 from pathlib import Path
 
+import pytest
+
 from data_platform.adapters.tushare.assets import TUSHARE_ASSETS
 from data_platform.provider_catalog import (
+    AmbiguousProviderInterface,
     CANONICAL_DATASETS,
     PROVIDER_MAPPINGS,
     PROMOTION_CANDIDATE_MAPPINGS,
@@ -14,6 +17,7 @@ from data_platform.provider_catalog import (
     catalog_summary,
     load_tushare_provider_catalog,
     mapping_for_provider_interface,
+    mapping_for_source_interface_id,
 )
 
 
@@ -116,9 +120,22 @@ def test_generic_unpromoted_interfaces_do_not_gain_business_mapping() -> None:
     assert mapping_for_provider_interface("tushare", "fund_nav") is None
     assert mapping_for_provider_interface("tushare", "repo_daily") is None
     assert mapping_for_provider_interface("tushare", "daily").canonical_dataset == "price_bar"  # type: ignore[union-attr]
+
+    with pytest.raises(AmbiguousProviderInterface):
+        mapping_for_provider_interface("tushare", "trade_cal")
+
     assert (
-        mapping_for_provider_interface("tushare", "trade_cal").source_interface_id  # type: ignore[union-attr]
+        mapping_for_source_interface_id("tushare", "trade_cal_stock").source_interface_id  # type: ignore[union-attr]
         == "trade_cal_stock"
+    )
+    assert mapping_for_source_interface_id("tushare", "trade_cal_futures") is None
+    assert (
+        mapping_for_provider_interface(
+            "tushare",
+            "trade_cal",
+            source_interface_id="trade_cal_stock",
+        ).canonical_dataset  # type: ignore[union-attr]
+        == "trading_calendar"
     )
 
 
