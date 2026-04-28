@@ -26,6 +26,12 @@ from data_platform.cycle.current_selection import (
     select_current_cycle,
     validate_pg_freeze_conditions,
 )
+from data_platform.cycle.current_cycle_inputs import (
+    CurrentCycleInputRow,
+    CurrentCycleInputsUnavailable,
+    current_cycle_inputs,
+    load_current_cycle_inputs,
+)
 from data_platform.cycle.freeze import freeze_cycle_candidates
 from data_platform.cycle.manifest import (
     CYCLE_PUBLISH_MANIFEST_TABLE,
@@ -69,6 +75,8 @@ __all__ = [
     "CycleAlreadyFrozen",
     "CycleAlreadyExists",
     "CurrentCycleArtifactRef",
+    "CurrentCycleInputRow",
+    "CurrentCycleInputsUnavailable",
     "CurrentCycleFreezeResult",
     "CurrentCycleReadiness",
     "CurrentCycleReadinessProvider",
@@ -93,6 +101,7 @@ __all__ = [
     "RECOMMENDATION_PROVENANCE_SOURCE_LAYER",
     "RecommendationSnapshotProvenance",
     "create_cycle",
+    "current_cycle_inputs",
     "freeze_current_cycle_candidates",
     "freeze_cycle_candidates",
     "get_cycle",
@@ -100,6 +109,7 @@ __all__ = [
     "get_publish_manifest",
     "get_publish_manifest_for_snapshot",
     "list_cycles",
+    "load_current_cycle_inputs",
     "preflight_recommendation_snapshot_publish",
     "publish_manifest",
     "load_frozen_candidate_ids",

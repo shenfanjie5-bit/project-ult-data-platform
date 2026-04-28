@@ -15,20 +15,17 @@ import duckdb
 import pyarrow as pa  # type: ignore[import-untyped]
 
 from data_platform.config import get_settings
+from data_platform.serving.canonical_datasets import (
+    canonical_mart_table_names,
+    canonical_table_for_dataset,
+    canonical_table_identifier_for_dataset,
+)
 
 
 CANONICAL_NAMESPACE = "canonical"
 TABLE_STOCK_BASIC = "stock_basic"
 CANONICAL_MART_SNAPSHOT_SET_FILE = "_mart_snapshot_set.json"
-CANONICAL_MART_TABLES = frozenset(
-    {
-        "dim_security",
-        "dim_index",
-        "fact_price_bar",
-        "fact_financial_indicator",
-        "fact_event",
-    }
-)
+CANONICAL_MART_TABLES = canonical_mart_table_names()
 _IDENTIFIER_PATTERN = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*$")
 _CONNECTION_LOCK = RLock()
 
@@ -85,6 +82,53 @@ FROM {_iceberg_snapshot_expression(table_identifier, validated_snapshot_id)}
 
     with with_duckdb_connection() as connection:
         return connection.execute(sql).to_arrow_table()
+
+
+def read_canonical_dataset(
+    dataset_id: str,
+    columns: list[str] | None = None,
+    filters: list[tuple[str, str, Any]] | None = None,
+) -> pa.Table:
+    """Read one provider-neutral canonical dataset through its mapped table."""
+
+    return read_canonical(
+        canonical_table_for_dataset(dataset_id),
+        columns=columns,
+        filters=filters,
+    )
+
+
+def read_canonical_dataset_snapshot(dataset_id: str, snapshot_id: int) -> pa.Table:
+    """Read one provider-neutral canonical dataset at an explicit Iceberg snapshot."""
+
+    return read_iceberg_snapshot(
+        canonical_table_identifier_for_dataset(dataset_id),
+        snapshot_id,
+    )
+
+
+def canonical_snapshot_id(table: str) -> int:
+    """Return the pinned canonical snapshot id for a physical canonical table."""
+
+    _validate_identifier(table)
+    snapshot_entry = _canonical_mart_snapshot_entry(table)
+    if snapshot_entry is not None:
+        return int(snapshot_entry["snapshot_id"])
+    if table in CANONICAL_MART_TABLES:
+        raise CanonicalTableNotFound(table)
+
+    metadata_location = _latest_metadata_location(table)
+    metadata = json.loads(metadata_location.read_text(encoding="utf-8"))
+    snapshot_id = metadata.get("current-snapshot-id")
+    if isinstance(snapshot_id, int):
+        return snapshot_id
+    raise CanonicalTableNotFound(table)
+
+
+def canonical_snapshot_id_for_dataset(dataset_id: str) -> int:
+    """Return the pinned snapshot id for one provider-neutral canonical dataset."""
+
+    return canonical_snapshot_id(canonical_table_for_dataset(dataset_id))
 
 
 def get_canonical_stock_basic(active_only: bool = True) -> pa.Table:
@@ -295,8 +339,12 @@ def _is_missing_table_error(exc: duckdb.Error, table: str) -> bool:
 __all__ = [
     "CanonicalTableNotFound",
     "UnsupportedFilter",
+    "canonical_snapshot_id",
+    "canonical_snapshot_id_for_dataset",
     "get_canonical_stock_basic",
     "read_canonical",
+    "read_canonical_dataset",
+    "read_canonical_dataset_snapshot",
     "read_iceberg_snapshot",
     "with_duckdb_connection",
 ]

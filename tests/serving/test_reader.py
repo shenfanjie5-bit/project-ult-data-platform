@@ -406,6 +406,44 @@ def test_read_canonical_rejects_unpublished_mart_head(
         reader._duckdb_connection.cache_clear()
 
 
+def test_reader_tracks_all_writer_published_marts() -> None:
+    expected_mart_tables = {
+        spec.identifier.rsplit(".", maxsplit=1)[-1]
+        for spec in CANONICAL_MART_LOAD_SPECS
+    }
+
+    assert expected_mart_tables <= reader.CANONICAL_MART_TABLES
+    assert {
+        "fact_market_daily_feature",
+        "fact_index_price_bar",
+        "fact_forecast_event",
+    } <= reader.CANONICAL_MART_TABLES
+
+
+def test_read_canonical_dataset_uses_explicit_mapping(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    calls: list[str] = []
+    expected = pa.table({"ts_code": ["000001.SZ"]})
+
+    def fake_read_canonical(
+        table: str,
+        columns: list[str] | None = None,
+        filters: list[tuple[str, str, object]] | None = None,
+    ) -> pa.Table:
+        calls.append(table)
+        assert columns == ["ts_code"]
+        assert filters is None
+        return expected
+
+    monkeypatch.setattr(reader, "read_canonical", fake_read_canonical)
+
+    payload = reader.read_canonical_dataset("market_daily_feature", columns=["ts_code"])
+
+    assert payload == expected
+    assert calls == ["fact_market_daily_feature"]
+
+
 def stock_basic_rows() -> list[StockBasicRow]:
     loaded_at = datetime(2026, 4, 15, 10, 30, 0)
     return [
