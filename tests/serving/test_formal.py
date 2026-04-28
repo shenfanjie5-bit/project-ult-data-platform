@@ -82,6 +82,9 @@ def test_formal_table_identifier_validates_object_type(formal_module: Any) -> No
         "formal.recommendation_snapshot",
         "recommendation-set",
         "unknown_object",
+        "tushare_stock_basic",
+        "stg_tushare_daily",
+        "doc_api",
         "",
         " raw ",
     ]:

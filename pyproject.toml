@@ -57,6 +57,7 @@ include = ["data_platform*"]
 [tool.setuptools.package-data]
 data_platform = [
     "ddl/migrations/*.sql",
+    "provider_catalog/*.csv",
     "dbt/**/*.sql",
     "dbt/**/*.yml",
     "dbt/dbt_project.yml",
