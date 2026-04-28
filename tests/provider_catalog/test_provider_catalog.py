@@ -10,6 +10,7 @@ from data_platform.provider_catalog import (
     PROVIDER_MAPPINGS,
     PROMOTION_CANDIDATE_MAPPINGS,
     RECONCILIATION_REQUIRED_METRICS,
+    TUSHARE_INTERFACE_REGISTRY,
     catalog_summary,
     load_tushare_provider_catalog,
     mapping_for_provider_interface,
@@ -119,6 +120,53 @@ def test_generic_unpromoted_interfaces_do_not_gain_business_mapping() -> None:
         mapping_for_provider_interface("tushare", "trade_cal").source_interface_id  # type: ignore[union-attr]
         == "trade_cal_stock"
     )
+
+
+def test_tushare_interface_registry_keeps_inventory_out_of_production_fetch() -> None:
+    catalog = load_tushare_provider_catalog()
+    catalog_interface_ids = {item.source_interface_id for item in catalog}
+    typed_raw_datasets = {asset.dataset for asset in TUSHARE_ASSETS}
+    production_entries = [
+        entry
+        for entry in TUSHARE_INTERFACE_REGISTRY.values()
+        if entry.production_selectable
+    ]
+    inventory_only_catalog_entries = [
+        entry
+        for entry in TUSHARE_INTERFACE_REGISTRY.values()
+        if entry.source_interface_id in catalog_interface_ids and not entry.production_selectable
+    ]
+
+    assert len(TUSHARE_INTERFACE_REGISTRY) == 148
+    assert {entry.source_interface_id for entry in TUSHARE_INTERFACE_REGISTRY.values()} == set(
+        TUSHARE_INTERFACE_REGISTRY
+    )
+    assert len(production_entries) == len(TUSHARE_ASSETS) == 28
+    assert {entry.raw_dataset for entry in production_entries} == typed_raw_datasets
+    assert all(entry.enabled for entry in production_entries)
+    assert all(entry.fetch_support == "typed" for entry in production_entries)
+    assert all(entry.dbt_support for entry in production_entries)
+    assert all(not entry.enabled for entry in inventory_only_catalog_entries)
+    assert all(entry.fetch_support == "inventory_only" for entry in inventory_only_catalog_entries)
+    assert all(not entry.dbt_support for entry in inventory_only_catalog_entries)
+    assert all(not entry.production_selectable for entry in inventory_only_catalog_entries)
+
+
+def test_tushare_interface_registry_distinguishes_stock_and_futures_trade_cal() -> None:
+    stock_entry = TUSHARE_INTERFACE_REGISTRY["trade_cal_stock"]
+    futures_entry = TUSHARE_INTERFACE_REGISTRY["trade_cal_futures"]
+
+    assert stock_entry.doc_api == "trade_cal"
+    assert stock_entry.raw_dataset == "trade_cal"
+    assert stock_entry.promotion_status == "promoted"
+    assert stock_entry.production_selectable is True
+    assert stock_entry.partition_key == ("cal_date",)
+
+    assert futures_entry.doc_api == "trade_cal"
+    assert futures_entry.raw_dataset is None
+    assert futures_entry.promotion_status == "inventory_only"
+    assert futures_entry.production_selectable is False
+    assert futures_entry.fetch_support == "inventory_only"
 
 
 def test_catalog_summary_supports_dual_provider_readiness_evidence() -> None:

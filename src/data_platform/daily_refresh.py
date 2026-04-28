@@ -282,7 +282,12 @@ def run_daily_refresh(
         _append_step(
             steps,
             "raw_health",
-            lambda: _run_raw_health_step(settings, partition_date, selected_assets),
+            lambda: _run_raw_health_step(
+                settings,
+                partition_date,
+                selected_assets,
+                source_id=adapter.source_id(),
+            ),
         )
         result = _result(partition_date, steps)
         _write_report_if_requested(json_report, result)
@@ -372,10 +377,12 @@ def _run_adapter_step(
                     partition_date,
                     str(uuid4()),
                     table,
+                    metadata=asset.metadata,
+                    request_params={"partition_date": partition_date},
                 )
             )
             continue
-        artifacts.append(run_tushare_asset(asset.name, partition_date))
+        artifacts.append(run_tushare_asset(asset.name, partition_date, raw_writer=writer))
 
     return {
         "mock": mock,
@@ -688,13 +695,15 @@ def _run_raw_health_step(
     settings: Settings,
     partition_date: date,
     selected_assets: Sequence[AssetSpec],
+    *,
+    source_id: str,
 ) -> dict[str, Any]:
     checked_artifacts = 0
     issue_payloads: list[dict[str, Any]] = []
     for asset in selected_assets:
         report = check_raw_zone(
             settings.raw_zone_path,
-            source_id="tushare",
+            source_id=source_id,
             dataset=asset.dataset,
             partition_date=partition_date,
             deep=True,
@@ -964,6 +973,7 @@ def _raw_artifact_metadata(artifact: RawArtifact) -> dict[str, Any]:
         "path": str(artifact.path),
         "row_count": artifact.row_count,
         "written_at": artifact.written_at.isoformat(),
+        "metadata": artifact.metadata,
     }
 
 

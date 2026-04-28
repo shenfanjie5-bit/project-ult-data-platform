@@ -3,13 +3,14 @@
 from __future__ import annotations
 
 import gzip
+import hashlib
 import json
 import os
 import re
 import uuid
-from collections.abc import Callable, Iterator
+from collections.abc import Callable, Iterator, Mapping
 from contextlib import contextmanager
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from datetime import UTC, date, datetime
 from pathlib import Path
 from typing import Any, TypeAlias
@@ -23,6 +24,15 @@ import pyarrow.parquet as pq  # type: ignore[import-untyped]
 JsonPayload: TypeAlias = dict[str, Any] | list[dict[str, Any]]
 
 _ULID_RE = re.compile(r"^[0-7][0-9A-HJKMNP-TV-Z]{25}$")
+_MANIFEST_VERSION = 2
+_RAW_MANIFEST_METADATA_FIELDS = (
+    "provider",
+    "source_interface_id",
+    "doc_api",
+    "partition_key",
+    "request_params_hash",
+    "schema_hash",
+)
 
 
 @dataclass(frozen=True, slots=True)
@@ -36,6 +46,7 @@ class RawArtifact:
     path: Path
     row_count: int
     written_at: datetime
+    metadata: dict[str, Any] = field(default_factory=dict)
 
 
 class RawArtifactExists(FileExistsError):
@@ -66,6 +77,9 @@ class RawWriter:
         partition_date: date,
         run_id: str,
         table: pa.Table,
+        *,
+        metadata: Mapping[str, Any] | None = None,
+        request_params: Mapping[str, Any] | None = None,
     ) -> RawArtifact:
         """Write a pyarrow table to Raw Zone parquet."""
 
@@ -82,6 +96,7 @@ class RawWriter:
             run_id=run_id,
             artifact_path=artifact_path,
             row_count=row_count,
+            metadata=_manifest_metadata(metadata, request_params),
             write_tmp=write_tmp,
         )
 
@@ -92,6 +107,9 @@ class RawWriter:
         partition_date: date,
         run_id: str,
         payload: JsonPayload,
+        *,
+        metadata: Mapping[str, Any] | None = None,
+        request_params: Mapping[str, Any] | None = None,
     ) -> RawArtifact:
         """Write a JSON payload to Raw Zone gzip-compressed JSON."""
 
@@ -109,6 +127,7 @@ class RawWriter:
             run_id=run_id,
             artifact_path=artifact_path,
             row_count=row_count,
+            metadata=_manifest_metadata(metadata, request_params),
             write_tmp=write_tmp,
         )
 
@@ -121,6 +140,7 @@ class RawWriter:
         run_id: str,
         artifact_path: Path,
         row_count: int,
+        metadata: dict[str, Any],
         write_tmp: Callable[[Path], None],
     ) -> RawArtifact:
         artifact_path.parent.mkdir(parents=True, exist_ok=True)
@@ -140,6 +160,7 @@ class RawWriter:
                     path=artifact_path,
                     row_count=row_count,
                     written_at=datetime.now(tz=UTC),
+                    metadata=metadata,
                 )
                 try:
                     self._write_manifest(artifact)
@@ -234,9 +255,11 @@ class RawWriter:
         artifacts.sort(key=lambda item: str(item["written_at"]))
 
         manifest = {
+            "manifest_version": _MANIFEST_VERSION,
             "source_id": artifact.source_id,
             "dataset": artifact.dataset,
             "partition_date": artifact.partition_date.isoformat(),
+            **_manifest_header_metadata(artifact.metadata),
             "artifacts": artifacts,
         }
         tmp_path = manifest_path.with_name(f".{manifest_path.name}.{uuid.uuid4().hex}.tmp")
@@ -390,6 +413,7 @@ def _artifact_to_dict(artifact: RawArtifact) -> dict[str, Any]:
         "path": str(artifact.path),
         "row_count": artifact.row_count,
         "written_at": artifact.written_at.isoformat(),
+        **artifact.metadata,
     }
 
 
@@ -411,7 +435,70 @@ def _artifact_from_dict(
         path=path,
         row_count=int(value["row_count"]),
         written_at=datetime.fromisoformat(str(value["written_at"])),
+        metadata=_metadata_from_manifest_value(value),
     )
+
+
+def _manifest_metadata(
+    metadata: Mapping[str, Any] | None,
+    request_params: Mapping[str, Any] | None,
+) -> dict[str, Any]:
+    raw_metadata = dict(metadata or {})
+    if request_params is not None:
+        raw_metadata["request_params_hash"] = _request_params_hash(request_params)
+
+    manifest_metadata = {
+        field_name: _json_safe(raw_metadata[field_name])
+        for field_name in _RAW_MANIFEST_METADATA_FIELDS
+        if field_name in raw_metadata and raw_metadata[field_name] is not None
+    }
+    if "partition_key" in manifest_metadata:
+        partition_key = manifest_metadata["partition_key"]
+        if isinstance(partition_key, str):
+            manifest_metadata["partition_key"] = [partition_key]
+        elif isinstance(partition_key, tuple):
+            manifest_metadata["partition_key"] = list(partition_key)
+    return manifest_metadata
+
+
+def _manifest_header_metadata(metadata: Mapping[str, Any]) -> dict[str, Any]:
+    return {
+        field_name: metadata[field_name]
+        for field_name in _RAW_MANIFEST_METADATA_FIELDS
+        if field_name in metadata
+    }
+
+
+def _metadata_from_manifest_value(value: Mapping[str, Any]) -> dict[str, Any]:
+    return {
+        field_name: value[field_name]
+        for field_name in _RAW_MANIFEST_METADATA_FIELDS
+        if field_name in value
+    }
+
+
+def _request_params_hash(request_params: Mapping[str, Any]) -> str:
+    serialized = json.dumps(
+        _json_safe(dict(request_params)),
+        ensure_ascii=False,
+        sort_keys=True,
+        separators=(",", ":"),
+    )
+    return hashlib.sha256(serialized.encode("utf-8")).hexdigest()
+
+
+def _json_safe(value: Any) -> Any:
+    if isinstance(value, Mapping):
+        return {str(key): _json_safe(item) for key, item in value.items()}
+    if isinstance(value, tuple | list):
+        return [_json_safe(item) for item in value]
+    if isinstance(value, Path):
+        return str(value)
+    if isinstance(value, date | datetime):
+        return value.isoformat()
+    if isinstance(value, str | int | float | bool) or value is None:
+        return value
+    return str(value)
 
 
 def _artifact_path_from_ref(ref: str, raw_zone_root: Path) -> Path:

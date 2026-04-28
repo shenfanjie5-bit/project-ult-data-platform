@@ -6,6 +6,8 @@ import time
 from abc import ABC, abstractmethod
 from dataclasses import dataclass
 from datetime import UTC, date, datetime
+import hashlib
+import json
 from threading import Lock
 from typing import (
     Any,
@@ -33,6 +35,10 @@ class AssetSpec:
     dataset: str
     partition: PartitionType
     schema: Schema
+    metadata: Mapping[str, Any] | None = None
+
+    def __post_init__(self) -> None:
+        object.__setattr__(self, "metadata", dict(self.metadata or {}))
 
 
 @dataclass(frozen=True, slots=True)
@@ -262,6 +268,39 @@ def _optional_int(value: Any) -> int | None:
     return int(value)
 
 
+def schema_hash(schema: Schema) -> str:
+    """Return a stable hash for an Arrow schema contract."""
+
+    fields = []
+    for field in schema:
+        fields.append(
+            {
+                "name": field.name,
+                "type": str(field.type),
+                "nullable": field.nullable,
+                "metadata": _bytes_mapping(field.metadata),
+            }
+        )
+    payload = {
+        "fields": fields,
+        "metadata": _bytes_mapping(schema.metadata),
+    }
+    serialized = json.dumps(payload, ensure_ascii=False, sort_keys=True, separators=(",", ":"))
+    return hashlib.sha256(serialized.encode("utf-8")).hexdigest()
+
+
+def _bytes_mapping(value: Mapping[bytes, bytes] | None) -> dict[str, str]:
+    if not value:
+        return {}
+    return {
+        key.decode("utf-8", errors="surrogateescape"): item.decode(
+            "utf-8",
+            errors="surrogateescape",
+        )
+        for key, item in sorted(value.items())
+    }
+
+
 REGISTRY = AdapterRegistry()
 """Process-global adapter registry for orchestrator assembly."""
 
@@ -279,4 +318,5 @@ __all__ = [
     "PartitionType",
     "QuotaConfig",
     "REGISTRY",
+    "schema_hash",
 ]

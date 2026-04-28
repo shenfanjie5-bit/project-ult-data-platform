@@ -12,7 +12,7 @@ pd = pytest.importorskip("pandas")
 pa = pytest.importorskip("pyarrow")
 pq = pytest.importorskip("pyarrow.parquet")
 
-from data_platform.adapters.base import AdapterRegistry, DataSourceAdapter  # noqa: E402
+from data_platform.adapters.base import AdapterRegistry, DataSourceAdapter, schema_hash  # noqa: E402
 from data_platform.adapters.tushare import (  # noqa: E402
     TUSHARE_ASSETS,
     TUSHARE_STOCK_BASIC_ASSET,
@@ -94,6 +94,23 @@ def test_tushare_adapter_declares_stock_basic_asset_and_quota() -> None:
     }
 
 
+def test_tushare_typed_assets_expose_registry_metadata() -> None:
+    by_dataset = {asset.dataset: asset for asset in TUSHARE_ASSETS}
+
+    stock_basic_metadata = by_dataset["stock_basic"].metadata
+    assert stock_basic_metadata["provider"] == "tushare"
+    assert stock_basic_metadata["source_interface_id"] == "stock_basic"
+    assert stock_basic_metadata["doc_api"] == "stock_basic"
+    assert stock_basic_metadata["partition_key"] == ()
+    assert stock_basic_metadata["schema_hash"] == schema_hash(by_dataset["stock_basic"].schema)
+
+    trade_cal_metadata = by_dataset["trade_cal"].metadata
+    assert trade_cal_metadata["source_interface_id"] == "trade_cal_stock"
+    assert trade_cal_metadata["doc_api"] == "trade_cal"
+    assert trade_cal_metadata["partition_key"] == ("cal_date",)
+    assert trade_cal_metadata["production_selectable"] is True
+
+
 def test_tushare_adapter_matches_documented_datasource_protocol() -> None:
     adapter = TushareAdapter(token="test-token", client=FakeTushareClient(_stock_basic_frame(1)))
 
@@ -157,6 +174,15 @@ def test_cli_writes_stock_basic_parquet_artifact(
     assert artifact_path.suffix == ".parquet"
     assert len(list(artifact_path.parent.glob("*.parquet"))) == 1
     assert pq.read_table(artifact_path).num_rows == 5_000
+    manifest = json.loads((artifact_path.parent / "_manifest.json").read_text(encoding="utf-8"))
+    assert manifest["manifest_version"] == 2
+    assert manifest["provider"] == "tushare"
+    assert manifest["source_interface_id"] == "stock_basic"
+    assert manifest["doc_api"] == "stock_basic"
+    assert manifest["partition_key"] == []
+    assert manifest["schema_hash"] == schema_hash(TUSHARE_STOCK_BASIC_ASSET.schema)
+    assert isinstance(manifest["request_params_hash"], str)
+    assert len(manifest["request_params_hash"]) == 64
 
 
 def test_cli_rejects_missing_required_stock_basic_columns_without_artifact(

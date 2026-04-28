@@ -111,12 +111,14 @@ def build_assets(
 
         for asset in assets:
             callable_import_path = _raw_callable_import_path(adapter, source_id)
+            asset_metadata = _json_safe(asset.metadata or {})
             specs.append(
                 DataPlatformAssetSpec(
                     key=raw_key_by_dataset[asset.dataset],
                     kind="raw",
                     deps=(),
                     metadata={
+                        **asset_metadata,
                         "source_id": source_id,
                         "asset_name": asset.name,
                         "dataset": asset.dataset,

@@ -8,7 +8,7 @@ import re
 from dataclasses import dataclass
 from datetime import date
 from pathlib import Path
-from typing import Any, Literal
+from typing import Any, Literal, Mapping
 
 from data_platform.raw.writer import (
     RawArtifact,
@@ -31,6 +31,23 @@ _MANIFEST_ARTIFACT_FIELD_TYPES = {
     "path": str,
     "row_count": int,
     "written_at": str,
+}
+_OPTIONAL_MANIFEST_FIELD_TYPES: dict[str, type[Any]] = {
+    "manifest_version": int,
+    "provider": str,
+    "source_interface_id": str,
+    "doc_api": str,
+    "partition_key": list,
+    "request_params_hash": str,
+    "schema_hash": str,
+}
+_OPTIONAL_ARTIFACT_FIELD_TYPES: dict[str, type[Any]] = {
+    "provider": str,
+    "source_interface_id": str,
+    "doc_api": str,
+    "partition_key": list,
+    "request_params_hash": str,
+    "schema_hash": str,
 }
 
 
@@ -336,6 +353,7 @@ def _check_manifest_header(
                 ),
             )
         )
+    _check_optional_fields(manifest, _OPTIONAL_MANIFEST_FIELD_TYPES, manifest_path, issues)
 
 
 def _check_manifest_artifact_entries(
@@ -379,7 +397,43 @@ def _check_manifest_artifact_entries(
                 )
             )
             valid = False
+        _check_optional_fields(
+            artifact,
+            _OPTIONAL_ARTIFACT_FIELD_TYPES,
+            manifest_path,
+            issues,
+            prefix=f"artifacts[{index}].",
+        )
     return valid
+
+
+def _check_optional_fields(
+    value: dict[str, Any],
+    field_types: Mapping[str, type[Any]],
+    path: Path,
+    issues: list[RawHealthIssue],
+    *,
+    prefix: str = "",
+) -> None:
+    for field_name, field_type in field_types.items():
+        if field_name not in value:
+            continue
+        field_value = value[field_name]
+        if isinstance(field_value, field_type) and not (
+            field_type is int and isinstance(field_value, bool)
+        ):
+            continue
+        issues.append(
+            RawHealthIssue(
+                severity="error",
+                path=path,
+                code="manifest_artifact_invalid",
+                message=(
+                    f"Raw manifest {prefix}{field_name} must be "
+                    f"{field_type.__name__}"
+                ),
+            )
+        )
 
 
 def _read_partition_artifacts(

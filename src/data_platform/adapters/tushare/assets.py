@@ -4,7 +4,8 @@ from __future__ import annotations
 
 import pyarrow as pa  # type: ignore[import-untyped]
 
-from data_platform.adapters.base import AssetSpec
+from data_platform.adapters.base import AssetSpec, PartitionType, schema_hash
+from data_platform.provider_catalog import tushare_interface_metadata_for_raw_dataset
 
 TUSHARE_STOCK_BASIC_ASSET_NAME = "tushare_stock_basic"
 TUSHARE_DAILY_ASSET_NAME = "tushare_daily"
@@ -581,168 +582,187 @@ FORECAST_VERSION_FIELDS: tuple[str, ...] = (
     "type",
 )
 
-TUSHARE_STOCK_BASIC_ASSET = AssetSpec(
+
+def _tushare_asset_spec(
+    *,
+    name: str,
+    dataset: str,
+    partition: PartitionType,
+    schema: pa.Schema,
+) -> AssetSpec:
+    metadata = dict(tushare_interface_metadata_for_raw_dataset(dataset))
+    metadata["schema_hash"] = schema_hash(schema)
+    return AssetSpec(
+        name=name,
+        dataset=dataset,
+        partition=partition,
+        schema=schema,
+        metadata=metadata,
+    )
+
+
+TUSHARE_STOCK_BASIC_ASSET = _tushare_asset_spec(
     name=TUSHARE_STOCK_BASIC_ASSET_NAME,
     dataset="stock_basic",
     partition="static",
     schema=TUSHARE_STOCK_BASIC_SCHEMA,
 )
 
-TUSHARE_DAILY_ASSET = AssetSpec(
+TUSHARE_DAILY_ASSET = _tushare_asset_spec(
     name=TUSHARE_DAILY_ASSET_NAME,
     dataset="daily",
     partition="daily",
     schema=TUSHARE_BAR_SCHEMA,
 )
 
-TUSHARE_WEEKLY_ASSET = AssetSpec(
+TUSHARE_WEEKLY_ASSET = _tushare_asset_spec(
     name=TUSHARE_WEEKLY_ASSET_NAME,
     dataset="weekly",
     partition="daily",
     schema=TUSHARE_BAR_SCHEMA,
 )
 
-TUSHARE_MONTHLY_ASSET = AssetSpec(
+TUSHARE_MONTHLY_ASSET = _tushare_asset_spec(
     name=TUSHARE_MONTHLY_ASSET_NAME,
     dataset="monthly",
     partition="daily",
     schema=TUSHARE_BAR_SCHEMA,
 )
 
-TUSHARE_ADJ_FACTOR_ASSET = AssetSpec(
+TUSHARE_ADJ_FACTOR_ASSET = _tushare_asset_spec(
     name=TUSHARE_ADJ_FACTOR_ASSET_NAME,
     dataset="adj_factor",
     partition="daily",
     schema=TUSHARE_ADJ_FACTOR_SCHEMA,
 )
 
-TUSHARE_DAILY_BASIC_ASSET = AssetSpec(
+TUSHARE_DAILY_BASIC_ASSET = _tushare_asset_spec(
     name=TUSHARE_DAILY_BASIC_ASSET_NAME,
     dataset="daily_basic",
     partition="daily",
     schema=TUSHARE_DAILY_BASIC_SCHEMA,
 )
 
-TUSHARE_INDEX_BASIC_ASSET = AssetSpec(
+TUSHARE_INDEX_BASIC_ASSET = _tushare_asset_spec(
     name=TUSHARE_INDEX_BASIC_ASSET_NAME,
     dataset="index_basic",
     partition="static",
     schema=TUSHARE_INDEX_BASIC_SCHEMA,
 )
 
-TUSHARE_INDEX_DAILY_ASSET = AssetSpec(
+TUSHARE_INDEX_DAILY_ASSET = _tushare_asset_spec(
     name=TUSHARE_INDEX_DAILY_ASSET_NAME,
     dataset="index_daily",
     partition="daily",
     schema=TUSHARE_INDEX_DAILY_SCHEMA,
 )
 
-TUSHARE_INDEX_WEIGHT_ASSET = AssetSpec(
+TUSHARE_INDEX_WEIGHT_ASSET = _tushare_asset_spec(
     name=TUSHARE_INDEX_WEIGHT_ASSET_NAME,
     dataset="index_weight",
     partition="daily",
     schema=TUSHARE_INDEX_WEIGHT_SCHEMA,
 )
 
-TUSHARE_INDEX_MEMBER_ASSET = AssetSpec(
+TUSHARE_INDEX_MEMBER_ASSET = _tushare_asset_spec(
     name=TUSHARE_INDEX_MEMBER_ASSET_NAME,
     dataset="index_member",
     partition="daily",
     schema=TUSHARE_INDEX_MEMBER_SCHEMA,
 )
 
-TUSHARE_INDEX_CLASSIFY_ASSET = AssetSpec(
+TUSHARE_INDEX_CLASSIFY_ASSET = _tushare_asset_spec(
     name=TUSHARE_INDEX_CLASSIFY_ASSET_NAME,
     dataset="index_classify",
     partition="static",
     schema=TUSHARE_INDEX_CLASSIFY_SCHEMA,
 )
 
-TUSHARE_TRADE_CAL_ASSET = AssetSpec(
+TUSHARE_TRADE_CAL_ASSET = _tushare_asset_spec(
     name=TUSHARE_TRADE_CAL_ASSET_NAME,
     dataset="trade_cal",
     partition="daily",
     schema=TUSHARE_TRADE_CAL_SCHEMA,
 )
 
-TUSHARE_STOCK_COMPANY_ASSET = AssetSpec(
+TUSHARE_STOCK_COMPANY_ASSET = _tushare_asset_spec(
     name=TUSHARE_STOCK_COMPANY_ASSET_NAME,
     dataset="stock_company",
     partition="static",
     schema=TUSHARE_STOCK_COMPANY_SCHEMA,
 )
 
-TUSHARE_NAMECHANGE_ASSET = AssetSpec(
+TUSHARE_NAMECHANGE_ASSET = _tushare_asset_spec(
     name=TUSHARE_NAMECHANGE_ASSET_NAME,
     dataset="namechange",
     partition="daily",
     schema=TUSHARE_NAMECHANGE_SCHEMA,
 )
 
-TUSHARE_ANNS_ASSET = AssetSpec(
+TUSHARE_ANNS_ASSET = _tushare_asset_spec(
     name=TUSHARE_ANNS_ASSET_NAME,
     dataset="anns",
     partition="daily",
     schema=TUSHARE_ANNS_SCHEMA,
 )
 
-TUSHARE_SUSPEND_D_ASSET = AssetSpec(
+TUSHARE_SUSPEND_D_ASSET = _tushare_asset_spec(
     name=TUSHARE_SUSPEND_D_ASSET_NAME,
     dataset="suspend_d",
     partition="daily",
     schema=TUSHARE_SUSPEND_D_SCHEMA,
 )
 
-TUSHARE_DIVIDEND_ASSET = AssetSpec(
+TUSHARE_DIVIDEND_ASSET = _tushare_asset_spec(
     name=TUSHARE_DIVIDEND_ASSET_NAME,
     dataset="dividend",
     partition="daily",
     schema=TUSHARE_DIVIDEND_SCHEMA,
 )
 
-TUSHARE_SHARE_FLOAT_ASSET = AssetSpec(
+TUSHARE_SHARE_FLOAT_ASSET = _tushare_asset_spec(
     name=TUSHARE_SHARE_FLOAT_ASSET_NAME,
     dataset="share_float",
     partition="daily",
     schema=TUSHARE_SHARE_FLOAT_SCHEMA,
 )
 
-TUSHARE_STK_HOLDERNUMBER_ASSET = AssetSpec(
+TUSHARE_STK_HOLDERNUMBER_ASSET = _tushare_asset_spec(
     name=TUSHARE_STK_HOLDERNUMBER_ASSET_NAME,
     dataset="stk_holdernumber",
     partition="daily",
     schema=TUSHARE_STK_HOLDERNUMBER_SCHEMA,
 )
 
-TUSHARE_DISCLOSURE_DATE_ASSET = AssetSpec(
+TUSHARE_DISCLOSURE_DATE_ASSET = _tushare_asset_spec(
     name=TUSHARE_DISCLOSURE_DATE_ASSET_NAME,
     dataset="disclosure_date",
     partition="daily",
     schema=TUSHARE_DISCLOSURE_DATE_SCHEMA,
 )
 
-TUSHARE_INCOME_ASSET = AssetSpec(
+TUSHARE_INCOME_ASSET = _tushare_asset_spec(
     name=TUSHARE_INCOME_ASSET_NAME,
     dataset="income",
     partition="daily",
     schema=TUSHARE_INCOME_SCHEMA,
 )
 
-TUSHARE_BALANCESHEET_ASSET = AssetSpec(
+TUSHARE_BALANCESHEET_ASSET = _tushare_asset_spec(
     name=TUSHARE_BALANCESHEET_ASSET_NAME,
     dataset="balancesheet",
     partition="daily",
     schema=TUSHARE_BALANCESHEET_SCHEMA,
 )
 
-TUSHARE_CASHFLOW_ASSET = AssetSpec(
+TUSHARE_CASHFLOW_ASSET = _tushare_asset_spec(
     name=TUSHARE_CASHFLOW_ASSET_NAME,
     dataset="cashflow",
     partition="daily",
     schema=TUSHARE_CASHFLOW_SCHEMA,
 )
 
-TUSHARE_FINA_INDICATOR_ASSET = AssetSpec(
+TUSHARE_FINA_INDICATOR_ASSET = _tushare_asset_spec(
     name=TUSHARE_FINA_INDICATOR_ASSET_NAME,
     dataset="fina_indicator",
     partition="daily",
@@ -752,28 +772,28 @@ TUSHARE_FINA_INDICATOR_ASSET = AssetSpec(
 # Plan §5 expansion: 4 new AssetSpec instances — appended below
 # existing 24 so downstream list iteration order is stable for the
 # older datasets.
-TUSHARE_STK_LIMIT_ASSET = AssetSpec(
+TUSHARE_STK_LIMIT_ASSET = _tushare_asset_spec(
     name=TUSHARE_STK_LIMIT_ASSET_NAME,
     dataset="stk_limit",
     partition="daily",
     schema=TUSHARE_STK_LIMIT_SCHEMA,
 )
 
-TUSHARE_BLOCK_TRADE_ASSET = AssetSpec(
+TUSHARE_BLOCK_TRADE_ASSET = _tushare_asset_spec(
     name=TUSHARE_BLOCK_TRADE_ASSET_NAME,
     dataset="block_trade",
     partition="daily",
     schema=TUSHARE_BLOCK_TRADE_SCHEMA,
 )
 
-TUSHARE_MONEYFLOW_ASSET = AssetSpec(
+TUSHARE_MONEYFLOW_ASSET = _tushare_asset_spec(
     name=TUSHARE_MONEYFLOW_ASSET_NAME,
     dataset="moneyflow",
     partition="daily",
     schema=TUSHARE_MONEYFLOW_SCHEMA,
 )
 
-TUSHARE_FORECAST_ASSET = AssetSpec(
+TUSHARE_FORECAST_ASSET = _tushare_asset_spec(
     name=TUSHARE_FORECAST_ASSET_NAME,
     dataset="forecast",
     partition="daily",

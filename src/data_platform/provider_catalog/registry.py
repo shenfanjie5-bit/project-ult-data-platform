@@ -11,10 +11,12 @@ import csv
 from dataclasses import dataclass
 from importlib import resources
 import re
-from typing import Final, Literal
+from typing import Final, Literal, cast
 
 ProviderName = Literal["tushare", "wind", "choice", "internal"]
 MappingStatus = Literal["promoted", "candidate", "legacy_typed_not_in_catalog"]
+PromotionStatus = Literal["promoted", "candidate", "legacy_typed_not_in_catalog", "inventory_only"]
+FetchSupport = Literal["typed", "inventory_only"]
 
 _DOC_API_PATTERN: Final[re.Pattern[str]] = re.compile(r"^[a-z][a-z0-9_]*$")
 _CANONICAL_DATASET_PATTERN: Final[re.Pattern[str]] = re.compile(r"^[a-z][a-z0-9_]*$")
@@ -43,6 +45,15 @@ def _validate_identifier(identifier: str, label: str) -> None:
     if not _CANONICAL_DATASET_PATTERN.fullmatch(identifier):
         msg = f"invalid {label}: {identifier!r}"
         raise ValueError(msg)
+
+
+def _validate_canonical_table(identifier: str) -> None:
+    parts = identifier.split(".")
+    if len(parts) != 2:
+        msg = f"invalid canonical table identifier: {identifier!r}"
+        raise ValueError(msg)
+    for part in parts:
+        _validate_identifier(part, "canonical table identifier")
 
 
 @dataclass(frozen=True, slots=True)
@@ -187,6 +198,55 @@ class ProviderDatasetMapping:
                 raise ValueError(msg)
 
 
+@dataclass(frozen=True, slots=True)
+class TushareInterfaceRegistryEntry:
+    """Operational registry row keyed by provider source_interface_id."""
+
+    provider: ProviderName
+    source_interface_id: str
+    doc_api: str
+    raw_dataset: str | None
+    canonical_dataset: str | None
+    canonical_table: str | None
+    promotion_status: PromotionStatus
+    natural_key: tuple[str, ...]
+    partition_key: tuple[str, ...]
+    incremental_key: tuple[str, ...]
+    refresh_policy: str
+    late_arriving_policy: str
+    enabled: bool
+    fetch_support: FetchSupport
+    dbt_support: bool
+    production_selectable: bool
+
+    def __post_init__(self) -> None:
+        _validate_provider(self.provider)
+        _validate_identifier(self.source_interface_id, "source interface id")
+        _validate_doc_api(self.doc_api)
+        if self.raw_dataset is not None:
+            _validate_identifier(self.raw_dataset, "raw dataset")
+        if self.canonical_dataset is not None:
+            _validate_canonical_dataset(self.canonical_dataset)
+        if self.canonical_table is not None:
+            _validate_canonical_table(self.canonical_table)
+        for field_name, values in {
+            "natural_key": self.natural_key,
+            "partition_key": self.partition_key,
+            "incremental_key": self.incremental_key,
+        }.items():
+            for value in values:
+                _validate_identifier(value, field_name)
+        if self.production_selectable and self.fetch_support != "typed":
+            msg = f"production-selectable interface requires typed fetch: {self.source_interface_id}"
+            raise ValueError(msg)
+        if self.production_selectable and not self.enabled:
+            msg = f"production-selectable interface must be enabled: {self.source_interface_id}"
+            raise ValueError(msg)
+        if self.production_selectable and self.raw_dataset is None:
+            msg = f"production-selectable interface requires raw_dataset: {self.source_interface_id}"
+            raise ValueError(msg)
+
+
 def load_tushare_provider_catalog() -> tuple[SourceInterface, ...]:
     """Load the committed provider=tushare availability catalog."""
 
@@ -194,7 +254,6 @@ def load_tushare_provider_catalog() -> tuple[SourceInterface, ...]:
     with package_files.joinpath(_PROVIDER_CATALOG_RESOURCE).open(
         "r",
         encoding="utf-8",
-        newline="",
     ) as file_obj:
         rows = tuple(_source_interface_from_row(row) for row in csv.DictReader(file_obj))
     _assert_unique_source_interface_ids(rows)
@@ -726,7 +785,7 @@ PROVIDER_MAPPINGS: Final[tuple[ProviderDatasetMapping, ...]] = (
         _mapping(
             doc_api,
             "index_membership",
-            status=status,
+            status=cast(MappingStatus, status),
             field_mapping=(("index_code", "index_id"), ("con_code", "security_id")),
             source_primary_key=source_primary_key,
             unit_policy="percent weight where provided",
@@ -769,7 +828,7 @@ PROVIDER_MAPPINGS: Final[tuple[ProviderDatasetMapping, ...]] = (
         _mapping(
             doc_api,
             "event_timeline",
-            status=status,
+            status=cast(MappingStatus, status),
             field_mapping=(("ts_code", "entity_id"),),
             source_primary_key=source_primary_key,
             unit_policy="event text/date fields",
@@ -915,6 +974,229 @@ PROMOTION_CANDIDATE_MAPPINGS: Final[tuple[ProviderDatasetMapping, ...]] = (
         update_policy="quarterly/annual late-arriving updates",
         coverage="CN_A",
     ),
+)
+
+
+_RAW_DATASET_BY_SOURCE_INTERFACE_ID: Final[dict[str, str]] = {
+    mapping.source_interface_id: mapping.doc_api for mapping in PROVIDER_MAPPINGS
+}
+_RAW_DATASET_BY_SOURCE_INTERFACE_ID["trade_cal_stock"] = "trade_cal"
+
+_PARTITION_KEY_BY_RAW_DATASET: Final[dict[str, tuple[str, ...]]] = {
+    "stock_basic": (),
+    "daily": ("trade_date",),
+    "weekly": ("trade_date",),
+    "monthly": ("trade_date",),
+    "adj_factor": ("trade_date",),
+    "daily_basic": ("trade_date",),
+    "index_basic": (),
+    "index_daily": ("trade_date",),
+    "index_weight": ("trade_date",),
+    "index_member": ("in_date",),
+    "index_classify": (),
+    "trade_cal": ("cal_date",),
+    "stock_company": (),
+    "namechange": ("start_date",),
+    "anns": ("ann_date",),
+    "suspend_d": ("trade_date",),
+    "dividend": ("ann_date",),
+    "share_float": ("ann_date",),
+    "stk_holdernumber": ("ann_date",),
+    "disclosure_date": ("ann_date",),
+    "income": ("end_date",),
+    "balancesheet": ("end_date",),
+    "cashflow": ("end_date",),
+    "fina_indicator": ("end_date",),
+    "stk_limit": ("trade_date",),
+    "block_trade": ("trade_date",),
+    "moneyflow": ("trade_date",),
+    "forecast": ("ann_date",),
+}
+
+_CANONICAL_TABLE_BY_DATASET: Final[dict[str, str]] = {
+    "security_master": "canonical.dim_security",
+    "trading_calendar": "canonical.trading_calendar",
+    "price_bar": "canonical.fact_price_bar",
+    "adjustment_factor": "canonical.fact_price_bar",
+    "market_daily_feature": "canonical.fact_market_daily_feature",
+    "index_master": "canonical.dim_index",
+    "index_price_bar": "canonical.fact_index_price_bar",
+    "index_membership": "canonical.dim_index",
+    "industry_classification": "canonical.dim_index",
+    "security_profile": "canonical.dim_security",
+    "event_timeline": "canonical.fact_event",
+    "financial_statement": "canonical.fact_financial_indicator",
+    "financial_indicator": "canonical.fact_financial_indicator",
+    "financial_forecast_event": "canonical.fact_forecast_event",
+    "market_leverage_daily": "canonical.fact_market_daily_feature",
+    "security_leverage_detail": "canonical.fact_market_daily_feature",
+    "business_segment_exposure": "canonical.fact_financial_indicator",
+}
+
+
+def build_tushare_interface_registry() -> dict[str, TushareInterfaceRegistryEntry]:
+    """Build the active Tushare interface registry keyed by source_interface_id."""
+
+    provider_mappings = {mapping.source_interface_id: mapping for mapping in PROVIDER_MAPPINGS}
+    candidate_mappings = {
+        mapping.source_interface_id: mapping for mapping in PROMOTION_CANDIDATE_MAPPINGS
+    }
+    registry: dict[str, TushareInterfaceRegistryEntry] = {}
+
+    for interface in load_tushare_provider_catalog():
+        mapping = provider_mappings.get(interface.source_interface_id)
+        candidate = candidate_mappings.get(interface.source_interface_id)
+        registry[interface.source_interface_id] = _registry_entry_from_catalog_interface(
+            interface,
+            mapping=mapping,
+            candidate=candidate,
+        )
+
+    for mapping in PROVIDER_MAPPINGS:
+        if mapping.source_interface_id in registry:
+            continue
+        registry[mapping.source_interface_id] = _registry_entry_from_mapping(mapping)
+
+    _assert_registry_source_interface_ids(registry)
+    return dict(sorted(registry.items()))
+
+
+def tushare_interface_metadata_for_raw_dataset(raw_dataset: str) -> dict[str, object]:
+    """Return Raw/asset metadata for one production Tushare raw dataset."""
+
+    for entry in TUSHARE_INTERFACE_REGISTRY.values():
+        if entry.production_selectable and entry.raw_dataset == raw_dataset:
+            return {
+                "provider": entry.provider,
+                "source_interface_id": entry.source_interface_id,
+                "doc_api": entry.doc_api,
+                "partition_key": entry.partition_key,
+                "raw_dataset": entry.raw_dataset,
+                "canonical_dataset": entry.canonical_dataset,
+                "canonical_table": entry.canonical_table,
+                "promotion_status": entry.promotion_status,
+                "natural_key": entry.natural_key,
+                "incremental_key": entry.incremental_key,
+                "refresh_policy": entry.refresh_policy,
+                "late_arriving_policy": entry.late_arriving_policy,
+                "fetch_support": entry.fetch_support,
+                "dbt_support": entry.dbt_support,
+                "production_selectable": entry.production_selectable,
+            }
+    msg = f"raw dataset is not production-selectable in Tushare registry: {raw_dataset!r}"
+    raise KeyError(msg)
+
+
+def _registry_entry_from_catalog_interface(
+    interface: SourceInterface,
+    *,
+    mapping: ProviderDatasetMapping | None,
+    candidate: ProviderDatasetMapping | None,
+) -> TushareInterfaceRegistryEntry:
+    selected_mapping = mapping or candidate
+    production_selectable = mapping is not None
+    raw_dataset = (
+        _RAW_DATASET_BY_SOURCE_INTERFACE_ID[interface.source_interface_id]
+        if production_selectable
+        else None
+    )
+    return TushareInterfaceRegistryEntry(
+        provider=interface.provider,
+        source_interface_id=interface.source_interface_id,
+        doc_api=interface.doc_api,
+        raw_dataset=raw_dataset,
+        canonical_dataset=(
+            selected_mapping.canonical_dataset if selected_mapping is not None else None
+        ),
+        canonical_table=_canonical_table_for_mapping(selected_mapping),
+        promotion_status=(
+            selected_mapping.status if selected_mapping is not None else "inventory_only"
+        ),
+        natural_key=selected_mapping.source_primary_key if selected_mapping is not None else (),
+        partition_key=_partition_key(raw_dataset, selected_mapping),
+        incremental_key=_partition_key(raw_dataset, selected_mapping),
+        refresh_policy=_refresh_policy(selected_mapping),
+        late_arriving_policy=_late_arriving_policy(selected_mapping),
+        enabled=production_selectable,
+        fetch_support="typed" if production_selectable else "inventory_only",
+        dbt_support=production_selectable,
+        production_selectable=production_selectable,
+    )
+
+
+def _registry_entry_from_mapping(mapping: ProviderDatasetMapping) -> TushareInterfaceRegistryEntry:
+    raw_dataset = _RAW_DATASET_BY_SOURCE_INTERFACE_ID[mapping.source_interface_id]
+    return TushareInterfaceRegistryEntry(
+        provider=mapping.provider,
+        source_interface_id=mapping.source_interface_id,
+        doc_api=mapping.doc_api,
+        raw_dataset=raw_dataset,
+        canonical_dataset=mapping.canonical_dataset,
+        canonical_table=_canonical_table_for_mapping(mapping),
+        promotion_status=mapping.status,
+        natural_key=mapping.source_primary_key,
+        partition_key=_partition_key(raw_dataset, mapping),
+        incremental_key=_partition_key(raw_dataset, mapping),
+        refresh_policy=mapping.update_policy,
+        late_arriving_policy=_late_arriving_policy(mapping),
+        enabled=True,
+        fetch_support="typed",
+        dbt_support=True,
+        production_selectable=True,
+    )
+
+
+def _canonical_table_for_mapping(mapping: ProviderDatasetMapping | None) -> str | None:
+    if mapping is None:
+        return None
+    return _CANONICAL_TABLE_BY_DATASET.get(mapping.canonical_dataset)
+
+
+def _partition_key(
+    raw_dataset: str | None,
+    mapping: ProviderDatasetMapping | None,
+) -> tuple[str, ...]:
+    if raw_dataset is not None:
+        return _PARTITION_KEY_BY_RAW_DATASET[raw_dataset]
+    if mapping is None:
+        return ()
+    return tuple(
+        field
+        for field in ("trade_date", "cal_date", "ann_date", "end_date", "start_date")
+        if field in mapping.source_primary_key
+    )
+
+
+def _refresh_policy(mapping: ProviderDatasetMapping | None) -> str:
+    if mapping is None:
+        return "inventory only; no production fetch"
+    return mapping.update_policy
+
+
+def _late_arriving_policy(mapping: ProviderDatasetMapping | None) -> str:
+    if mapping is None:
+        return "not applicable"
+    update_policy = mapping.update_policy.lower()
+    if any(marker in update_policy for marker in ("late", "correction", "version", "restatement")):
+        return "late arrivals retained according to natural key/version policy"
+    return "partition overwrite by incremental key"
+
+
+def _assert_registry_source_interface_ids(
+    registry: dict[str, TushareInterfaceRegistryEntry],
+) -> None:
+    duplicates = [
+        key
+        for key, entry in registry.items()
+        if key != entry.source_interface_id
+    ]
+    if duplicates:
+        msg = "registry key/source_interface_id mismatch: "
+        raise ValueError(msg + ", ".join(sorted(duplicates)))
+
+
+TUSHARE_INTERFACE_REGISTRY: Final[dict[str, TushareInterfaceRegistryEntry]] = (
+    build_tushare_interface_registry()
 )
 
 

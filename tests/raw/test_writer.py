@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import gzip
+import hashlib
 import json
 import os
 import threading
@@ -86,6 +87,99 @@ def test_write_json_records_row_count_in_manifest(
     assert manifest["partition_date"] == "2026-04-15"
     assert "row_count" not in manifest
     assert manifest["artifacts"][0]["row_count"] == 2
+
+
+def test_write_arrow_records_manifest_v2_metadata(
+    raw_zone_path: Path,
+    source_id: str,
+) -> None:
+    run_id = str(uuid.uuid4())
+    request_params = {"trade_date": "20260415", "fields": "symbol"}
+    metadata = {
+        "provider": "tushare",
+        "source_interface_id": "daily",
+        "doc_api": "daily",
+        "partition_key": ("trade_date",),
+        "schema_hash": "schema-hash-1",
+    }
+
+    artifact = RawWriter().write_arrow(
+        source_id,
+        "daily",
+        PARTITION_DATE,
+        run_id,
+        pa.table({"symbol": ["000001.SZ"]}),
+        metadata=metadata,
+        request_params=request_params,
+    )
+
+    manifest_path = raw_zone_path / source_id / "daily" / "dt=20260415" / "_manifest.json"
+    manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+    request_params_hash = hashlib.sha256(
+        json.dumps(
+            request_params,
+            ensure_ascii=False,
+            sort_keys=True,
+            separators=(",", ":"),
+        ).encode("utf-8")
+    ).hexdigest()
+    artifact_entry = manifest["artifacts"][0]
+
+    assert artifact.metadata == {
+        **metadata,
+        "partition_key": ["trade_date"],
+        "request_params_hash": request_params_hash,
+    }
+    assert manifest["manifest_version"] == 2
+    assert manifest["provider"] == "tushare"
+    assert manifest["source_interface_id"] == "daily"
+    assert manifest["doc_api"] == "daily"
+    assert manifest["partition_key"] == ["trade_date"]
+    assert manifest["request_params_hash"] == request_params_hash
+    assert manifest["schema_hash"] == "schema-hash-1"
+    assert artifact_entry["provider"] == "tushare"
+    assert artifact_entry["source_interface_id"] == "daily"
+    assert artifact_entry["doc_api"] == "daily"
+    assert artifact_entry["partition_key"] == ["trade_date"]
+    assert artifact_entry["request_params_hash"] == request_params_hash
+    assert artifact_entry["schema_hash"] == "schema-hash-1"
+
+
+def test_reader_accepts_manifest_without_v2_metadata(
+    raw_zone_path: Path,
+    source_id: str,
+) -> None:
+    run_id = str(uuid.uuid4())
+    artifact_path = (
+        raw_zone_path / source_id / "stock_basic" / "dt=20260415" / f"{run_id}.parquet"
+    )
+    artifact_path.parent.mkdir(parents=True)
+    pq.write_table(pa.table({"symbol": ["000001.SZ"]}), artifact_path)
+    manifest = {
+        "source_id": source_id,
+        "dataset": "stock_basic",
+        "partition_date": PARTITION_DATE.isoformat(),
+        "artifacts": [
+            {
+                "source_id": source_id,
+                "dataset": "stock_basic",
+                "partition_date": PARTITION_DATE.isoformat(),
+                "run_id": run_id,
+                "path": str(artifact_path),
+                "row_count": 1,
+                "written_at": "2026-04-15T01:00:00+00:00",
+            }
+        ],
+    }
+    (artifact_path.parent / "_manifest.json").write_text(
+        json.dumps(manifest, indent=2, sort_keys=True) + "\n",
+        encoding="utf-8",
+    )
+
+    artifacts = RawReader().list_artifacts(source_id, "stock_basic", PARTITION_DATE)
+
+    assert len(artifacts) == 1
+    assert artifacts[0].metadata == {}
 
 
 def test_repeated_run_id_raises_raw_artifact_exists(

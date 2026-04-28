@@ -278,12 +278,15 @@ def run_tushare_asset(
     asset_id: str,
     partition_date: date,
     params: FetchParams | None = None,
+    *,
+    raw_writer: RawWriter | None = None,
 ) -> RawArtifact:
     """Fetch a Tushare asset and write it as a Raw Zone Parquet artifact."""
 
     adapter = TushareAdapter()
     asset = _asset_by_name(adapter, asset_id)
-    table = adapter.fetch(asset.name, _fetch_params_for_raw_partition(asset, partition_date, params))
+    fetch_params = _fetch_params_for_raw_partition(asset, partition_date, params)
+    table = adapter.fetch(asset.name, fetch_params)
 
     if not isinstance(table, pa.Table):
         msg = f"Tushare fetch returned unsupported result for asset={asset.name!r}"
@@ -293,12 +296,17 @@ def run_tushare_asset(
         spec = _fetch_spec_by_asset_name(asset.name)
         _validate_raw_partition_date(table, asset, partition_date, spec.partition_date_field)
 
-    return RawWriter().write_arrow(
+    request_params = dict(fetch_params)
+    request_params["fields"] = _fields_csv(asset)
+    writer = raw_writer or RawWriter()
+    return writer.write_arrow(
         adapter.source_id(),
         asset.dataset,
         partition_date,
         str(uuid.uuid4()),
         table,
+        metadata=asset.metadata,
+        request_params=request_params,
     )
 
 
