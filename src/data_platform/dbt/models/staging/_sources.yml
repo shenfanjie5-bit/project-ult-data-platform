@@ -117,3 +117,37 @@ sources:
         description: Tushare forecast parquet files written by RawWriter.
         loader: >
           Raw Zone path pattern: ${DP_RAW_ZONE_PATH}/tushare/forecast/**/*.parquet
+      # M1.13 expansion (precondition 9 closure) — 8 candidate
+      # event_timeline sources promoted to PROVIDER_MAPPINGS.
+      - name: tushare_pledge_stat
+        description: Tushare pledge_stat parquet files written by RawWriter.
+        loader: >
+          Raw Zone path pattern: ${DP_RAW_ZONE_PATH}/tushare/pledge_stat/**/*.parquet
+      - name: tushare_pledge_detail
+        description: Tushare pledge_detail parquet files written by RawWriter.
+        loader: >
+          Raw Zone path pattern: ${DP_RAW_ZONE_PATH}/tushare/pledge_detail/**/*.parquet
+      - name: tushare_repurchase
+        description: Tushare repurchase parquet files written by RawWriter.
+        loader: >
+          Raw Zone path pattern: ${DP_RAW_ZONE_PATH}/tushare/repurchase/**/*.parquet
+      - name: tushare_stk_holdertrade
+        description: Tushare stk_holdertrade parquet files written by RawWriter.
+        loader: >
+          Raw Zone path pattern: ${DP_RAW_ZONE_PATH}/tushare/stk_holdertrade/**/*.parquet
+      - name: tushare_stk_surv
+        description: Tushare stk_surv parquet files written by RawWriter.
+        loader: >
+          Raw Zone path pattern: ${DP_RAW_ZONE_PATH}/tushare/stk_surv/**/*.parquet
+      - name: tushare_limit_list_ths
+        description: Tushare limit_list_ths parquet files written by RawWriter.
+        loader: >
+          Raw Zone path pattern: ${DP_RAW_ZONE_PATH}/tushare/limit_list_ths/**/*.parquet
+      - name: tushare_limit_list_d
+        description: Tushare limit_list_d parquet files written by RawWriter.
+        loader: >
+          Raw Zone path pattern: ${DP_RAW_ZONE_PATH}/tushare/limit_list_d/**/*.parquet
+      - name: tushare_hm_detail
+        description: Tushare hm_detail parquet files written by RawWriter.
+        loader: >
+          Raw Zone path pattern: ${DP_RAW_ZONE_PATH}/tushare/hm_detail/**/*.parquet

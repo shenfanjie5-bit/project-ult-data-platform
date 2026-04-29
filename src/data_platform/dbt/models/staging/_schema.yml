@@ -1271,3 +1271,459 @@ models:
         description: RawWriter manifest written_at timestamp for the selected artifact.
         tests:
           - not_null
+
+  # M1.13 expansion (precondition 9 closure) — 8 staging models for the
+  # candidate event_timeline sources promoted in this round. Identity
+  # tuples mirror the empirically-verified PKs in M1.11. All wide-
+  # identity (block_trade-style) because the partition key alone repeats
+  # in real-world data.
+  - name: stg_pledge_stat
+    description: >
+      Staging view over the latest Raw Zone Tushare pledge_stat artifact.
+      Quarterly summary of issuer pledges; one snapshot row per
+      (ts_code, end_date) but byte-duplicate Tushare API re-emissions
+      exist (4/400 in archive sample) so identity widens to the full
+      row shape — the existing stg_latest_raw macro picks the canonical
+      row per (PK, source_run_id).
+    tests:
+      - unique_combination_of_columns:
+          combination_of_columns: ["ts_code", "end_date", "pledge_count", "unrest_pledge", "rest_pledge", "total_share", "pledge_ratio"]
+    columns:
+      - name: ts_code
+        description: Raw Tushare pledge_stat.ts_code staged from the latest manifest artifact.
+        tests:
+          - not_null
+      - name: end_date
+        description: Raw Tushare pledge_stat.end_date staged from the latest manifest artifact.
+        tests:
+          - not_null
+          - parsable_yyyymmdd_or_date
+      - name: pledge_count
+        description: Raw Tushare pledge_stat.pledge_count staged from the latest manifest artifact.
+        tests:
+          - not_null
+      - name: unrest_pledge
+        description: Raw Tushare pledge_stat.unrest_pledge staged from the latest manifest artifact.
+        tests:
+          - not_null
+      - name: rest_pledge
+        description: Raw Tushare pledge_stat.rest_pledge staged from the latest manifest artifact.
+        tests:
+          - not_null
+      - name: total_share
+        description: Raw Tushare pledge_stat.total_share staged from the latest manifest artifact.
+        tests:
+          - not_null
+      - name: pledge_ratio
+        description: Raw Tushare pledge_stat.pledge_ratio staged from the latest manifest artifact.
+        tests:
+          - not_null
+      - name: source_run_id
+        description: RawWriter run_id selected from the latest Raw manifest artifact.
+        tests:
+          - not_null
+      - name: raw_loaded_at
+        description: RawWriter manifest written_at timestamp for the selected artifact.
+        tests:
+          - not_null
+
+  - name: stg_pledge_detail
+    description: >
+      Staging view over the latest Raw Zone Tushare pledge_detail
+      artifact. Per-pledge agreement events (creation + release).
+      Identity widened to include is_release subtype because the same
+      (ts_code, ann_date, holder_name, pledgor) can appear once with
+      is_release='0' and once with is_release='1'.
+    tests:
+      - unique_combination_of_columns:
+          combination_of_columns: ["ts_code", "ann_date", "holder_name", "pledgor", "start_date", "end_date", "pledge_amount", "is_release"]
+    columns:
+      - name: ts_code
+        description: Raw Tushare pledge_detail.ts_code staged from the latest manifest artifact.
+        tests:
+          - not_null
+      - name: ann_date
+        description: Raw Tushare pledge_detail.ann_date staged from the latest manifest artifact.
+        tests:
+          - not_null
+          - parsable_yyyymmdd_or_date
+      - name: holder_name
+        description: Raw Tushare pledge_detail.holder_name staged from the latest manifest artifact.
+        tests:
+          - not_null
+      - name: pledge_amount
+        description: Raw Tushare pledge_detail.pledge_amount staged from the latest manifest artifact.
+        tests:
+          - not_null
+      - name: start_date
+        description: Raw Tushare pledge_detail.start_date staged from the latest manifest artifact.
+        tests:
+          - not_null
+          - parsable_yyyymmdd_or_date
+      - name: end_date
+        description: Raw Tushare pledge_detail.end_date staged from the latest manifest artifact.
+        tests:
+          - not_null
+          - parsable_yyyymmdd_or_date
+      - name: is_release
+        description: Raw Tushare pledge_detail.is_release staged from the latest manifest artifact.
+        tests:
+          - not_null
+      - name: release_date
+        description: Raw Tushare pledge_detail.release_date staged from the latest manifest artifact.
+        tests:
+          - parsable_yyyymmdd_or_date
+      - name: pledgor
+        description: Raw Tushare pledge_detail.pledgor staged from the latest manifest artifact.
+        tests:
+          - not_null
+      - name: holding_amount
+        description: Raw Tushare pledge_detail.holding_amount staged from the latest manifest artifact.
+      - name: pledged_amount
+        description: Raw Tushare pledge_detail.pledged_amount staged from the latest manifest artifact.
+      - name: p_total_ratio
+        description: Raw Tushare pledge_detail.p_total_ratio staged from the latest manifest artifact.
+      - name: h_total_ratio
+        description: Raw Tushare pledge_detail.h_total_ratio staged from the latest manifest artifact.
+      - name: is_buyback
+        description: Raw Tushare pledge_detail.is_buyback staged from the latest manifest artifact.
+      - name: source_run_id
+        description: RawWriter run_id selected from the latest Raw manifest artifact.
+        tests:
+          - not_null
+      - name: raw_loaded_at
+        description: RawWriter manifest written_at timestamp for the selected artifact.
+        tests:
+          - not_null
+
+  - name: stg_repurchase
+    description: >
+      Staging view over the latest Raw Zone Tushare repurchase artifact.
+      Multi-stage repurchase events (计划 → 实施 → 完成); identity
+      widened to full row shape per M1.11 evidence.
+    tests:
+      - unique_combination_of_columns:
+          combination_of_columns: ["ts_code", "ann_date", "end_date", "proc", "exp_date", "vol", "amount", "high_limit", "low_limit"]
+    columns:
+      - name: ts_code
+        description: Raw Tushare repurchase.ts_code staged from the latest manifest artifact.
+        tests:
+          - not_null
+      - name: ann_date
+        description: Raw Tushare repurchase.ann_date staged from the latest manifest artifact.
+        tests:
+          - not_null
+          - parsable_yyyymmdd_or_date
+      - name: end_date
+        description: Raw Tushare repurchase.end_date staged from the latest manifest artifact.
+        tests:
+          - not_null
+          - parsable_yyyymmdd_or_date
+      - name: proc
+        description: Raw Tushare repurchase.proc staged from the latest manifest artifact.
+        tests:
+          - not_null
+      - name: exp_date
+        description: Raw Tushare repurchase.exp_date staged from the latest manifest artifact.
+        tests:
+          - not_null
+          - parsable_yyyymmdd_or_date
+      - name: vol
+        description: Raw Tushare repurchase.vol staged from the latest manifest artifact.
+        tests:
+          - not_null
+      - name: amount
+        description: Raw Tushare repurchase.amount staged from the latest manifest artifact.
+        tests:
+          - not_null
+      - name: high_limit
+        description: Raw Tushare repurchase.high_limit staged from the latest manifest artifact.
+        tests:
+          - not_null
+      - name: low_limit
+        description: Raw Tushare repurchase.low_limit staged from the latest manifest artifact.
+        tests:
+          - not_null
+      - name: source_run_id
+        description: RawWriter run_id selected from the latest Raw manifest artifact.
+        tests:
+          - not_null
+      - name: raw_loaded_at
+        description: RawWriter manifest written_at timestamp for the selected artifact.
+        tests:
+          - not_null
+
+  - name: stg_stk_holdertrade
+    description: >
+      Staging view over the latest Raw Zone Tushare stk_holdertrade
+      artifact. Insider/major-shareholder trade events; same shareholder +
+      ann_date can produce many rows differing only in avg_price, so
+      identity widens to all 11 columns. Largest source by volume in
+      the M1.11 archive sample (101k rows).
+    tests:
+      - unique_combination_of_columns:
+          combination_of_columns: ["ts_code", "ann_date", "holder_name", "holder_type", "in_de", "change_vol", "change_ratio", "after_share", "after_ratio", "avg_price", "total_share"]
+    columns:
+      - name: ts_code
+        description: Raw Tushare stk_holdertrade.ts_code staged from the latest manifest artifact.
+        tests:
+          - not_null
+      - name: ann_date
+        description: Raw Tushare stk_holdertrade.ann_date staged from the latest manifest artifact.
+        tests:
+          - not_null
+          - parsable_yyyymmdd_or_date
+      - name: holder_name
+        description: Raw Tushare stk_holdertrade.holder_name staged from the latest manifest artifact.
+        tests:
+          - not_null
+      - name: holder_type
+        description: Raw Tushare stk_holdertrade.holder_type staged from the latest manifest artifact.
+        tests:
+          - not_null
+      - name: in_de
+        description: Raw Tushare stk_holdertrade.in_de staged from the latest manifest artifact.
+        tests:
+          - not_null
+      - name: change_vol
+        description: Raw Tushare stk_holdertrade.change_vol staged from the latest manifest artifact.
+        tests:
+          - not_null
+      - name: change_ratio
+        description: Raw Tushare stk_holdertrade.change_ratio staged from the latest manifest artifact.
+        tests:
+          - not_null
+      - name: after_share
+        description: Raw Tushare stk_holdertrade.after_share staged from the latest manifest artifact.
+        tests:
+          - not_null
+      - name: after_ratio
+        description: Raw Tushare stk_holdertrade.after_ratio staged from the latest manifest artifact.
+        tests:
+          - not_null
+      - name: avg_price
+        description: Raw Tushare stk_holdertrade.avg_price staged from the latest manifest artifact.
+        tests:
+          - not_null
+      - name: total_share
+        description: Raw Tushare stk_holdertrade.total_share staged from the latest manifest artifact.
+        tests:
+          - not_null
+      - name: source_run_id
+        description: RawWriter run_id selected from the latest Raw manifest artifact.
+        tests:
+          - not_null
+      - name: raw_loaded_at
+        description: RawWriter manifest written_at timestamp for the selected artifact.
+        tests:
+          - not_null
+
+  - name: stg_stk_surv
+    description: >
+      Staging view over the latest Raw Zone Tushare stk_surv artifact.
+      Institutional investor surveys / analyst visits per surv_date.
+      Identity is (ts_code, surv_date, rece_org, rece_mode) per M1.11.
+    tests:
+      - unique_combination_of_columns:
+          combination_of_columns: ["ts_code", "surv_date", "rece_org", "rece_mode"]
+    columns:
+      - name: ts_code
+        description: Raw Tushare stk_surv.ts_code staged from the latest manifest artifact.
+        tests:
+          - not_null
+      - name: name
+        description: Raw Tushare stk_surv.name staged from the latest manifest artifact.
+      - name: surv_date
+        description: Raw Tushare stk_surv.surv_date staged from the latest manifest artifact.
+        tests:
+          - not_null
+          - parsable_yyyymmdd_or_date
+      - name: fund_visitors
+        description: Raw Tushare stk_surv.fund_visitors staged from the latest manifest artifact.
+      - name: rece_place
+        description: Raw Tushare stk_surv.rece_place staged from the latest manifest artifact.
+      - name: rece_mode
+        description: Raw Tushare stk_surv.rece_mode staged from the latest manifest artifact.
+        tests:
+          - not_null
+      - name: rece_org
+        description: Raw Tushare stk_surv.rece_org staged from the latest manifest artifact.
+        tests:
+          - not_null
+      - name: org_type
+        description: Raw Tushare stk_surv.org_type staged from the latest manifest artifact.
+      - name: comp_rece
+        description: Raw Tushare stk_surv.comp_rece staged from the latest manifest artifact.
+      - name: source_run_id
+        description: RawWriter run_id selected from the latest Raw manifest artifact.
+        tests:
+          - not_null
+      - name: raw_loaded_at
+        description: RawWriter manifest written_at timestamp for the selected artifact.
+        tests:
+          - not_null
+
+  - name: stg_limit_list_ths
+    description: >
+      Staging view over the latest Raw Zone Tushare limit_list_ths artifact.
+      同花顺-classified intra-day limit pool snapshots
+      (涨停池/连板池/炸板池/跌停池). Identity is (trade_date, ts_code, status)
+      because a single ticker can appear in multiple pools intraday but
+      only once per status.
+    tests:
+      - unique_combination_of_columns:
+          combination_of_columns: ["trade_date", "ts_code", "status"]
+    columns:
+      - name: trade_date
+        description: Raw Tushare limit_list_ths.trade_date staged from the latest manifest artifact.
+        tests:
+          - not_null
+          - parsable_yyyymmdd_or_date
+      - name: ts_code
+        description: Raw Tushare limit_list_ths.ts_code staged from the latest manifest artifact.
+        tests:
+          - not_null
+      - name: name
+        description: Raw Tushare limit_list_ths.name staged from the latest manifest artifact.
+      - name: price
+        description: Raw Tushare limit_list_ths.price staged from the latest manifest artifact.
+      - name: pct_chg
+        description: Raw Tushare limit_list_ths.pct_chg staged from the latest manifest artifact.
+      - name: open_num
+        description: Raw Tushare limit_list_ths.open_num staged from the latest manifest artifact.
+      - name: lu_desc
+        description: Raw Tushare limit_list_ths.lu_desc staged from the latest manifest artifact.
+      - name: limit_type
+        description: Raw Tushare limit_list_ths.limit_type staged from the latest manifest artifact.
+      - name: tag
+        description: Raw Tushare limit_list_ths.tag staged from the latest manifest artifact.
+      - name: status
+        description: Raw Tushare limit_list_ths.status staged from the latest manifest artifact.
+        tests:
+          - not_null
+      - name: limit_order
+        description: Raw Tushare limit_list_ths.limit_order staged from the latest manifest artifact.
+      - name: limit_amount
+        description: Raw Tushare limit_list_ths.limit_amount staged from the latest manifest artifact.
+      - name: turnover_rate
+        description: Raw Tushare limit_list_ths.turnover_rate staged from the latest manifest artifact.
+      - name: free_float
+        description: Raw Tushare limit_list_ths.free_float staged from the latest manifest artifact.
+      - name: lu_limit_order
+        description: Raw Tushare limit_list_ths.lu_limit_order staged from the latest manifest artifact.
+      - name: limit_up_suc_rate
+        description: Raw Tushare limit_list_ths.limit_up_suc_rate staged from the latest manifest artifact.
+      - name: turnover
+        description: Raw Tushare limit_list_ths.turnover staged from the latest manifest artifact.
+      - name: market_type
+        description: Raw Tushare limit_list_ths.market_type staged from the latest manifest artifact.
+      - name: source_run_id
+        description: RawWriter run_id selected from the latest Raw manifest artifact.
+        tests:
+          - not_null
+      - name: raw_loaded_at
+        description: RawWriter manifest written_at timestamp for the selected artifact.
+        tests:
+          - not_null
+
+  - name: stg_limit_list_d
+    description: >
+      Staging view over the latest Raw Zone Tushare limit_list_d artifact.
+      Daily limit-hit / blow-up records. limit ∈ {U, D, Z}
+      (涨停 / 跌停 / 炸板). Identity is (trade_date, ts_code, limit).
+    tests:
+      - unique_combination_of_columns:
+          combination_of_columns: ["trade_date", "ts_code", "limit"]
+    columns:
+      - name: trade_date
+        description: Raw Tushare limit_list_d.trade_date staged from the latest manifest artifact.
+        tests:
+          - not_null
+          - parsable_yyyymmdd_or_date
+      - name: ts_code
+        description: Raw Tushare limit_list_d.ts_code staged from the latest manifest artifact.
+        tests:
+          - not_null
+      - name: industry
+        description: Raw Tushare limit_list_d.industry staged from the latest manifest artifact.
+      - name: name
+        description: Raw Tushare limit_list_d.name staged from the latest manifest artifact.
+      - name: close
+        description: Raw Tushare limit_list_d.close staged from the latest manifest artifact.
+      - name: pct_chg
+        description: Raw Tushare limit_list_d.pct_chg staged from the latest manifest artifact.
+      - name: amount
+        description: Raw Tushare limit_list_d.amount staged from the latest manifest artifact.
+      - name: limit_amount
+        description: Raw Tushare limit_list_d.limit_amount staged from the latest manifest artifact.
+      - name: float_mv
+        description: Raw Tushare limit_list_d.float_mv staged from the latest manifest artifact.
+      - name: total_mv
+        description: Raw Tushare limit_list_d.total_mv staged from the latest manifest artifact.
+      - name: turnover_ratio
+        description: Raw Tushare limit_list_d.turnover_ratio staged from the latest manifest artifact.
+      - name: fd_amount
+        description: Raw Tushare limit_list_d.fd_amount staged from the latest manifest artifact.
+      - name: first_time
+        description: Raw Tushare limit_list_d.first_time staged from the latest manifest artifact.
+      - name: last_time
+        description: Raw Tushare limit_list_d.last_time staged from the latest manifest artifact.
+      - name: open_times
+        description: Raw Tushare limit_list_d.open_times staged from the latest manifest artifact.
+      - name: up_stat
+        description: Raw Tushare limit_list_d.up_stat staged from the latest manifest artifact.
+      - name: limit_times
+        description: Raw Tushare limit_list_d.limit_times staged from the latest manifest artifact.
+      - name: limit
+        description: Raw Tushare limit_list_d.limit staged from the latest manifest artifact.
+        tests:
+          - not_null
+      - name: source_run_id
+        description: RawWriter run_id selected from the latest Raw manifest artifact.
+        tests:
+          - not_null
+      - name: raw_loaded_at
+        description: RawWriter manifest written_at timestamp for the selected artifact.
+        tests:
+          - not_null
+
+  - name: stg_hm_detail
+    description: >
+      Staging view over the latest Raw Zone Tushare hm_detail artifact.
+      Hot-money (游资) entity per-stock daily trades. Identity is
+      (trade_date, ts_code, hm_name) per M1.11.
+    tests:
+      - unique_combination_of_columns:
+          combination_of_columns: ["trade_date", "ts_code", "hm_name"]
+    columns:
+      - name: trade_date
+        description: Raw Tushare hm_detail.trade_date staged from the latest manifest artifact.
+        tests:
+          - not_null
+          - parsable_yyyymmdd_or_date
+      - name: ts_code
+        description: Raw Tushare hm_detail.ts_code staged from the latest manifest artifact.
+        tests:
+          - not_null
+      - name: ts_name
+        description: Raw Tushare hm_detail.ts_name staged from the latest manifest artifact.
+      - name: buy_amount
+        description: Raw Tushare hm_detail.buy_amount staged from the latest manifest artifact.
+      - name: sell_amount
+        description: Raw Tushare hm_detail.sell_amount staged from the latest manifest artifact.
+      - name: net_amount
+        description: Raw Tushare hm_detail.net_amount staged from the latest manifest artifact.
+      - name: hm_name
+        description: Raw Tushare hm_detail.hm_name staged from the latest manifest artifact.
+        tests:
+          - not_null
+      - name: hm_orgs
+        description: Raw Tushare hm_detail.hm_orgs staged from the latest manifest artifact.
+      - name: source_run_id
+        description: RawWriter run_id selected from the latest Raw manifest artifact.
+        tests:
+          - not_null
+      - name: raw_loaded_at
+        description: RawWriter manifest written_at timestamp for the selected artifact.
+        tests:
+          - not_null

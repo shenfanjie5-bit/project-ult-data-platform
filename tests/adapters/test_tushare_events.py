@@ -21,8 +21,16 @@ from data_platform.adapters.tushare import (  # noqa: E402
     TUSHARE_BLOCK_TRADE_ASSET,
     TUSHARE_DISCLOSURE_DATE_ASSET,
     TUSHARE_DIVIDEND_ASSET,
+    TUSHARE_HM_DETAIL_ASSET,
+    TUSHARE_LIMIT_LIST_D_ASSET,
+    TUSHARE_LIMIT_LIST_THS_ASSET,
+    TUSHARE_PLEDGE_DETAIL_ASSET,
+    TUSHARE_PLEDGE_STAT_ASSET,
+    TUSHARE_REPURCHASE_ASSET,
     TUSHARE_SHARE_FLOAT_ASSET,
     TUSHARE_STK_HOLDERNUMBER_ASSET,
+    TUSHARE_STK_HOLDERTRADE_ASSET,
+    TUSHARE_STK_SURV_ASSET,
     TUSHARE_SUSPEND_D_ASSET,
     TushareAdapter,
 )
@@ -41,6 +49,16 @@ EVENT_ASSETS = [
     TUSHARE_STK_HOLDERNUMBER_ASSET,
     TUSHARE_DISCLOSURE_DATE_ASSET,
     TUSHARE_BLOCK_TRADE_ASSET,  # Plan §5 expansion
+    # M1.13 expansion (precondition 9 closure) — 8 candidate
+    # event_timeline sources promoted.
+    TUSHARE_PLEDGE_STAT_ASSET,
+    TUSHARE_PLEDGE_DETAIL_ASSET,
+    TUSHARE_REPURCHASE_ASSET,
+    TUSHARE_STK_HOLDERTRADE_ASSET,
+    TUSHARE_STK_SURV_ASSET,
+    TUSHARE_LIMIT_LIST_THS_ASSET,
+    TUSHARE_LIMIT_LIST_D_ASSET,
+    TUSHARE_HM_DETAIL_ASSET,
 ]
 METHOD_BY_DATASET = {
     "anns": "anns",
@@ -50,6 +68,15 @@ METHOD_BY_DATASET = {
     "stk_holdernumber": "stk_holdernumber",
     "disclosure_date": "disclosure_date",
     "block_trade": "block_trade",  # Plan §5 expansion
+    # M1.13 expansion (precondition 9 closure).
+    "pledge_stat": "pledge_stat",
+    "pledge_detail": "pledge_detail",
+    "repurchase": "repurchase",
+    "stk_holdertrade": "stk_holdertrade",
+    "stk_surv": "stk_surv",
+    "limit_list_ths": "limit_list_ths",
+    "limit_list_d": "limit_list_d",
+    "hm_detail": "hm_detail",
 }
 FETCH_PARAMS_BY_DATASET = {
     "anns": {
@@ -101,6 +128,64 @@ FETCH_PARAMS_BY_DATASET = {
         "end_date": "20260415",
         "fields": "bad",
     },
+    # M1.13 expansion (precondition 9 closure) — 8 fetch parameter
+    # dictionaries mirroring partition_request_params + date_param_names.
+    "pledge_stat": {
+        "ts_code": "000001.SZ",
+        "end_date": "20260415",
+        "ann_date": "20260415",
+        "start_date": "20260415",
+        "fields": "bad",
+    },
+    "pledge_detail": {
+        "ts_code": "000001.SZ",
+        "ann_date": "20260415",
+        "start_date": "20260415",
+        "end_date": "20260415",
+        "fields": "bad",
+    },
+    "repurchase": {
+        "ts_code": "000001.SZ",
+        "ann_date": "20260415",
+        "start_date": "20260415",
+        "end_date": "20260415",
+        "fields": "bad",
+    },
+    "stk_holdertrade": {
+        "ts_code": "000001.SZ",
+        "ann_date": "20260415",
+        "start_date": "20260415",
+        "end_date": "20260415",
+        "fields": "bad",
+    },
+    "stk_surv": {
+        "ts_code": "000001.SZ",
+        "surv_date": "20260415",
+        "start_date": "20260415",
+        "end_date": "20260415",
+        "fields": "bad",
+    },
+    "limit_list_ths": {
+        "ts_code": "000001.SZ",
+        "trade_date": "20260415",
+        "start_date": "20260415",
+        "end_date": "20260415",
+        "fields": "bad",
+    },
+    "limit_list_d": {
+        "ts_code": "000001.SZ",
+        "trade_date": "20260415",
+        "start_date": "20260415",
+        "end_date": "20260415",
+        "fields": "bad",
+    },
+    "hm_detail": {
+        "ts_code": "000001.SZ",
+        "trade_date": "20260415",
+        "start_date": "20260415",
+        "end_date": "20260415",
+        "fields": "bad",
+    },
 }
 
 
@@ -130,6 +215,31 @@ class FakeTushareEventClient:
     def block_trade(self, **kwargs: Any) -> Any:  # Plan §5 expansion
         return self._record_call("block_trade", kwargs)
 
+    # M1.13 expansion (precondition 9 closure) — 8 new fake fetch methods.
+    def pledge_stat(self, **kwargs: Any) -> Any:
+        return self._record_call("pledge_stat", kwargs)
+
+    def pledge_detail(self, **kwargs: Any) -> Any:
+        return self._record_call("pledge_detail", kwargs)
+
+    def repurchase(self, **kwargs: Any) -> Any:
+        return self._record_call("repurchase", kwargs)
+
+    def stk_holdertrade(self, **kwargs: Any) -> Any:
+        return self._record_call("stk_holdertrade", kwargs)
+
+    def stk_surv(self, **kwargs: Any) -> Any:
+        return self._record_call("stk_surv", kwargs)
+
+    def limit_list_ths(self, **kwargs: Any) -> Any:
+        return self._record_call("limit_list_ths", kwargs)
+
+    def limit_list_d(self, **kwargs: Any) -> Any:
+        return self._record_call("limit_list_d", kwargs)
+
+    def hm_detail(self, **kwargs: Any) -> Any:
+        return self._record_call("hm_detail", kwargs)
+
     def _record_call(self, method_name: str, kwargs: dict[str, Any]) -> Any:
         self.calls.append((method_name, kwargs))
         return self.frames_by_method[method_name]
@@ -155,12 +265,16 @@ def _event_row(asset: Any, index: int = 0, partition_date: str = "20260415") -> 
             "div_listdate",
             "end_date",
             "ex_date",
+            "exp_date",
             "float_date",
             "imp_ann_date",
             "modify_date",
             "pay_date",
             "pre_date",
             "record_date",
+            "release_date",
+            "start_date",
+            "surv_date",
             "trade_date",
         }:
             row[field.name] = partition_date
@@ -213,8 +327,21 @@ def _fields_csv(asset: Any) -> str:
 
 def _raw_partition_call_params(asset: Any) -> dict[str, str]:
     # Plan §5 expansion — block_trade also partitions on trade_date.
-    if asset.dataset in {"suspend_d", "block_trade"}:
+    # M1.13 expansion (precondition 9 closure) — additional sources
+    # partitioned on trade_date (limit_list_*, hm_detail) / surv_date
+    # (stk_surv) / end_date (pledge_stat); the rest are ann_date.
+    if asset.dataset in {
+        "suspend_d",
+        "block_trade",
+        "limit_list_ths",
+        "limit_list_d",
+        "hm_detail",
+    }:
         date_param = "trade_date"
+    elif asset.dataset == "stk_surv":
+        date_param = "surv_date"
+    elif asset.dataset == "pledge_stat":
+        date_param = "end_date"
     else:
         date_param = "ann_date"
     return {date_param: "20260415", "fields": _fields_csv(asset)}

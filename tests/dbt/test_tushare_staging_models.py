@@ -52,8 +52,12 @@ DATE_FIELD_NAMES = {
     "pre_date",
     "pretrade_date",
     "record_date",
+    # M1.13 expansion (precondition 9 closure) — release_date
+    # (pledge_detail) and surv_date (stk_surv) are also YYYYMMDD strings.
+    "release_date",
     "setup_date",
     "start_date",
+    "surv_date",
     "trade_date",
 }
 PRICE_DATASETS = {"daily", "weekly", "monthly"}
@@ -113,6 +117,64 @@ FORECAST_NUMERIC_FIELD_NAMES = {
     "net_profit_min",
     "net_profit_max",
     "last_parent_net",
+}
+# M1.13 expansion (precondition 9 closure) — numeric field names that
+# need to cast cleanly through the staging cast templates for each of
+# the 8 promoted candidate event_timeline sources. Identity fields
+# stay strings (in_de, is_release, proc, holder_type, hm_name,
+# limit_type, status, tag, limit, etc.) — they're never cast to numeric
+# at staging.
+PLEDGE_STAT_NUMERIC_FIELD_NAMES = {
+    "pledge_count",
+    "unrest_pledge",
+    "rest_pledge",
+    "total_share",
+    "pledge_ratio",
+}
+PLEDGE_DETAIL_NUMERIC_FIELD_NAMES = {
+    "pledge_amount",
+    "holding_amount",
+    "pledged_amount",
+    "p_total_ratio",
+    "h_total_ratio",
+}
+REPURCHASE_NUMERIC_FIELD_NAMES = {
+    "vol",
+    "amount",
+    "high_limit",
+    "low_limit",
+}
+STK_HOLDERTRADE_NUMERIC_FIELD_NAMES = {
+    "change_vol",
+    "change_ratio",
+    "after_share",
+    "after_ratio",
+    "avg_price",
+    "total_share",
+}
+LIMIT_LIST_THS_NUMERIC_FIELD_NAMES = {
+    "price",
+    "pct_chg",
+    "limit_order",
+    "limit_amount",
+    "turnover_rate",
+    "free_float",
+    "limit_up_suc_rate",
+}
+LIMIT_LIST_D_NUMERIC_FIELD_NAMES = {
+    "close",
+    "pct_chg",
+    "amount",
+    "limit_amount",
+    "float_mv",
+    "total_mv",
+    "turnover_ratio",
+    "fd_amount",
+}
+HM_DETAIL_NUMERIC_FIELD_NAMES = {
+    "buy_amount",
+    "sell_amount",
+    "net_amount",
 }
 FIXTURE_DECIMAL_STRING = "1.123456789012345678"
 
@@ -634,6 +696,25 @@ def _sample_value(dataset: str, field: pa.Field) -> str | Decimal | None:
     if dataset == "adj_factor" and field.name == "adj_factor":
         return FIXTURE_DECIMAL_STRING
     if dataset == "stock_company" and field.name in {"reg_capital", "employees"}:
+        return FIXTURE_DECIMAL_STRING
+    # M1.13 expansion (precondition 9 closure) — numeric field samples
+    # for the 8 promoted event_timeline sources. Identity-string fields
+    # (in_de, is_release, proc, holder_type, holder_name, hm_name, etc.)
+    # fall through to the default `<field.name>-fixture` and pass the
+    # varchar staging cast.
+    if dataset == "pledge_stat" and field.name in PLEDGE_STAT_NUMERIC_FIELD_NAMES:
+        return FIXTURE_DECIMAL_STRING
+    if dataset == "pledge_detail" and field.name in PLEDGE_DETAIL_NUMERIC_FIELD_NAMES:
+        return FIXTURE_DECIMAL_STRING
+    if dataset == "repurchase" and field.name in REPURCHASE_NUMERIC_FIELD_NAMES:
+        return FIXTURE_DECIMAL_STRING
+    if dataset == "stk_holdertrade" and field.name in STK_HOLDERTRADE_NUMERIC_FIELD_NAMES:
+        return FIXTURE_DECIMAL_STRING
+    if dataset == "limit_list_ths" and field.name in LIMIT_LIST_THS_NUMERIC_FIELD_NAMES:
+        return FIXTURE_DECIMAL_STRING
+    if dataset == "limit_list_d" and field.name in LIMIT_LIST_D_NUMERIC_FIELD_NAMES:
+        return FIXTURE_DECIMAL_STRING
+    if dataset == "hm_detail" and field.name in HM_DETAIL_NUMERIC_FIELD_NAMES:
         return FIXTURE_DECIMAL_STRING
     if pa.types.is_decimal(field.type):
         return Decimal("1.123456789012345678")

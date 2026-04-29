@@ -200,6 +200,31 @@ class _TushareClient(Protocol):
     def forecast(self, **kwargs: Any) -> Any:
         """Return earnings-forecast notification rows from Tushare Pro."""
 
+    # M1.13 expansion — 8 new event_timeline candidate fetch methods.
+    def pledge_stat(self, **kwargs: Any) -> Any:
+        """Return pledge summary snapshot rows from Tushare Pro."""
+
+    def pledge_detail(self, **kwargs: Any) -> Any:
+        """Return pledge agreement detail rows from Tushare Pro."""
+
+    def repurchase(self, **kwargs: Any) -> Any:
+        """Return share repurchase announcement rows from Tushare Pro."""
+
+    def stk_holdertrade(self, **kwargs: Any) -> Any:
+        """Return shareholder trade announcement rows from Tushare Pro."""
+
+    def stk_surv(self, **kwargs: Any) -> Any:
+        """Return institutional survey rows from Tushare Pro."""
+
+    def limit_list_ths(self, **kwargs: Any) -> Any:
+        """Return 同花顺 intra-day limit-pool snapshot rows from Tushare Pro."""
+
+    def limit_list_d(self, **kwargs: Any) -> Any:
+        """Return daily limit-hit / blow-up event rows from Tushare Pro."""
+
+    def hm_detail(self, **kwargs: Any) -> Any:
+        """Return hot-money entity per-stock daily trade rows from Tushare Pro."""
+
 
 class TushareAdapter(BaseAdapter):
     """Tushare reference adapter exposing Raw Zone structured assets."""
@@ -861,6 +886,57 @@ EVENT_IDENTITY_FIELDS: dict[str, tuple[str, ...]] = {
         "vol",
         "amount",
     ),
+    # M1.13 expansion (precondition 9 closure) — 8 candidate
+    # event_timeline sources promoted with empirically-verified identity
+    # tuples per the M1.11 sign-off table. Wide identities mirror the
+    # block_trade/anns pattern.
+    "pledge_stat": (
+        "ts_code",
+        "end_date",
+        "pledge_count",
+        "unrest_pledge",
+        "rest_pledge",
+        "total_share",
+        "pledge_ratio",
+    ),
+    "pledge_detail": (
+        "ts_code",
+        "ann_date",
+        "holder_name",
+        "pledgor",
+        "start_date",
+        "end_date",
+        "pledge_amount",
+        "is_release",
+    ),
+    "repurchase": (
+        "ts_code",
+        "ann_date",
+        "end_date",
+        "proc",
+        "exp_date",
+        "vol",
+        "amount",
+        "high_limit",
+        "low_limit",
+    ),
+    "stk_holdertrade": (
+        "ts_code",
+        "ann_date",
+        "holder_name",
+        "holder_type",
+        "in_de",
+        "change_vol",
+        "change_ratio",
+        "after_share",
+        "after_ratio",
+        "avg_price",
+        "total_share",
+    ),
+    "stk_surv": ("ts_code", "surv_date", "rece_org", "rece_mode"),
+    "limit_list_ths": ("trade_date", "ts_code", "status"),
+    "limit_list_d": ("trade_date", "ts_code", "limit"),
+    "hm_detail": ("trade_date", "ts_code", "hm_name"),
 }
 EVENT_DATE_FIELDS: dict[str, tuple[str, ...]] = {
     "anns": ("ann_date",),
@@ -870,6 +946,18 @@ EVENT_DATE_FIELDS: dict[str, tuple[str, ...]] = {
     "stk_holdernumber": ("ann_date", "end_date"),
     "disclosure_date": ("ann_date", "end_date"),
     "block_trade": ("trade_date",),  # Plan §5
+    # M1.13 expansion — partition date columns for non-null + ISO-shape
+    # validation. Per M1.11 evidence: pledge_stat keyed on end_date,
+    # pledge_detail/repurchase/stk_holdertrade on ann_date,
+    # stk_surv on surv_date, limit_list_*/hm_detail on trade_date.
+    "pledge_stat": ("end_date",),
+    "pledge_detail": ("ann_date",),
+    "repurchase": ("ann_date",),
+    "stk_holdertrade": ("ann_date",),
+    "stk_surv": ("surv_date",),
+    "limit_list_ths": ("trade_date",),
+    "limit_list_d": ("trade_date",),
+    "hm_detail": ("trade_date",),
 }
 # Plan §5 expansion — forecast's identity keyed on (ts_code, ann_date,
 # end_date, update_flag). Distinct from FINANCIAL_VERSION_FIELDS
@@ -914,6 +1002,15 @@ _METHOD_BY_DATASET = {
     "block_trade": "block_trade",
     "moneyflow": "moneyflow",
     "forecast": "forecast",
+    # M1.13 expansion (precondition 9 closure) — 8 new dataset → method names.
+    "pledge_stat": "pledge_stat",
+    "pledge_detail": "pledge_detail",
+    "repurchase": "repurchase",
+    "stk_holdertrade": "stk_holdertrade",
+    "stk_surv": "stk_surv",
+    "limit_list_ths": "limit_list_ths",
+    "limit_list_d": "limit_list_d",
+    "hm_detail": "hm_detail",
 }
 _IDENTITY_FIELDS_BY_DATASET = {
     "stock_basic": STOCK_BASIC_IDENTITY_FIELDS,
@@ -938,6 +1035,15 @@ _PARTITION_DATE_FIELD_BY_DATASET = {
     "disclosure_date": "ann_date",
     "block_trade": "trade_date",  # Plan §5
     "forecast": "ann_date",  # Plan §5
+    # M1.13 expansion (precondition 9 closure).
+    "pledge_stat": "end_date",
+    "pledge_detail": "ann_date",
+    "repurchase": "ann_date",
+    "stk_holdertrade": "ann_date",
+    "stk_surv": "surv_date",
+    "limit_list_ths": "trade_date",
+    "limit_list_d": "trade_date",
+    "hm_detail": "trade_date",
     **{dataset: "end_date" for dataset in FINANCIAL_DATASETS},
 }
 _PARTITION_REQUEST_PARAMS_BY_DATASET = {
@@ -955,6 +1061,16 @@ _PARTITION_REQUEST_PARAMS_BY_DATASET = {
     "disclosure_date": ("ann_date",),
     "block_trade": ("trade_date",),  # Plan §5
     "forecast": ("ann_date",),  # Plan §5 — single partition date (like anns)
+    # M1.13 expansion (precondition 9 closure) — single partition date per
+    # M1.11 sign-off table's event_date column.
+    "pledge_stat": ("end_date",),
+    "pledge_detail": ("ann_date",),
+    "repurchase": ("ann_date",),
+    "stk_holdertrade": ("ann_date",),
+    "stk_surv": ("surv_date",),
+    "limit_list_ths": ("trade_date",),
+    "limit_list_d": ("trade_date",),
+    "hm_detail": ("trade_date",),
     **{dataset: ("period",) for dataset in FINANCIAL_DATASETS},
 }
 _DATE_PARAM_NAMES_BY_DATASET = {
@@ -981,6 +1097,19 @@ _DATE_PARAM_NAMES_BY_DATASET = {
     # block_trade / moneyflow / forecast APIs expose.
     "block_trade": ("trade_date", "start_date", "end_date"),
     "forecast": ("ann_date", "end_date", "start_date", "period"),
+    # M1.13 expansion (precondition 9 closure) — date params each Tushare
+    # endpoint accepts. pledge_stat/repurchase/pledge_detail/stk_holdertrade
+    # accept the standard ann_date/start_date/end_date trio; stk_surv uses
+    # surv_date / start_date / end_date; limit_list_*/hm_detail are
+    # trade-date-keyed.
+    "pledge_stat": ("ann_date", "end_date", "start_date"),
+    "pledge_detail": ("ann_date", "start_date", "end_date"),
+    "repurchase": ("ann_date", "start_date", "end_date"),
+    "stk_holdertrade": ("ann_date", "start_date", "end_date"),
+    "stk_surv": ("surv_date", "start_date", "end_date"),
+    "limit_list_ths": ("trade_date", "start_date", "end_date"),
+    "limit_list_d": ("trade_date", "start_date", "end_date"),
+    "hm_detail": ("trade_date", "start_date", "end_date"),
     **{
         dataset: ("ann_date", "start_date", "end_date", "period")
         for dataset in FINANCIAL_DATASETS

@@ -158,7 +158,7 @@ def test_tushare_interface_registry_keeps_inventory_out_of_production_fetch() ->
     assert {entry.source_interface_id for entry in TUSHARE_INTERFACE_REGISTRY.values()} == set(
         TUSHARE_INTERFACE_REGISTRY
     )
-    assert len(production_entries) == len(TUSHARE_ASSETS) == 28
+    assert len(production_entries) == len(TUSHARE_ASSETS) == 36
     assert {entry.raw_dataset for entry in production_entries} == typed_raw_datasets
     assert all(entry.enabled for entry in production_entries)
     assert all(entry.fetch_support == "typed" for entry in production_entries)

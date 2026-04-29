@@ -6,14 +6,17 @@ version: 2
 # CanonicalLoadSpec in data-platform/src/data_platform/serving/canonical_writer.py.
 # M1.3 batch covers dim_security, stock_basic, dim_index, fact_price_bar,
 # fact_financial_indicator, fact_market_daily_feature, fact_index_price_bar,
-# and fact_forecast_event. canonical_v2.fact_event covers 8 source interfaces
+# and fact_forecast_event. canonical_v2.fact_event covers 16 source interfaces
 # currently in int_event_timeline.sql (anns, suspend_d, dividend, share_float,
-# stk_holdernumber, disclosure_date, namechange, block_trade). M1.6 added
-# namechange / event_type='name_change'; M1.8 adds block_trade /
-# event_type='block_trade' (with the int_event_timeline uniqueness contract
-# widened to include `summary`). Full event_timeline coverage is not yet
-# achieved: the 8 candidate Tushare sources (pledge_*, repurchase,
-# stk_holdertrade, limit_list_*, hm_detail, stk_surv) remain BLOCKED_NO_STAGING.
+# stk_holdernumber, disclosure_date, namechange, block_trade plus 8 added in
+# M1.13: pledge_stat, pledge_detail, repurchase, stk_holdertrade, stk_surv,
+# limit_list_ths, limit_list_d, hm_detail). M1.6 added namechange
+# / event_type='name_change'; M1.8 added block_trade / event_type='block_trade'
+# (with the int_event_timeline uniqueness contract widened to include
+# `summary`); M1.13 added pledge_summary, pledge_event, share_repurchase,
+# shareholder_trade, institutional_survey, price_limit_status,
+# price_limit_event, and hot_money_trade. Full event_timeline coverage is now
+# achieved (precondition 9 closed).
 
 models:
   - name: mart_dim_security_v2
@@ -158,20 +161,22 @@ models:
 
   - name: mart_fact_event_v2
     description: >-
-      Provider-neutral canonical_v2 event fact. Covers 8 source interfaces in
+      Provider-neutral canonical_v2 event fact. Covers 16 source interfaces in
       int_event_timeline.sql (anns, suspend_d, dividend, share_float,
-      stk_holdernumber, disclosure_date, namechange, block_trade). M1.6 added
+      stk_holdernumber, disclosure_date, namechange, block_trade plus 8 added
+      in M1.13: pledge_stat, pledge_detail, repurchase, stk_holdertrade,
+      stk_surv, limit_list_ths, limit_list_d, hm_detail). M1.6 added
       `namechange` / event_type='name_change'; M1.8 added `block_trade` /
       event_type='block_trade' (intermediate uniqueness contract widened to
       include `summary` so intra-day multi-row block trades flow through —
       row identity is enforced here at the mart-level event_key + canonical
-      PK parity, and at writer-side validation). Renames ts_code ->
-      entity_id; event_key derived as md5(concat_ws(source_interface_id,
-      event_type, title, summary, event_subtype, related_date, reference_url,
-      rec_time)). Full event_timeline coverage is not yet achieved: the 8
-      PROMOTION_CANDIDATE_MAPPINGS sources (pledge_*, repurchase,
-      stk_holdertrade, limit_list_*, hm_detail, stk_surv) remain
-      BLOCKED_NO_STAGING.
+      PK parity, and at writer-side validation). M1.13 added 8 new event_type
+      values (pledge_summary, pledge_event, share_repurchase,
+      shareholder_trade, institutional_survey, price_limit_status,
+      price_limit_event, hot_money_trade), closing the M1 legacy retirement
+      precondition 9. Renames ts_code -> entity_id; event_key derived as
+      md5(concat_ws(source_interface_id, event_type, title, summary,
+      event_subtype, related_date, reference_url, rec_time)).
     tests:
       - unique_combination_of_columns:
           combination_of_columns: ["event_type", "entity_id", "event_date", "event_key"]
@@ -180,7 +185,24 @@ models:
         tests:
           - not_null
           - accepted_values:
-              values: ['announcement', 'suspend', 'dividend', 'share_float', 'holder_number', 'disclosure_date', 'name_change', 'block_trade']
+              values:
+                - 'announcement'
+                - 'suspend'
+                - 'dividend'
+                - 'share_float'
+                - 'holder_number'
+                - 'disclosure_date'
+                - 'name_change'
+                - 'block_trade'
+                # M1.13 expansion (precondition 9 closure).
+                - 'pledge_summary'
+                - 'pledge_event'
+                - 'share_repurchase'
+                - 'shareholder_trade'
+                - 'institutional_survey'
+                - 'price_limit_status'
+                - 'price_limit_event'
+                - 'hot_money_trade'
               quote: true
       - name: entity_id
         tests:
