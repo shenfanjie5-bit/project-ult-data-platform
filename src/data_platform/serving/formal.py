@@ -22,6 +22,24 @@ from data_platform.formal_registry import validate_formal_object_name
 
 
 FORMAL_NAMESPACE: Final[str] = "formal"
+FORBIDDEN_PUBLIC_FORMAL_FIELDS: Final[frozenset[str]] = frozenset(
+    {
+        "source",
+        "source_name",
+        "source_run_id",
+        "source_status",
+        "source_provider",
+        "source_interface_id",
+        "raw_loaded_at",
+        "submitted_at",
+        "ingest_seq",
+        "provider",
+        "provider_id",
+        "provider_name",
+        "ts_code",
+        "index_code",
+    }
+)
 
 
 class FormalObjectTypeInvalid(ValueError):
@@ -63,6 +81,25 @@ class FormalTableSnapshotNotFound(LookupError):
         super().__init__(
             "formal table snapshot not found in publish manifest: "
             f"{cycle_id} {table_identifier}"
+        )
+
+
+class FormalPayloadSourceFieldError(ValueError):
+    """Raised when a public formal payload exposes source/provider lineage."""
+
+    def __init__(
+        self,
+        *,
+        table_identifier: str,
+        snapshot_id: int,
+        forbidden_fields: list[str],
+    ) -> None:
+        self.table_identifier = table_identifier
+        self.snapshot_id = snapshot_id
+        self.forbidden_fields = tuple(forbidden_fields)
+        super().__init__(
+            "formal payload contains forbidden public source fields: "
+            f"{table_identifier} snapshot_id={snapshot_id} fields={forbidden_fields}"
         )
 
 
@@ -162,9 +199,71 @@ def _snapshot_from_manifest(
 def _read_formal_snapshot(table_identifier: str, snapshot_id: int) -> pa.Table:
     payload = serving_reader.read_iceberg_snapshot(table_identifier, snapshot_id)
     if isinstance(payload, pa.Table):
+        _raise_forbidden_formal_fields(
+            payload,
+            table_identifier=table_identifier,
+            snapshot_id=snapshot_id,
+        )
         return payload
     msg = "formal DuckDB Iceberg scan did not return a PyArrow table"
     raise TypeError(msg)
+
+
+def _raise_forbidden_formal_fields(
+    payload: pa.Table,
+    *,
+    table_identifier: str,
+    snapshot_id: int,
+) -> None:
+    forbidden_fields = sorted(_forbidden_formal_field_paths(payload.schema))
+    if forbidden_fields:
+        raise FormalPayloadSourceFieldError(
+            table_identifier=table_identifier,
+            snapshot_id=snapshot_id,
+            forbidden_fields=forbidden_fields,
+        )
+
+
+def _forbidden_formal_field_paths(schema: pa.Schema) -> list[str]:
+    paths: list[str] = []
+    for field in schema:
+        paths.extend(_forbidden_field_paths(field, field.name))
+    return paths
+
+
+def _forbidden_field_paths(field: pa.Field, path: str) -> list[str]:
+    paths: list[str] = []
+    if _is_forbidden_public_formal_field_name(field.name):
+        paths.append(path)
+
+    field_type = field.type
+    if pa.types.is_struct(field_type):
+        for child in field_type:
+            paths.extend(_forbidden_field_paths(child, f"{path}.{child.name}"))
+    elif (
+        pa.types.is_list(field_type)
+        or pa.types.is_large_list(field_type)
+        or pa.types.is_fixed_size_list(field_type)
+    ):
+        value_field = field_type.value_field
+        value_type = value_field.type
+        if pa.types.is_struct(value_type):
+            for child in value_type:
+                paths.extend(_forbidden_field_paths(child, f"{path}[].{child.name}"))
+        else:
+            paths.extend(_forbidden_field_paths(value_field, f"{path}[]"))
+    return paths
+
+
+def _is_forbidden_public_formal_field_name(field_name: str) -> bool:
+    normalized = field_name.strip().lower()
+    return (
+        normalized in FORBIDDEN_PUBLIC_FORMAL_FIELDS
+        or normalized.startswith("source")
+        or normalized.startswith("provider")
+        or "_source" in normalized
+        or "_provider" in normalized
+    )
 
 
 def _validate_formal_snapshot_id(snapshot_id: int) -> int:
@@ -177,9 +276,11 @@ def _validate_formal_snapshot_id(snapshot_id: int) -> int:
 __all__ = [
     "FormalManifestNotFound",
     "FormalObject",
+    "FormalPayloadSourceFieldError",
     "FormalObjectTypeInvalid",
     "FormalSnapshotNotPublished",
     "FormalTableSnapshotNotFound",
+    "FORBIDDEN_PUBLIC_FORMAL_FIELDS",
     "formal_table_identifier",
     "get_formal_by_id",
     "get_formal_by_snapshot",

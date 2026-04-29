@@ -129,6 +129,8 @@ models:
                   "share_float",
                   "holder_number",
                   "disclosure_date",
+                  "name_change",
+                  "block_trade",
                 ]
       - name: event_date
         tests:

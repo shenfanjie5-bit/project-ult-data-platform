@@ -3,6 +3,7 @@ from __future__ import annotations
 from contextlib import contextmanager
 from dataclasses import dataclass
 from datetime import date, datetime
+import json
 from pathlib import Path
 from typing import Iterator
 
@@ -17,6 +18,7 @@ from data_platform.ddl.iceberg_tables import (
     ensure_tables,
 )
 from data_platform.serving import reader
+from data_platform.serving.canonical_datasets import USE_CANONICAL_V2_ENV_VAR
 from data_platform.serving.canonical_writer import (
     CANONICAL_MART_LOAD_SPECS,
     _overwrite_prepared_load,
@@ -152,13 +154,226 @@ def test_read_canonical_applies_in_filter(stock_basic_duckdb: Path) -> None:
 
 def test_get_canonical_stock_basic_filters_active_rows_by_default(
     stock_basic_duckdb: Path,
+    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
+    monkeypatch.delenv(USE_CANONICAL_V2_ENV_VAR, raising=False)
+
     active = get_canonical_stock_basic()
     all_rows = get_canonical_stock_basic(active_only=False)
 
     assert active.num_rows == 2
     assert active.column("ts_code").to_pylist() == ["000001.SZ", "300001.SZ"]
     assert all_rows.num_rows == 3
+
+
+def test_get_canonical_stock_basic_default_uses_legacy_reader(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    expected = pa.table({"ts_code": ["000001.SZ"], "name": ["平安银行"]})
+    calls: list[tuple[str, list[tuple[str, str, object]] | None]] = []
+
+    def fake_read_canonical(
+        table: str,
+        columns: list[str] | None = None,
+        filters: list[tuple[str, str, object]] | None = None,
+    ) -> pa.Table:
+        assert columns is None
+        calls.append((table, filters))
+        return expected
+
+    monkeypatch.delenv(USE_CANONICAL_V2_ENV_VAR, raising=False)
+    monkeypatch.setattr(reader, "read_canonical", fake_read_canonical)
+
+    payload = get_canonical_stock_basic(active_only=True)
+
+    assert payload == expected
+    assert calls == [("stock_basic", [("is_active", "=", True)])]
+
+
+def test_get_canonical_stock_basic_v2_uses_manifest_and_legacy_shape(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    warehouse_path = tmp_path / "warehouse"
+    legacy_metadata = (
+        warehouse_path
+        / "canonical"
+        / "stock_basic"
+        / "metadata"
+        / "00001.metadata.json"
+    )
+    v2_metadata = (
+        warehouse_path
+        / "canonical_v2"
+        / "stock_basic"
+        / "metadata"
+        / "00002.metadata.json"
+    )
+    _write_mart_manifest(
+        warehouse_path,
+        namespace="canonical",
+        payload_key="tables",
+        table_name="stock_basic",
+        metadata_location=legacy_metadata,
+        snapshot_id=101,
+    )
+    _write_mart_manifest(
+        warehouse_path,
+        namespace="canonical_v2",
+        payload_key="canonical_v2_tables",
+        table_name="stock_basic",
+        metadata_location=v2_metadata,
+        snapshot_id=202,
+    )
+    executed: list[tuple[str, list[object]]] = []
+    expected = pa.table(
+        {
+            "security_id": ["000001.SZ"],
+            "symbol": ["000001"],
+            "display_name": ["平安银行"],
+            "area": ["深圳"],
+            "industry": ["银行"],
+            "market": ["主板"],
+            "list_date": [date(1991, 4, 3)],
+            "is_active": [True],
+            "canonical_loaded_at": [datetime(2024, 1, 1, 12, 0, 0)],
+        }
+    )
+
+    class FakeResult:
+        def to_arrow_table(self) -> pa.Table:
+            return expected
+
+    class FakeConnection:
+        def execute(self, sql: str, parameters: list[object]) -> FakeResult:
+            executed.append((sql, parameters))
+            return FakeResult()
+
+    @contextmanager
+    def fake_duckdb_connection() -> Iterator[FakeConnection]:
+        yield FakeConnection()
+
+    monkeypatch.setenv(USE_CANONICAL_V2_ENV_VAR, "1")
+    monkeypatch.setattr(
+        reader,
+        "get_settings",
+        lambda: FakeSettings(
+            duckdb_path=tmp_path / "reader.duckdb",
+            iceberg_warehouse_path=warehouse_path,
+        ),
+    )
+    monkeypatch.setattr(reader, "with_duckdb_connection", fake_duckdb_connection)
+
+    payload = get_canonical_stock_basic(active_only=True)
+
+    assert payload.schema.names == [
+        "ts_code",
+        "symbol",
+        "name",
+        "area",
+        "industry",
+        "market",
+        "list_date",
+        "is_active",
+        "canonical_loaded_at",
+    ]
+    assert payload.column("ts_code").to_pylist() == ["000001.SZ"]
+    assert payload.column("name").to_pylist() == ["平安银行"]
+    assert "security_id" not in payload.schema.names
+    assert "display_name" not in payload.schema.names
+    assert len(executed) == 1
+    sql, parameters = executed[0]
+    assert str(v2_metadata) in sql
+    assert "snapshot_from_id = 202" in sql
+    assert str(legacy_metadata) not in sql
+    assert '"is_active" = ?' in sql
+    assert parameters == [True]
+
+
+def test_get_canonical_stock_basic_v2_all_rows_omits_active_filter(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    warehouse_path = tmp_path / "warehouse"
+    v2_metadata = (
+        warehouse_path
+        / "canonical_v2"
+        / "stock_basic"
+        / "metadata"
+        / "00002.metadata.json"
+    )
+    _write_mart_manifest(
+        warehouse_path,
+        namespace="canonical_v2",
+        payload_key="canonical_v2_tables",
+        table_name="stock_basic",
+        metadata_location=v2_metadata,
+        snapshot_id=202,
+    )
+    executed: list[tuple[str, list[object]]] = []
+    expected = pa.table(
+        {
+            "security_id": ["000001.SZ"],
+            "symbol": ["000001"],
+            "display_name": ["平安银行"],
+            "area": ["深圳"],
+            "industry": ["银行"],
+            "market": ["主板"],
+            "list_date": [date(1991, 4, 3)],
+            "is_active": [True],
+            "canonical_loaded_at": [datetime(2024, 1, 1, 12, 0, 0)],
+        }
+    )
+
+    class FakeResult:
+        def to_arrow_table(self) -> pa.Table:
+            return expected
+
+    class FakeConnection:
+        def execute(self, sql: str, parameters: list[object]) -> FakeResult:
+            executed.append((sql, parameters))
+            return FakeResult()
+
+    @contextmanager
+    def fake_duckdb_connection() -> Iterator[FakeConnection]:
+        yield FakeConnection()
+
+    monkeypatch.setenv(USE_CANONICAL_V2_ENV_VAR, "1")
+    monkeypatch.setattr(
+        reader,
+        "get_settings",
+        lambda: FakeSettings(
+            duckdb_path=tmp_path / "reader.duckdb",
+            iceberg_warehouse_path=warehouse_path,
+        ),
+    )
+    monkeypatch.setattr(reader, "with_duckdb_connection", fake_duckdb_connection)
+
+    get_canonical_stock_basic(active_only=False)
+
+    assert len(executed) == 1
+    sql, parameters = executed[0]
+    assert str(v2_metadata) in sql
+    assert "WHERE" not in sql
+    assert parameters == []
+
+
+def test_get_canonical_stock_basic_v2_fails_closed_without_manifest(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv(USE_CANONICAL_V2_ENV_VAR, "1")
+    monkeypatch.setattr(
+        reader,
+        "get_settings",
+        lambda: FakeSettings(
+            duckdb_path=tmp_path / "reader.duckdb",
+            iceberg_warehouse_path=tmp_path / "warehouse",
+        ),
+    )
+
+    with pytest.raises(CanonicalTableNotFound):
+        get_canonical_stock_basic(active_only=False)
 
 
 def test_read_canonical_reads_fact_price_bar_with_filter(stock_basic_duckdb: Path) -> None:
@@ -377,6 +592,243 @@ def test_read_canonical_uses_mart_snapshot_set_manifest(
         reader._duckdb_connection.cache_clear()
 
 
+def test_read_canonical_uses_legacy_manifest_when_v2_flag_is_enabled(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    warehouse_path = tmp_path / "warehouse"
+    legacy_metadata = (
+        warehouse_path
+        / "canonical"
+        / "fact_price_bar"
+        / "metadata"
+        / "00001.metadata.json"
+    )
+    v2_metadata = (
+        warehouse_path
+        / "canonical_v2"
+        / "fact_price_bar"
+        / "metadata"
+        / "00002.metadata.json"
+    )
+    _write_mart_manifest(
+        warehouse_path,
+        namespace="canonical",
+        payload_key="tables",
+        table_name="fact_price_bar",
+        metadata_location=legacy_metadata,
+        snapshot_id=101,
+    )
+    _write_mart_manifest(
+        warehouse_path,
+        namespace="canonical_v2",
+        payload_key="canonical_v2_tables",
+        table_name="fact_price_bar",
+        metadata_location=v2_metadata,
+        snapshot_id=202,
+    )
+    executed: list[tuple[str, list[object]]] = []
+    expected = pa.table({"ts_code": ["000001.SZ"]})
+
+    class FakeResult:
+        def to_arrow_table(self) -> pa.Table:
+            return expected
+
+    class FakeConnection:
+        def execute(self, sql: str, parameters: list[object]) -> FakeResult:
+            executed.append((sql, parameters))
+            return FakeResult()
+
+    @contextmanager
+    def fake_duckdb_connection() -> Iterator[FakeConnection]:
+        yield FakeConnection()
+
+    monkeypatch.setenv(USE_CANONICAL_V2_ENV_VAR, "1")
+    monkeypatch.setattr(
+        reader,
+        "get_settings",
+        lambda: FakeSettings(
+            duckdb_path=tmp_path / "reader.duckdb",
+            iceberg_warehouse_path=warehouse_path,
+        ),
+    )
+    monkeypatch.setattr(reader, "with_duckdb_connection", fake_duckdb_connection)
+
+    payload = read_canonical("fact_price_bar", columns=["ts_code"])
+
+    assert payload == expected
+    assert len(executed) == 1
+    sql, parameters = executed[0]
+    assert str(legacy_metadata) in sql
+    assert "snapshot_from_id = 101" in sql
+    assert str(v2_metadata) not in sql
+    assert parameters == []
+
+
+def test_read_canonical_dataset_uses_canonical_v2_manifest(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    warehouse_path = tmp_path / "warehouse"
+    legacy_metadata = (
+        warehouse_path
+        / "canonical"
+        / "fact_price_bar"
+        / "metadata"
+        / "00001.metadata.json"
+    )
+    v2_metadata = (
+        warehouse_path
+        / "canonical_v2"
+        / "fact_price_bar"
+        / "metadata"
+        / "00002.metadata.json"
+    )
+    _write_mart_manifest(
+        warehouse_path,
+        namespace="canonical",
+        payload_key="tables",
+        table_name="fact_price_bar",
+        metadata_location=legacy_metadata,
+        snapshot_id=101,
+    )
+    _write_mart_manifest(
+        warehouse_path,
+        namespace="canonical_v2",
+        payload_key="canonical_v2_tables",
+        table_name="fact_price_bar",
+        metadata_location=v2_metadata,
+        snapshot_id=202,
+    )
+    executed: list[tuple[str, list[object]]] = []
+    expected = pa.table({"security_id": ["SEC_A"]})
+
+    class FakeResult:
+        def to_arrow_table(self) -> pa.Table:
+            return expected
+
+    class FakeConnection:
+        def execute(self, sql: str, parameters: list[object]) -> FakeResult:
+            executed.append((sql, parameters))
+            return FakeResult()
+
+    @contextmanager
+    def fake_duckdb_connection() -> Iterator[FakeConnection]:
+        yield FakeConnection()
+
+    monkeypatch.setenv(USE_CANONICAL_V2_ENV_VAR, "1")
+    monkeypatch.setattr(
+        reader,
+        "get_settings",
+        lambda: FakeSettings(
+            duckdb_path=tmp_path / "reader.duckdb",
+            iceberg_warehouse_path=warehouse_path,
+        ),
+    )
+    monkeypatch.setattr(reader, "with_duckdb_connection", fake_duckdb_connection)
+
+    payload = reader.read_canonical_dataset(
+        "price_bar",
+        columns=["security_id"],
+        filters=[("freq", "=", "daily")],
+    )
+
+    assert payload == expected
+    assert len(executed) == 1
+    sql, parameters = executed[0]
+    assert str(v2_metadata) in sql
+    assert "snapshot_from_id = 202" in sql
+    assert str(legacy_metadata) not in sql
+    assert parameters == ["daily"]
+
+
+def test_read_canonical_dataset_routes_event_timeline_to_v2_under_flag(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """M1.5-2 lock: event_timeline reads from canonical_v2.fact_event under flag.
+
+    Mirrors the structure of `test_read_canonical_dataset_uses_canonical_v2_manifest`
+    but exercises the new event_timeline → canonical_v2.fact_event mapping
+    landed by M1-G2. If a future regression silently drops event_timeline
+    from the v2 mapping (or routes it back to legacy `canonical.fact_event`
+    under the v2 flag), this test fails.
+    """
+
+    warehouse_path = tmp_path / "warehouse"
+    legacy_metadata = (
+        warehouse_path
+        / "canonical"
+        / "fact_event"
+        / "metadata"
+        / "00001.metadata.json"
+    )
+    v2_metadata = (
+        warehouse_path
+        / "canonical_v2"
+        / "fact_event"
+        / "metadata"
+        / "00002.metadata.json"
+    )
+    _write_mart_manifest(
+        warehouse_path,
+        namespace="canonical",
+        payload_key="tables",
+        table_name="fact_event",
+        metadata_location=legacy_metadata,
+        snapshot_id=101,
+    )
+    _write_mart_manifest(
+        warehouse_path,
+        namespace="canonical_v2",
+        payload_key="canonical_v2_tables",
+        table_name="fact_event",
+        metadata_location=v2_metadata,
+        snapshot_id=202,
+    )
+    executed: list[tuple[str, list[object]]] = []
+    expected = pa.table({"entity_id": ["000001.SZ"]})
+
+    class FakeResult:
+        def to_arrow_table(self) -> pa.Table:
+            return expected
+
+    class FakeConnection:
+        def execute(self, sql: str, parameters: list[object]) -> FakeResult:
+            executed.append((sql, parameters))
+            return FakeResult()
+
+    @contextmanager
+    def fake_duckdb_connection() -> Iterator[FakeConnection]:
+        yield FakeConnection()
+
+    monkeypatch.setenv(USE_CANONICAL_V2_ENV_VAR, "1")
+    monkeypatch.setattr(
+        reader,
+        "get_settings",
+        lambda: FakeSettings(
+            duckdb_path=tmp_path / "reader.duckdb",
+            iceberg_warehouse_path=warehouse_path,
+        ),
+    )
+    monkeypatch.setattr(reader, "with_duckdb_connection", fake_duckdb_connection)
+
+    payload = reader.read_canonical_dataset(
+        "event_timeline",
+        columns=["entity_id"],
+    )
+
+    assert payload == expected
+    assert len(executed) == 1
+    sql, _parameters = executed[0]
+    assert str(v2_metadata) in sql
+    assert "snapshot_from_id = 202" in sql
+    assert str(legacy_metadata) not in sql, (
+        "event_timeline must read canonical_v2.fact_event under v2 flag, "
+        "NOT legacy canonical.fact_event"
+    )
+
+
 def test_read_canonical_rejects_unpublished_mart_head(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
@@ -423,6 +875,13 @@ def test_reader_tracks_all_writer_published_marts() -> None:
 def test_read_canonical_dataset_uses_explicit_mapping(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
+    """Legacy-mode mapping resolution. Asserts that `read_canonical_dataset`
+    funnels through `read_canonical(<bare>)` for legacy-namespace mappings.
+    Under `DP_CANONICAL_USE_V2=1` the resolution path differs (it goes
+    through `_read_table_expression` directly with the v2 identifier), so
+    this test pins the legacy code path explicitly."""
+
+    monkeypatch.delenv(USE_CANONICAL_V2_ENV_VAR, raising=False)
     calls: list[str] = []
     expected = pa.table({"ts_code": ["000001.SZ"]})
 
@@ -498,6 +957,34 @@ def _write_unpublished_mart_head(
         allow_empty=False,
     )
     _overwrite_prepared_load(prepared, started_at=0.0)
+
+
+def _write_mart_manifest(
+    warehouse_path: Path,
+    *,
+    namespace: str,
+    payload_key: str,
+    table_name: str,
+    metadata_location: Path,
+    snapshot_id: int,
+) -> None:
+    manifest_path = warehouse_path / namespace / reader.CANONICAL_MART_SNAPSHOT_SET_FILE
+    manifest_path.parent.mkdir(parents=True, exist_ok=True)
+    manifest_path.write_text(
+        json.dumps(
+            {
+                payload_key: {
+                    table_name: {
+                        "identifier": f"{namespace}.{table_name}",
+                        "metadata_location": str(metadata_location),
+                        "snapshot_id": snapshot_id,
+                    }
+                }
+            },
+            sort_keys=True,
+        ),
+        encoding="utf-8",
+    )
 
 
 def price_bar_rows() -> list[tuple[str, date, str, str, str, str, datetime, datetime]]:

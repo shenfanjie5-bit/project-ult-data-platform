@@ -1,7 +1,28 @@
-"""Provider-neutral canonical dataset to Iceberg table mapping."""
+"""Provider-neutral canonical dataset to Iceberg table mapping.
+
+Two mapping tables are maintained side-by-side:
+
+* `CANONICAL_DATASET_TABLE_MAPPINGS` is the legacy `canonical.*` namespace.
+* `CANONICAL_DATASET_TABLE_MAPPINGS_V2` is the provider-neutral
+  `canonical_v2.*` namespace introduced by M1.3.
+
+Reader callers select between the two via the `DP_CANONICAL_USE_V2`
+environment variable. When unset (default), readers continue to consume the
+legacy namespace; when set to a truthy value (`1`, `true`, `yes`, `on`),
+readers consume `canonical_v2.*`. The flip is intentionally opt-in so the
+legacy code paths and existing tests stay green until explicit cutover.
+
+`event_timeline` maps to `canonical_v2.fact_event` for 8 source interfaces
+currently in `int_event_timeline.sql` (anns, suspend_d, dividend,
+share_float, stk_holdernumber, disclosure_date, namechange, block_trade).
+Full event_timeline coverage is not achieved: the 8 candidate Tushare sources
+(pledge_*, repurchase, stk_holdertrade, limit_list_*, hm_detail, stk_surv)
+remain BLOCKED_NO_STAGING.
+"""
 
 from __future__ import annotations
 
+import os
 from dataclasses import dataclass
 from typing import Final
 
@@ -73,15 +94,108 @@ CANONICAL_DATASET_TABLE_MAPPINGS: Final[tuple[CanonicalDatasetTable, ...]] = (
     CanonicalDatasetTable("financial_forecast_event", "canonical.fact_forecast_event"),
 )
 
-_DATASET_TO_TABLE: Final[dict[str, CanonicalDatasetTable]] = {
-    mapping.dataset_id: mapping for mapping in CANONICAL_DATASET_TABLE_MAPPINGS
+# `event_timeline -> canonical_v2.fact_event` covers 8 source interfaces in
+# int_event_timeline.sql: anns, suspend_d, dividend, share_float,
+# stk_holdernumber, disclosure_date, namechange, and block_trade. Full
+# event_timeline coverage is not achieved: the 8 candidate Tushare sources
+# remain BLOCKED_NO_STAGING.
+CANONICAL_DATASET_TABLE_MAPPINGS_V2: Final[tuple[CanonicalDatasetTable, ...]] = (
+    CanonicalDatasetTable("security_master", "canonical_v2.dim_security"),
+    CanonicalDatasetTable("security_profile", "canonical_v2.dim_security"),
+    CanonicalDatasetTable("price_bar", "canonical_v2.fact_price_bar"),
+    CanonicalDatasetTable("adjustment_factor", "canonical_v2.fact_price_bar"),
+    CanonicalDatasetTable("market_daily_feature", "canonical_v2.fact_market_daily_feature"),
+    CanonicalDatasetTable("index_master", "canonical_v2.dim_index"),
+    CanonicalDatasetTable("index_price_bar", "canonical_v2.fact_index_price_bar"),
+    CanonicalDatasetTable("event_timeline", "canonical_v2.fact_event"),
+    CanonicalDatasetTable("financial_indicator", "canonical_v2.fact_financial_indicator"),
+    CanonicalDatasetTable("financial_forecast_event", "canonical_v2.fact_forecast_event"),
+)
+
+# Per-dataset canonical alias column. Used by reader callers that need to
+# project / join on the dataset's canonical identifier without hard-coding the
+# provider-shaped column name.
+_LEGACY_ALIAS_COLUMN: Final[dict[str, str]] = {
+    "security_master": "ts_code",
+    "security_profile": "ts_code",
+    "price_bar": "ts_code",
+    "adjustment_factor": "ts_code",
+    "market_daily_feature": "ts_code",
+    "index_master": "index_code",
+    "index_price_bar": "index_code",
+    "event_timeline": "ts_code",
+    "financial_indicator": "ts_code",
+    "financial_forecast_event": "ts_code",
 }
-_TABLE_TO_DATASETS: Final[dict[str, tuple[str, ...]]] = {}
-for _mapping in CANONICAL_DATASET_TABLE_MAPPINGS:
-    _TABLE_TO_DATASETS[_mapping.table_name] = (
-        *_TABLE_TO_DATASETS.get(_mapping.table_name, ()),
-        _mapping.dataset_id,
-    )
+_V2_ALIAS_COLUMN: Final[dict[str, str]] = {
+    "security_master": "security_id",
+    "security_profile": "security_id",
+    "price_bar": "security_id",
+    "adjustment_factor": "security_id",
+    "market_daily_feature": "security_id",
+    "index_master": "index_id",
+    "index_price_bar": "index_id",
+    "event_timeline": "entity_id",
+    "financial_indicator": "security_id",
+    "financial_forecast_event": "security_id",
+}
+
+USE_CANONICAL_V2_ENV_VAR: Final[str] = "DP_CANONICAL_USE_V2"
+_TRUTHY_ENV_VALUES: Final[frozenset[str]] = frozenset({"1", "true", "yes", "on"})
+
+
+def use_canonical_v2() -> bool:
+    """Return whether the v2 namespace is currently selected for readers."""
+
+    return os.environ.get(USE_CANONICAL_V2_ENV_VAR, "").strip().lower() in _TRUTHY_ENV_VALUES
+
+
+def _legacy_dataset_to_table() -> dict[str, CanonicalDatasetTable]:
+    return {mapping.dataset_id: mapping for mapping in CANONICAL_DATASET_TABLE_MAPPINGS}
+
+
+def _v2_dataset_to_table() -> dict[str, CanonicalDatasetTable]:
+    return {mapping.dataset_id: mapping for mapping in CANONICAL_DATASET_TABLE_MAPPINGS_V2}
+
+
+def _selected_dataset_to_table() -> dict[str, CanonicalDatasetTable]:
+    """Return the active dataset → table map per the env flag.
+
+    The legacy map is the fallback for any dataset_id that is not yet present
+    in the v2 map (e.g., `event_timeline` while M1-F derivation rules remain
+    open).
+    """
+
+    legacy = _legacy_dataset_to_table()
+    if not use_canonical_v2():
+        return legacy
+    v2 = _v2_dataset_to_table()
+    merged = dict(legacy)
+    merged.update(v2)
+    return merged
+
+
+def _legacy_table_to_datasets() -> dict[str, tuple[str, ...]]:
+    result: dict[str, tuple[str, ...]] = {}
+    for mapping in CANONICAL_DATASET_TABLE_MAPPINGS:
+        result[mapping.table_name] = (*result.get(mapping.table_name, ()), mapping.dataset_id)
+    return result
+
+
+def _v2_table_to_datasets() -> dict[str, tuple[str, ...]]:
+    result: dict[str, tuple[str, ...]] = {}
+    for mapping in CANONICAL_DATASET_TABLE_MAPPINGS_V2:
+        result[mapping.table_name] = (*result.get(mapping.table_name, ()), mapping.dataset_id)
+    return result
+
+
+def _selected_table_to_datasets() -> dict[str, tuple[str, ...]]:
+    if not use_canonical_v2():
+        return _legacy_table_to_datasets()
+    merged = _legacy_table_to_datasets()
+    for table_name, dataset_ids in _v2_table_to_datasets().items():
+        merged[table_name] = dataset_ids
+    return merged
 
 
 def canonical_table_for_dataset(dataset_id: str) -> str:
@@ -99,17 +213,33 @@ def canonical_table_identifier_for_dataset(dataset_id: str) -> str:
 def canonical_table_mapping_for_dataset(dataset_id: str) -> CanonicalDatasetTable:
     """Return the explicit table mapping for a provider-neutral dataset id."""
 
+    mappings = _selected_dataset_to_table()
     try:
-        return _DATASET_TO_TABLE[dataset_id]
+        return mappings[dataset_id]
     except KeyError as exc:
         raise UnsupportedCanonicalDataset(dataset_id) from exc
+
+
+def canonical_alias_column_for_dataset(dataset_id: str) -> str:
+    """Return the canonical-identifier column name for a dataset.
+
+    Returns the v2 canonical name (`security_id`/`index_id`) when
+    `DP_CANONICAL_USE_V2` is set AND the dataset has a v2 mapping; otherwise
+    returns the provider-shaped legacy name (`ts_code`/`index_code`).
+    """
+
+    if dataset_id not in _LEGACY_ALIAS_COLUMN:
+        raise UnsupportedCanonicalDataset(dataset_id)
+    if use_canonical_v2() and dataset_id in _V2_ALIAS_COLUMN:
+        return _V2_ALIAS_COLUMN[dataset_id]
+    return _LEGACY_ALIAS_COLUMN[dataset_id]
 
 
 def canonical_datasets_for_table(table: str) -> tuple[str, ...]:
     """Return provider-neutral dataset ids served from a physical table."""
 
     table_name = _table_name_from_identifier(table)
-    return _TABLE_TO_DATASETS.get(table_name, ())
+    return _selected_table_to_datasets().get(table_name, ())
 
 
 def canonical_dataset_for_table(table: str) -> str:
@@ -125,6 +255,10 @@ def canonical_dataset_for_table(table: str) -> str:
 def canonical_mart_table_names() -> frozenset[str]:
     """Return implemented canonical mart table names, excluding stock/basic entity stores."""
 
+    if use_canonical_v2():
+        return frozenset(
+            mapping.table_name for mapping in CANONICAL_DATASET_TABLE_MAPPINGS_V2
+        )
     return frozenset(
         mapping.table_name for mapping in CANONICAL_DATASET_TABLE_MAPPINGS
     )
@@ -132,12 +266,16 @@ def canonical_mart_table_names() -> frozenset[str]:
 
 __all__ = [
     "CANONICAL_DATASET_TABLE_MAPPINGS",
+    "CANONICAL_DATASET_TABLE_MAPPINGS_V2",
     "CanonicalDatasetTable",
     "UnsupportedCanonicalDataset",
+    "USE_CANONICAL_V2_ENV_VAR",
+    "canonical_alias_column_for_dataset",
     "canonical_dataset_for_table",
     "canonical_datasets_for_table",
     "canonical_mart_table_names",
     "canonical_table_for_dataset",
     "canonical_table_identifier_for_dataset",
     "canonical_table_mapping_for_dataset",
+    "use_canonical_v2",
 ]

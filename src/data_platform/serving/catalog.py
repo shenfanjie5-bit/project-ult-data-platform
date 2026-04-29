@@ -16,7 +16,13 @@ from sqlalchemy.exc import SQLAlchemyError
 from data_platform.config import Settings, get_settings
 
 
-DEFAULT_NAMESPACES: Final[tuple[str, str, str]] = ("canonical", "formal", "analytical")
+DEFAULT_NAMESPACES: Final[tuple[str, ...]] = (
+    "canonical",
+    "formal",
+    "analytical",
+    "canonical_v2",
+    "canonical_lineage",
+)
 DEFAULT_NAMESPACE_IDENTIFIERS: Final[tuple[Identifier, ...]] = tuple(
     (namespace,) for namespace in DEFAULT_NAMESPACES
 )

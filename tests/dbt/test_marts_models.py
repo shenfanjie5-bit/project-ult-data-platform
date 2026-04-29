@@ -5,15 +5,20 @@ from decimal import Decimal
 import os
 from pathlib import Path
 from typing import Any
+from uuid import uuid4
 
+import pyarrow as pa
 import pytest
 
+from data_platform.raw import RawWriter
 from tests.dbt.test_intermediate_models import (
     _create_all_intermediate_tables,
     _create_all_staging_views,
 )
 from tests.dbt.test_tushare_staging_models import (
+    _asset_by_dataset,
     _run_dbt_wrapper,
+    _sample_table_with_values,
     _write_all_tushare_raw_fixtures,
     _write_duckdb_only_profile,
     require_working_dbt,
@@ -23,6 +28,8 @@ from tests.dbt.test_tushare_staging_models import (
 PROJECT_ROOT = Path(__file__).resolve().parents[2]
 DBT_PROJECT_DIR = PROJECT_ROOT / "src" / "data_platform" / "dbt"
 MARTS_DIR = DBT_PROJECT_DIR / "models" / "marts"
+MARTS_V2_DIR = DBT_PROJECT_DIR / "models" / "marts_v2"
+MARTS_LINEAGE_DIR = DBT_PROJECT_DIR / "models" / "marts_lineage"
 MART_MODEL_NAMES = [
     "mart_dim_security",
     "mart_dim_index",
@@ -248,7 +255,7 @@ def test_marts_models_execute_with_duckdb_raw_fixture(tmp_path: Path) -> None:
         Decimal("1.123456789012345678"),
         Decimal("1.123456789012345678"),
     )
-    assert event_summary == (6, 6)
+    assert event_summary == (8, 8)
     assert {"body", "content", "text"}.isdisjoint(event_columns)
     assert market_summary == (1, "DECIMAL(38,18)", "DECIMAL(38,18)", "DECIMAL(38,18)")
     assert index_price_row == ("000300.SH", True, "DECIMAL(38,18)", "DECIMAL(38,18)")
@@ -257,6 +264,286 @@ def test_marts_models_execute_with_duckdb_raw_fixture(tmp_path: Path) -> None:
         "DECIMAL(38,18)",
         "DECIMAL(38,18)",
         "0",
+    )
+
+
+def test_event_v2_and_lineage_marts_preserve_namechange_fixture(tmp_path: Path) -> None:
+    duckdb = pytest.importorskip("duckdb")
+
+    raw_zone_path = tmp_path / "raw"
+    _write_all_tushare_raw_fixtures(raw_zone_path, tmp_path)
+
+    connection = duckdb.connect(":memory:")
+    try:
+        _create_all_staging_views(connection, raw_zone_path)
+        _create_all_intermediate_tables(connection)
+
+        expected_namechange_row = connection.execute(
+            """
+            select ts_code, start_date
+            from stg_namechange
+            """
+        ).fetchone()
+        int_namechange_count = connection.execute(
+            """
+            select count(*)
+            from int_event_timeline
+            where event_type = 'name_change'
+              and source_interface_id = 'namechange'
+            """
+        ).fetchone()[0]
+
+        _create_mart_table(connection, "mart_fact_event_v2", MARTS_V2_DIR)
+        _create_mart_table(connection, "mart_lineage_fact_event", MARTS_LINEAGE_DIR)
+
+        v2_event_types = {
+            row[0]
+            for row in connection.execute(
+                """
+                select distinct event_type
+                from mart_fact_event_v2
+                """
+            ).fetchall()
+        }
+        lineage_source_interface_ids = {
+            row[0]
+            for row in connection.execute(
+                """
+                select distinct source_interface_id
+                from mart_lineage_fact_event
+                """
+            ).fetchall()
+        }
+        v2_columns = _table_columns(connection, "mart_fact_event_v2")
+        lineage_columns = _table_columns(connection, "mart_lineage_fact_event")
+        v2_pk_rows = connection.execute(
+            """
+            select event_type, entity_id, event_date, event_key
+            from mart_fact_event_v2
+            order by event_type, entity_id, event_date, event_key
+            """
+        ).fetchall()
+        lineage_pk_rows = connection.execute(
+            """
+            select event_type, entity_id, event_date, event_key
+            from mart_lineage_fact_event
+            order by event_type, entity_id, event_date, event_key
+            """
+        ).fetchall()
+        v2_namechange_row = connection.execute(
+            """
+            select entity_id, event_date
+            from mart_fact_event_v2
+            where event_type = 'name_change'
+            """
+        ).fetchone()
+        lineage_namechange_row = connection.execute(
+            """
+            select entity_id, event_date, source_interface_id
+            from mart_lineage_fact_event
+            where event_type = 'name_change'
+            """
+        ).fetchone()
+    finally:
+        connection.close()
+
+    lineage_column_names = {
+        "source_provider",
+        "source_interface_id",
+        "source_run_id",
+        "raw_loaded_at",
+    }
+
+    assert int_namechange_count == 1
+    assert "name_change" in v2_event_types
+    assert "namechange" in lineage_source_interface_ids
+    assert lineage_column_names.isdisjoint(v2_columns)
+    assert lineage_column_names.issubset(lineage_columns)
+    assert v2_pk_rows == lineage_pk_rows
+    assert v2_namechange_row == expected_namechange_row
+    assert lineage_namechange_row == (*expected_namechange_row, "namechange")
+
+
+def test_event_v2_and_lineage_marts_preserve_block_trade_fixture(tmp_path: Path) -> None:
+    """M1.8 — block_trade flows through int_event_timeline → mart_fact_event_v2
+    + mart_lineage_fact_event with v2/lineage canonical PK parity.
+
+    The intermediate uniqueness contract was widened in M1.8 to include
+    `summary` (encoding buyer/seller/price/vol/amount), allowing intra-day
+    block_trade rows to flow through. Row identity is enforced here at the
+    mart-level event_key + canonical PK parity (v2_pk_rows == lineage_pk_rows
+    below), and at writer-side validation."""
+
+    duckdb = pytest.importorskip("duckdb")
+
+    raw_zone_path = tmp_path / "raw"
+    _write_all_tushare_raw_fixtures(raw_zone_path, tmp_path)
+    _write_same_day_block_trade_rows(raw_zone_path, tmp_path)
+
+    connection = duckdb.connect(":memory:")
+    try:
+        _create_all_staging_views(connection, raw_zone_path)
+        _create_all_intermediate_tables(connection)
+
+        expected_block_trade_row = connection.execute(
+            """
+            select ts_code, trade_date
+            from stg_block_trade
+            order by buyer, seller
+            """
+        ).fetchall()
+        int_block_trade_count = connection.execute(
+            """
+            select count(*)
+            from int_event_timeline
+            where event_type = 'block_trade'
+              and source_interface_id = 'block_trade'
+            """
+        ).fetchone()[0]
+        int_block_trade_duplicate_count = connection.execute(
+            """
+            select count(*)
+            from (
+                select event_type, ts_code, event_date, title, related_date, reference_url
+                from int_event_timeline
+                where event_type = 'block_trade'
+                group by event_type, ts_code, event_date, title, related_date, reference_url
+                having count(*) > 1
+            )
+            """
+        ).fetchone()[0]
+        int_block_trade_summary_count = connection.execute(
+            """
+            select count(distinct summary)
+            from int_event_timeline
+            where event_type = 'block_trade'
+            """
+        ).fetchone()[0]
+
+        _create_mart_table(connection, "mart_fact_event_v2", MARTS_V2_DIR)
+        _create_mart_table(connection, "mart_lineage_fact_event", MARTS_LINEAGE_DIR)
+
+        v2_event_types = {
+            row[0]
+            for row in connection.execute(
+                """
+                select distinct event_type
+                from mart_fact_event_v2
+                """
+            ).fetchall()
+        }
+        lineage_source_interface_ids = {
+            row[0]
+            for row in connection.execute(
+                """
+                select distinct source_interface_id
+                from mart_lineage_fact_event
+                """
+            ).fetchall()
+        }
+        v2_columns = _table_columns(connection, "mart_fact_event_v2")
+        lineage_columns = _table_columns(connection, "mart_lineage_fact_event")
+        v2_pk_rows = connection.execute(
+            """
+            select event_type, entity_id, event_date, event_key
+            from mart_fact_event_v2
+            order by event_type, entity_id, event_date, event_key
+            """
+        ).fetchall()
+        lineage_pk_rows = connection.execute(
+            """
+            select event_type, entity_id, event_date, event_key
+            from mart_lineage_fact_event
+            order by event_type, entity_id, event_date, event_key
+            """
+        ).fetchall()
+        v2_block_trade_row = connection.execute(
+            """
+            select entity_id, event_date
+            from mart_fact_event_v2
+            where event_type = 'block_trade'
+            order by event_key
+            """
+        ).fetchall()
+        lineage_block_trade_row = connection.execute(
+            """
+            select entity_id, event_date, source_interface_id
+            from mart_lineage_fact_event
+            where event_type = 'block_trade'
+            order by event_key
+            """
+        ).fetchall()
+        v2_block_trade_event_keys = connection.execute(
+            """
+            select count(distinct event_key)
+            from mart_fact_event_v2
+            where event_type = 'block_trade'
+            """
+        ).fetchone()[0]
+    finally:
+        connection.close()
+
+    lineage_column_names = {
+        "source_provider",
+        "source_interface_id",
+        "source_run_id",
+        "raw_loaded_at",
+    }
+
+    assert int_block_trade_count == 2
+    assert int_block_trade_duplicate_count == 1
+    assert int_block_trade_summary_count == 2
+    assert "block_trade" in v2_event_types
+    assert "block_trade" in lineage_source_interface_ids
+    assert lineage_column_names.isdisjoint(v2_columns)
+    assert lineage_column_names.issubset(lineage_columns)
+    assert v2_pk_rows == lineage_pk_rows
+    assert v2_block_trade_event_keys == 2
+    assert v2_block_trade_row == expected_block_trade_row
+    assert lineage_block_trade_row == [
+        (*row, "block_trade") for row in expected_block_trade_row
+    ]
+
+
+def _write_same_day_block_trade_rows(raw_zone_path: Path, tmp_path: Path) -> None:
+    asset = _asset_by_dataset("block_trade")
+    block_trade_rows = pa.concat_tables(
+        [
+            _sample_table_with_values(
+                asset,
+                {
+                    "ts_code": "000001.SZ",
+                    "trade_date": "20260415",
+                    "buyer": "buyer-a",
+                    "seller": "seller-a",
+                    "price": "10.10",
+                    "vol": "100",
+                    "amount": "1010",
+                },
+            ),
+            _sample_table_with_values(
+                asset,
+                {
+                    "ts_code": "000001.SZ",
+                    "trade_date": "20260415",
+                    "buyer": "buyer-b",
+                    "seller": "seller-b",
+                    "price": "10.20",
+                    "vol": "200",
+                    "amount": "2040",
+                },
+            ),
+        ]
+    )
+    RawWriter(
+        raw_zone_path=raw_zone_path,
+        iceberg_warehouse_path=tmp_path / "iceberg" / "warehouse",
+    ).write_arrow(
+        "tushare",
+        "block_trade",
+        date(2026, 4, 15),
+        str(uuid4()),
+        block_trade_rows,
     )
 
 
@@ -441,11 +728,15 @@ def test_dbt_run_and_test_marts_with_rawwriter_fixture(tmp_path: Path) -> None:
 
 def _create_all_mart_tables(connection: Any) -> None:
     for model_name in MART_MODEL_NAMES:
-        model_sql = _render_mart_model(model_name)
-        connection.execute(f'create table "{model_name}" as {model_sql}')
+        _create_mart_table(connection, model_name, MARTS_DIR)
 
 
-def _render_mart_model(model_name: str) -> str:
+def _create_mart_table(connection: Any, model_name: str, models_dir: Path) -> None:
+    model_sql = _render_mart_model(model_name, models_dir)
+    connection.execute(f'create table "{model_name}" as {model_sql}')
+
+
+def _render_mart_model(model_name: str, models_dir: Path = MARTS_DIR) -> str:
     jinja2 = pytest.importorskip("jinja2")
 
     environment = jinja2.Environment()
@@ -453,10 +744,14 @@ def _render_mart_model(model_name: str) -> str:
     environment.globals["ref"] = lambda ref_name: f'"{ref_name}"'
 
     return (
-        environment.from_string((MARTS_DIR / f"{model_name}.sql").read_text())
+        environment.from_string((models_dir / f"{model_name}.sql").read_text())
         .render()
         .strip()
     )
+
+
+def _table_columns(connection: Any, table_name: str) -> set[str]:
+    return {row[1] for row in connection.execute(f"pragma table_info('{table_name}')").fetchall()}
 
 
 def _schema_columns(model: dict[str, Any]) -> set[str]:

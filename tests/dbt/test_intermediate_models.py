@@ -236,9 +236,11 @@ def test_intermediate_models_execute_with_duckdb_raw_fixture(tmp_path: Path) -> 
     )
     assert event_types == [
         "announcement",
+        "block_trade",
         "disclosure_date",
         "dividend",
         "holder_number",
+        "name_change",
         "share_float",
         "suspend",
     ]

@@ -67,16 +67,10 @@ def test_ensure_namespaces_is_idempotent_and_does_not_create_raw() -> None:
     ensure_namespaces(catalog, DEFAULT_NAMESPACES)  # type: ignore[arg-type]
     ensure_namespaces(catalog, DEFAULT_NAMESPACES)  # type: ignore[arg-type]
 
-    assert catalog.list_namespaces() == [("canonical",), ("formal",), ("analytical",)]
+    expected_namespaces = [(name,) for name in DEFAULT_NAMESPACES]
+    assert catalog.list_namespaces() == expected_namespaces
     assert "raw" not in [namespace[0] for namespace in catalog.list_namespaces()]
-    assert catalog.create_calls == [
-        ("canonical",),
-        ("formal",),
-        ("analytical",),
-        ("canonical",),
-        ("formal",),
-        ("analytical",),
-    ]
+    assert catalog.create_calls == [*expected_namespaces, *expected_namespaces]
 
 
 def test_ensure_namespaces_rejects_raw_namespace() -> None:

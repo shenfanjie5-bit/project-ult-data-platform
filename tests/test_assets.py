@@ -23,6 +23,57 @@ pa = pytest.importorskip("pyarrow")
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
 SRC_DATA_PLATFORM = PROJECT_ROOT / "src" / "data_platform"
+EXPECTED_CANONICAL_V2_IDENTIFIERS = [
+    "canonical_v2.dim_security",
+    "canonical_v2.stock_basic",
+    "canonical_v2.dim_index",
+    "canonical_v2.fact_price_bar",
+    "canonical_v2.fact_financial_indicator",
+    "canonical_v2.fact_market_daily_feature",
+    "canonical_v2.fact_index_price_bar",
+    "canonical_v2.fact_forecast_event",
+    "canonical_v2.fact_event",
+]
+EXPECTED_CANONICAL_LINEAGE_IDENTIFIERS = [
+    "canonical_lineage.lineage_dim_security",
+    "canonical_lineage.lineage_stock_basic",
+    "canonical_lineage.lineage_dim_index",
+    "canonical_lineage.lineage_fact_price_bar",
+    "canonical_lineage.lineage_fact_financial_indicator",
+    "canonical_lineage.lineage_fact_market_daily_feature",
+    "canonical_lineage.lineage_fact_index_price_bar",
+    "canonical_lineage.lineage_fact_forecast_event",
+    "canonical_lineage.lineage_fact_event",
+]
+EXPECTED_CANONICAL_V2_DUCKDB_RELATIONS = [
+    "mart_dim_security_v2",
+    "mart_stock_basic_v2",
+    "mart_dim_index_v2",
+    "mart_fact_price_bar_v2",
+    "mart_fact_financial_indicator_v2",
+    "mart_fact_market_daily_feature_v2",
+    "mart_fact_index_price_bar_v2",
+    "mart_fact_forecast_event_v2",
+    "mart_fact_event_v2",
+]
+EXPECTED_CANONICAL_LINEAGE_DUCKDB_RELATIONS = [
+    "mart_lineage_dim_security",
+    "mart_lineage_stock_basic",
+    "mart_lineage_dim_index",
+    "mart_lineage_fact_price_bar",
+    "mart_lineage_fact_financial_indicator",
+    "mart_lineage_fact_market_daily_feature",
+    "mart_lineage_fact_index_price_bar",
+    "mart_lineage_fact_forecast_event",
+    "mart_lineage_fact_event",
+]
+EXPECTED_CANONICAL_V2_MART_DBT_KEYS = {
+    ("dbt", relation)
+    for relation in (
+        *EXPECTED_CANONICAL_V2_DUCKDB_RELATIONS,
+        *EXPECTED_CANONICAL_LINEAGE_DUCKDB_RELATIONS,
+    )
+}
 
 
 class FakeAdapter(DataSourceAdapter):
@@ -57,6 +108,7 @@ def test_build_assets_links_raw_staging_marts_and_canonical_specs() -> None:
     staging_key = ("dbt", "stg_stock_basic")
     stock_basic_key = ("canonical", "stock_basic")
     canonical_marts_key = ("canonical", "canonical_marts")
+    canonical_v2_marts_key = ("canonical_v2", "canonical_marts")
     mart_dbt_keys = {
         ("dbt", "mart_dim_security"),
         ("dbt", "mart_dim_index"),
@@ -67,14 +119,20 @@ def test_build_assets_links_raw_staging_marts_and_canonical_specs() -> None:
         ("dbt", "mart_fact_index_price_bar"),
         ("dbt", "mart_fact_forecast_event"),
     }
+    v2_mart_dbt_keys = EXPECTED_CANONICAL_V2_MART_DBT_KEYS
 
     assert by_key[raw_key].kind == "raw"
     assert by_key[staging_key].deps == (raw_key,)
     assert by_key[stock_basic_key].deps == (staging_key,)
     assert set(by_key[canonical_marts_key].deps) == mart_dbt_keys
+    assert set(by_key[canonical_v2_marts_key].deps) == v2_mart_dbt_keys
     assert (
         by_key[canonical_marts_key].metadata["identifier"]
         == "canonical.canonical_marts"
+    )
+    assert (
+        by_key[canonical_v2_marts_key].metadata["identifier"]
+        == "canonical_v2.canonical_marts"
     )
     assert by_key[canonical_marts_key].metadata["canonical_identifiers"] == [
         "canonical.dim_security",
@@ -86,9 +144,34 @@ def test_build_assets_links_raw_staging_marts_and_canonical_specs() -> None:
         "canonical.fact_index_price_bar",
         "canonical.fact_forecast_event",
     ]
+    assert (
+        by_key[canonical_v2_marts_key].metadata["canonical_identifiers"]
+        == EXPECTED_CANONICAL_V2_IDENTIFIERS
+    )
+    assert (
+        by_key[canonical_v2_marts_key].metadata["lineage_identifiers"]
+        == EXPECTED_CANONICAL_LINEAGE_IDENTIFIERS
+    )
+    assert by_key[canonical_v2_marts_key].metadata["duckdb_relations"] == [
+        *EXPECTED_CANONICAL_V2_DUCKDB_RELATIONS,
+        *EXPECTED_CANONICAL_LINEAGE_DUCKDB_RELATIONS,
+    ]
+    assert set(
+        by_key[canonical_v2_marts_key].metadata["required_columns_by_identifier"]
+    ) == {
+        *EXPECTED_CANONICAL_V2_IDENTIFIERS,
+        *EXPECTED_CANONICAL_LINEAGE_IDENTIFIERS,
+    }
+    assert "update_flag" in by_key[canonical_v2_marts_key].metadata[
+        "required_columns_by_identifier"
+    ]["canonical_lineage.lineage_fact_forecast_event"]
     assert by_key[canonical_marts_key].metadata["serialization_required"] is True
+    assert by_key[canonical_v2_marts_key].metadata["serialization_required"] is True
     assert by_key[canonical_marts_key].callable_import_path.endswith(
         ":load_canonical_marts"
+    )
+    assert by_key[canonical_v2_marts_key].callable_import_path.endswith(
+        ":load_canonical_v2_marts"
     )
     mart_group_specs = [
         spec
@@ -96,6 +179,12 @@ def test_build_assets_links_raw_staging_marts_and_canonical_specs() -> None:
         if spec.callable_import_path.endswith(":load_canonical_marts")
     ]
     assert [spec.key for spec in mart_group_specs] == [canonical_marts_key]
+    v2_mart_group_specs = [
+        spec
+        for spec in specs
+        if spec.callable_import_path.endswith(":load_canonical_v2_marts")
+    ]
+    assert [spec.key for spec in v2_mart_group_specs] == [canonical_v2_marts_key]
 
     _assert_dependency_order(specs)
     _assert_acyclic(specs)
@@ -186,6 +275,12 @@ def test_assets_cli_outputs_stable_json_with_canonical_marts(
         for item in payload
         if item["key"] == ["canonical", "canonical_marts"]
     )
+    canonical_v2_marts = next(
+        item
+        for item in payload
+        if item["key"] == ["canonical_v2", "canonical_marts"]
+    )
+    dbt_keys = {tuple(item["key"]) for item in payload if item["kind"] == "dbt"}
 
     assert exit_code == 0
     assert captured.err == ""
@@ -199,6 +294,23 @@ def test_assets_cli_outputs_stable_json_with_canonical_marts(
         "canonical.fact_index_price_bar",
         "canonical.fact_forecast_event",
     ]
+    assert (
+        canonical_v2_marts["metadata"]["canonical_identifiers"]
+        == EXPECTED_CANONICAL_V2_IDENTIFIERS
+    )
+    assert (
+        canonical_v2_marts["metadata"]["lineage_identifiers"]
+        == EXPECTED_CANONICAL_LINEAGE_IDENTIFIERS
+    )
+    assert canonical_v2_marts["metadata"]["duckdb_relations"] == [
+        *EXPECTED_CANONICAL_V2_DUCKDB_RELATIONS,
+        *EXPECTED_CANONICAL_LINEAGE_DUCKDB_RELATIONS,
+    ]
+    assert set(canonical_v2_marts["metadata"]["required_columns_by_identifier"]) == {
+        *EXPECTED_CANONICAL_V2_IDENTIFIERS,
+        *EXPECTED_CANONICAL_LINEAGE_IDENTIFIERS,
+    }
+    assert EXPECTED_CANONICAL_V2_MART_DBT_KEYS <= dbt_keys
     assert ("canonical", "dim_security") not in canonical_keys
     assert ("canonical", "dim_index") not in canonical_keys
     assert ("canonical", "fact_price_bar") not in canonical_keys
@@ -207,6 +319,8 @@ def test_assets_cli_outputs_stable_json_with_canonical_marts(
     assert ("canonical", "fact_market_daily_feature") not in canonical_keys
     assert ("canonical", "fact_index_price_bar") not in canonical_keys
     assert ("canonical", "fact_forecast_event") not in canonical_keys
+    assert ("canonical_v2", "dim_security") not in canonical_keys
+    assert ("canonical_lineage", "lineage_dim_security") not in canonical_keys
 
 
 def test_assets_cli_filters_by_kind(capsys: pytest.CaptureFixture[str]) -> None:

@@ -15,7 +15,9 @@ from data_platform.adapters.tushare.assets import TUSHARE_ASSETS
 from data_platform.config import Settings, get_settings
 from data_platform.raw import RawReader, RawWriter
 from data_platform.serving.canonical_writer import (
+    CANONICAL_LINEAGE_MART_LOAD_SPECS,
     CANONICAL_MART_LOAD_SPECS,
+    CANONICAL_V2_MART_LOAD_SPECS,
     STOCK_BASIC_LOAD_SPEC,
 )
 from data_platform.serving.catalog import load_catalog
@@ -33,8 +35,13 @@ CANONICAL_STOCK_BASIC_CALLABLE = (
     "data_platform.serving.canonical_writer:load_canonical_stock_basic"
 )
 CANONICAL_MARTS_CALLABLE = "data_platform.serving.canonical_writer:load_canonical_marts"
+CANONICAL_V2_MARTS_CALLABLE = (
+    "data_platform.serving.canonical_writer:load_canonical_v2_marts"
+)
 CANONICAL_MARTS_ASSET_KEY: AssetKey = ("canonical", "canonical_marts")
 CANONICAL_MARTS_ASSET_IDENTIFIER = "canonical.canonical_marts"
+CANONICAL_V2_MARTS_ASSET_KEY: AssetKey = ("canonical_v2", "canonical_marts")
+CANONICAL_V2_MARTS_ASSET_IDENTIFIER = "canonical_v2.canonical_marts"
 _REF_PATTERN = re.compile(r"\{\{\s*ref\(\s*['\"]([^'\"]+)['\"]\s*\)\s*\}\}")
 
 
@@ -313,6 +320,8 @@ def _canonical_duckdb_relations() -> tuple[str, ...]:
     return (
         STOCK_BASIC_LOAD_SPEC.duckdb_relation,
         *(spec.duckdb_relation for spec in CANONICAL_MART_LOAD_SPECS),
+        *(spec.duckdb_relation for spec in CANONICAL_V2_MART_LOAD_SPECS),
+        *(spec.duckdb_relation for spec in CANONICAL_LINEAGE_MART_LOAD_SPECS),
     )
 
 
@@ -397,6 +406,47 @@ def _build_canonical_specs(
             callable_import_path=CANONICAL_MARTS_CALLABLE,
         )
     )
+    v2_mart_deps = tuple(
+        _dbt_key(load_spec.duckdb_relation)
+        for load_spec in (
+            *CANONICAL_V2_MART_LOAD_SPECS,
+            *CANONICAL_LINEAGE_MART_LOAD_SPECS,
+        )
+    )
+    specs.append(
+        DataPlatformAssetSpec(
+            key=CANONICAL_V2_MARTS_ASSET_KEY,
+            kind="canonical",
+            deps=v2_mart_deps,
+            metadata={
+                "identifier": CANONICAL_V2_MARTS_ASSET_IDENTIFIER,
+                "canonical_identifiers": [
+                    load_spec.identifier for load_spec in CANONICAL_V2_MART_LOAD_SPECS
+                ],
+                "lineage_identifiers": [
+                    load_spec.identifier for load_spec in CANONICAL_LINEAGE_MART_LOAD_SPECS
+                ],
+                "duckdb_relations": [
+                    load_spec.duckdb_relation
+                    for load_spec in (
+                        *CANONICAL_V2_MART_LOAD_SPECS,
+                        *CANONICAL_LINEAGE_MART_LOAD_SPECS,
+                    )
+                ],
+                "required_columns_by_identifier": {
+                    load_spec.identifier: list(load_spec.required_columns)
+                    for load_spec in (
+                        *CANONICAL_V2_MART_LOAD_SPECS,
+                        *CANONICAL_LINEAGE_MART_LOAD_SPECS,
+                    )
+                },
+                "writer": "v2_marts",
+                "write_group": "canonical_v2_marts",
+                "serialization_required": True,
+            },
+            callable_import_path=CANONICAL_V2_MARTS_CALLABLE,
+        )
+    )
     return specs
 
 
@@ -436,6 +486,7 @@ __all__ = [
     "AssetKey",
     "AssetKind",
     "CANONICAL_MARTS_ASSET_KEY",
+    "CANONICAL_V2_MARTS_ASSET_KEY",
     "DBT_PROJECT_DIR",
     "DataPlatformAssetSpec",
     "build_assets",

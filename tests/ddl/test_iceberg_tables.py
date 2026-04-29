@@ -16,8 +16,12 @@ from data_platform.ddl.iceberg_tables import (
     CANONICAL_FACT_EVENT_SPEC,
     CANONICAL_FACT_FINANCIAL_INDICATOR_SPEC,
     CANONICAL_FACT_PRICE_BAR_SPEC,
+    CANONICAL_LINEAGE_DIM_SECURITY_SPEC,
+    CANONICAL_LINEAGE_TABLE_SPECS,
     CANONICAL_MART_TABLE_SPECS,
     CANONICAL_STOCK_BASIC_SPEC,
+    CANONICAL_V2_DIM_SECURITY_SPEC,
+    CANONICAL_V2_TABLE_SPECS,
     DECIMAL_TYPE,
     DEFAULT_TABLE_SPECS,
     ENTITY_ALIAS_SPEC,
@@ -198,6 +202,48 @@ def test_default_table_specs_do_not_include_queue_fields() -> None:
         )
 
 
+def test_default_table_specs_include_canonical_v2_and_lineage_storage_points() -> None:
+    identifiers = {f"{spec.namespace}.{spec.name}" for spec in DEFAULT_TABLE_SPECS}
+
+    assert "canonical_v2.dim_security" in identifiers
+    assert "canonical_lineage.lineage_dim_security" in identifiers
+    assert CANONICAL_V2_DIM_SECURITY_SPEC.schema.names == [
+        "security_id",
+        "symbol",
+        "display_name",
+        "market",
+        "industry",
+        "list_date",
+        "is_active",
+        "area",
+        "fullname",
+        "exchange",
+        "curr_type",
+        "list_status",
+        "delist_date",
+        "setup_date",
+        "province",
+        "city",
+        "reg_capital",
+        "employees",
+        "main_business",
+        "latest_namechange_name",
+        "latest_namechange_start_date",
+        "latest_namechange_end_date",
+        "latest_namechange_ann_date",
+        "latest_namechange_reason",
+        "canonical_loaded_at",
+    ]
+    assert CANONICAL_LINEAGE_DIM_SECURITY_SPEC.schema.names == [
+        "security_id",
+        "source_provider",
+        "source_interface_id",
+        "source_run_id",
+        "raw_loaded_at",
+        "canonical_loaded_at",
+    ]
+
+
 def test_register_table_creates_namespace_and_table() -> None:
     catalog = FakeCatalog()
     spec = TableSpec(
@@ -241,6 +287,24 @@ def test_ensure_tables_is_idempotent() -> None:
         "canonical.fact_market_daily_feature",
         "canonical.fact_price_bar",
         "canonical.stock_basic",
+        "canonical_lineage.lineage_dim_index",
+        "canonical_lineage.lineage_dim_security",
+        "canonical_lineage.lineage_fact_event",
+        "canonical_lineage.lineage_fact_financial_indicator",
+        "canonical_lineage.lineage_fact_forecast_event",
+        "canonical_lineage.lineage_fact_index_price_bar",
+        "canonical_lineage.lineage_fact_market_daily_feature",
+        "canonical_lineage.lineage_fact_price_bar",
+        "canonical_lineage.lineage_stock_basic",
+        "canonical_v2.dim_index",
+        "canonical_v2.dim_security",
+        "canonical_v2.fact_event",
+        "canonical_v2.fact_financial_indicator",
+        "canonical_v2.fact_forecast_event",
+        "canonical_v2.fact_index_price_bar",
+        "canonical_v2.fact_market_daily_feature",
+        "canonical_v2.fact_price_bar",
+        "canonical_v2.stock_basic",
     ]
     assert [identifier for identifier, _ in catalog.create_calls] == [
         "canonical.stock_basic",
@@ -249,6 +313,14 @@ def test_ensure_tables_is_idempotent() -> None:
         *[
             f"{spec.namespace}.{spec.name}"
             for spec in CANONICAL_MART_TABLE_SPECS
+        ],
+        *[
+            f"{spec.namespace}.{spec.name}"
+            for spec in CANONICAL_V2_TABLE_SPECS
+        ],
+        *[
+            f"{spec.namespace}.{spec.name}"
+            for spec in CANONICAL_LINEAGE_TABLE_SPECS
         ],
     ]
 
@@ -324,8 +396,10 @@ def test_cli_ensure_uses_project_catalog_and_default_specs(
 
     assert iceberg_tables.main(["--ensure"]) == 0
 
+    from data_platform.serving.catalog import DEFAULT_NAMESPACES
+
     assert namespace_calls == [
-        (fake_catalog, ("canonical", "formal", "analytical")),
+        (fake_catalog, tuple(DEFAULT_NAMESPACES)),
     ]
     assert table_calls == [(fake_catalog, DEFAULT_TABLE_SPECS)]
     assert "canonical.stock_basic" in capsys.readouterr().out

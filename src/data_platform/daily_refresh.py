@@ -35,6 +35,7 @@ from data_platform.serving.canonical_writer import (
     WriteResult,
     load_canonical_marts,
     load_canonical_stock_basic,
+    load_canonical_v2_marts,
 )
 from data_platform.serving.catalog import DEFAULT_NAMESPACES, ensure_namespaces
 
@@ -45,7 +46,7 @@ DBT_SCRIPT = PROJECT_ROOT / "scripts" / "dbt.sh"
 DBT_EXECUTABLE_ENV = "DP_DBT_EXECUTABLE"
 DBT_BIN_ENV = "DBT_BIN"
 DATE_FORMAT = "%Y%m%d"
-DEFAULT_DBT_SELECTORS = ("staging", "intermediate", "marts")
+DEFAULT_DBT_SELECTORS = ("staging", "intermediate", "marts", "marts_v2", "marts_lineage")
 TRUTHY_VALUES = frozenset({"1", "true", "yes", "on"})
 DEFAULT_REFRESH_LOCK_STALE_AFTER = timedelta(hours=6)
 REFRESH_LOCK_STALE_SECONDS_ENV = "DP_DAILY_REFRESH_LOCK_STALE_SECONDS"
@@ -56,11 +57,14 @@ DATE_FIELD_NAMES = frozenset(
         "base_date",
         "cal_date",
         "delist_date",
+        "div_listdate",
         "end_date",
         "ex_date",
         "exp_date",
         "f_ann_date",
         "float_date",
+        "first_ann_date",
+        "imp_ann_date",
         "in_date",
         "list_date",
         "modify_date",
@@ -79,10 +83,19 @@ STRING_NUMERIC_FIELD_NAMES = frozenset(
         "adj_factor",
         "amount",
         "base_point",
+        "buy_elg_amount",
+        "buy_elg_vol",
+        "buy_lg_amount",
+        "buy_lg_vol",
+        "buy_md_amount",
+        "buy_md_vol",
+        "buy_sm_amount",
+        "buy_sm_vol",
         "cash_div",
         "change",
         "circ_mv",
         "close",
+        "down_limit",
         "dv_ratio",
         "dv_ttm",
         "employees",
@@ -90,8 +103,15 @@ STRING_NUMERIC_FIELD_NAMES = frozenset(
         "free_share",
         "high",
         "holder_num",
+        "last_parent_net",
         "low",
+        "net_mf_amount",
+        "net_mf_vol",
+        "net_profit_max",
+        "net_profit_min",
         "open",
+        "p_change_max",
+        "p_change_min",
         "pb",
         "pct_chg",
         "pe",
@@ -100,11 +120,20 @@ STRING_NUMERIC_FIELD_NAMES = frozenset(
         "ps",
         "ps_ttm",
         "reg_capital",
+        "sell_elg_amount",
+        "sell_elg_vol",
+        "sell_lg_amount",
+        "sell_lg_vol",
+        "sell_md_amount",
+        "sell_md_vol",
+        "sell_sm_amount",
+        "sell_sm_vol",
         "stk_div",
         "total_mv",
         "total_share",
         "turnover_rate",
         "turnover_rate_f",
+        "up_limit",
         "vol",
         "volume_ratio",
         "weight",
@@ -533,8 +562,15 @@ def _run_canonical_step(
                 Path(resources["duckdb_path"]),
             )
         )
+        write_results.extend(
+            load_canonical_v2_marts(
+                catalog,
+                Path(resources["duckdb_path"]),
+            )
+        )
     else:
         skipped_writes.append("canonical.canonical_marts")
+        skipped_writes.append("canonical_v2.canonical_marts")
 
     return {
         "applied_migrations": migrations,
@@ -878,6 +914,8 @@ def _mock_value(dataset: str, field: pa.Field, partition_date: date) -> Any:
         return "000300.SH"
     if field.name == "con_code":
         return "000001.SZ"
+    if field.name == "exchange":
+        return "SSE"
     if field.name == "symbol":
         return "000001"
     if field.name == "list_status":

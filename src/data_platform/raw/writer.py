@@ -96,7 +96,7 @@ class RawWriter:
             run_id=run_id,
             artifact_path=artifact_path,
             row_count=row_count,
-            metadata=_manifest_metadata(metadata, request_params),
+            metadata=_manifest_metadata(metadata, request_params, dataset=dataset),
             write_tmp=write_tmp,
         )
 
@@ -127,7 +127,7 @@ class RawWriter:
             run_id=run_id,
             artifact_path=artifact_path,
             row_count=row_count,
-            metadata=_manifest_metadata(metadata, request_params),
+            metadata=_manifest_metadata(metadata, request_params, dataset=dataset),
             write_tmp=write_tmp,
         )
 
@@ -442,6 +442,8 @@ def _artifact_from_dict(
 def _manifest_metadata(
     metadata: Mapping[str, Any] | None,
     request_params: Mapping[str, Any] | None,
+    *,
+    dataset: str,
 ) -> dict[str, Any]:
     raw_metadata = dict(metadata or {})
     if request_params is not None:
@@ -458,7 +460,47 @@ def _manifest_metadata(
             manifest_metadata["partition_key"] = [partition_key]
         elif isinstance(partition_key, tuple):
             manifest_metadata["partition_key"] = list(partition_key)
+    _validate_provider_interface_metadata(manifest_metadata, dataset=dataset)
     return manifest_metadata
+
+
+def _validate_provider_interface_metadata(
+    metadata: Mapping[str, Any],
+    *,
+    dataset: str,
+) -> None:
+    provider = metadata.get("provider")
+    source_interface_id = metadata.get("source_interface_id")
+    doc_api = metadata.get("doc_api")
+    if provider is None and source_interface_id is None and doc_api is None:
+        return
+    if not (provider and source_interface_id and doc_api):
+        raise ValueError(
+            "raw manifest provider metadata requires provider, source_interface_id, and doc_api",
+        )
+
+    provider_name = str(provider)
+    if provider_name != "tushare":
+        return
+
+    from data_platform.provider_catalog import TUSHARE_INTERFACE_REGISTRY
+
+    interface_id = str(source_interface_id)
+    entry = TUSHARE_INTERFACE_REGISTRY.get(interface_id)
+    if entry is None:
+        raise ValueError(f"unknown Tushare source_interface_id: {interface_id!r}")
+    if entry.doc_api != str(doc_api):
+        raise ValueError(
+            "raw manifest doc_api does not match source_interface_id: "
+            f"source_interface_id={interface_id!r}, doc_api={doc_api!r}, "
+            f"expected_doc_api={entry.doc_api!r}",
+        )
+    if entry.raw_dataset != dataset:
+        raise ValueError(
+            "raw manifest dataset does not match source_interface_id: "
+            f"source_interface_id={interface_id!r}, dataset={dataset!r}, "
+            f"expected_raw_dataset={entry.raw_dataset!r}",
+        )
 
 
 def _manifest_header_metadata(metadata: Mapping[str, Any]) -> dict[str, Any]:

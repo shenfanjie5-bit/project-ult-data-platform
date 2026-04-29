@@ -16,16 +16,32 @@ import pyarrow as pa  # type: ignore[import-untyped]
 
 from data_platform.config import get_settings
 from data_platform.serving.canonical_datasets import (
-    canonical_mart_table_names,
-    canonical_table_for_dataset,
+    CANONICAL_DATASET_TABLE_MAPPINGS,
+    CANONICAL_DATASET_TABLE_MAPPINGS_V2,
     canonical_table_identifier_for_dataset,
+    canonical_table_mapping_for_dataset,
+    use_canonical_v2,
 )
 
 
 CANONICAL_NAMESPACE = "canonical"
+CANONICAL_V2_NAMESPACE = "canonical_v2"
 TABLE_STOCK_BASIC = "stock_basic"
 CANONICAL_MART_SNAPSHOT_SET_FILE = "_mart_snapshot_set.json"
-CANONICAL_MART_TABLES = canonical_mart_table_names()
+_CANONICAL_MART_TABLES_BY_NAMESPACE = {
+    CANONICAL_NAMESPACE: frozenset(
+        mapping.table_name for mapping in CANONICAL_DATASET_TABLE_MAPPINGS
+    ),
+    CANONICAL_V2_NAMESPACE: frozenset(
+        {TABLE_STOCK_BASIC}
+        | {mapping.table_name for mapping in CANONICAL_DATASET_TABLE_MAPPINGS_V2}
+    ),
+}
+CANONICAL_MART_TABLES = _CANONICAL_MART_TABLES_BY_NAMESPACE[CANONICAL_NAMESPACE]
+_CANONICAL_MART_MANIFEST_KEY_BY_NAMESPACE = {
+    CANONICAL_NAMESPACE: "tables",
+    CANONICAL_V2_NAMESPACE: "canonical_v2_tables",
+}
 _IDENTIFIER_PATTERN = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*$")
 _CONNECTION_LOCK = RLock()
 
@@ -54,11 +70,28 @@ def read_canonical(
     """Read one canonical Iceberg table as a PyArrow table."""
 
     _validate_identifier(table)
+    return _read_table_expression(
+        table,
+        _canonical_table_expression(table),
+        columns=columns,
+        filters=filters,
+    )
+
+
+def _read_table_expression(
+    table: str,
+    table_expression: str,
+    *,
+    columns: list[str] | None = None,
+    filters: list[tuple[str, str, Any]] | None = None,
+) -> pa.Table:
+    """Read from an already-resolved DuckDB table expression."""
+
     select_list = _compile_select_list(columns)
     where_clause, parameters = _compile_filters(filters)
     sql = f"""
 SELECT {select_list}
-FROM {_canonical_table_expression(table)}
+FROM {table_expression}
 {where_clause}
 """
 
@@ -91,8 +124,12 @@ def read_canonical_dataset(
 ) -> pa.Table:
     """Read one provider-neutral canonical dataset through its mapped table."""
 
-    return read_canonical(
-        canonical_table_for_dataset(dataset_id),
+    mapping = canonical_table_mapping_for_dataset(dataset_id)
+    if mapping.namespace == CANONICAL_NAMESPACE:
+        return read_canonical(mapping.table_name, columns=columns, filters=filters)
+    return _read_table_expression(
+        mapping.table_identifier,
+        _canonical_table_identifier_expression(mapping.table_identifier),
         columns=columns,
         filters=filters,
     )
@@ -128,14 +165,44 @@ def canonical_snapshot_id(table: str) -> int:
 def canonical_snapshot_id_for_dataset(dataset_id: str) -> int:
     """Return the pinned snapshot id for one provider-neutral canonical dataset."""
 
-    return canonical_snapshot_id(canonical_table_for_dataset(dataset_id))
+    mapping = canonical_table_mapping_for_dataset(dataset_id)
+    if mapping.namespace == CANONICAL_NAMESPACE:
+        return canonical_snapshot_id(mapping.table_name)
+    return _canonical_snapshot_id_for_identifier(mapping.table_identifier)
 
 
 def get_canonical_stock_basic(active_only: bool = True) -> pa.Table:
-    """Read canonical.stock_basic, filtering to active rows by default."""
+    """Read stock_basic in the legacy helper shape, filtering active rows by default."""
 
     filters = [("is_active", "=", True)] if active_only else None
+    if use_canonical_v2():
+        table_identifier = f"{CANONICAL_V2_NAMESPACE}.{TABLE_STOCK_BASIC}"
+        table = _read_table_expression(
+            table_identifier,
+            _canonical_table_identifier_expression(table_identifier),
+            columns=[
+                "security_id",
+                "symbol",
+                "display_name",
+                "area",
+                "industry",
+                "market",
+                "list_date",
+                "is_active",
+                "canonical_loaded_at",
+            ],
+            filters=filters,
+        )
+        return _canonical_stock_basic_v2_to_legacy_shape(table)
     return read_canonical(TABLE_STOCK_BASIC, filters=filters)
+
+
+def _canonical_stock_basic_v2_to_legacy_shape(table: pa.Table) -> pa.Table:
+    column_names = [
+        "ts_code" if name == "security_id" else "name" if name == "display_name" else name
+        for name in table.schema.names
+    ]
+    return table.rename_columns(column_names)
 
 
 @contextmanager
@@ -211,7 +278,17 @@ def _filter_values(filter_spec: object, value: object) -> list[Any]:
 
 
 def _canonical_table_expression(table: str) -> str:
-    snapshot_entry = _canonical_mart_snapshot_entry(table)
+    try:
+        return _canonical_table_identifier_expression(f"{CANONICAL_NAMESPACE}.{table}")
+    except CanonicalTableNotFound as exc:
+        raise CanonicalTableNotFound(table) from exc
+
+
+def _canonical_table_identifier_expression(table_identifier: str) -> str:
+    parts = _validate_table_identifier(table_identifier)
+    namespace = parts[0]
+    table = parts[-1]
+    snapshot_entry = _canonical_mart_snapshot_entry(table, namespace=namespace)
     if snapshot_entry is not None:
         metadata_location = str(snapshot_entry["metadata_location"])
         snapshot_id = int(snapshot_entry["snapshot_id"])
@@ -219,11 +296,35 @@ def _canonical_table_expression(table: str) -> str:
             f"iceberg_scan({_sql_string_literal(metadata_location)}, "
             f"snapshot_from_id = {snapshot_id})"
         )
-    if table in CANONICAL_MART_TABLES:
-        raise CanonicalTableNotFound(table)
+    if _is_canonical_mart_table(table, namespace):
+        raise CanonicalTableNotFound(table_identifier)
 
-    latest_metadata_location = _latest_metadata_location(table)
+    try:
+        latest_metadata_location = _latest_metadata_location_for_identifier(table_identifier)
+    except FileNotFoundError as exc:
+        raise CanonicalTableNotFound(table_identifier) from exc
     return f"iceberg_scan({_sql_string_literal(str(latest_metadata_location))})"
+
+
+def _canonical_snapshot_id_for_identifier(table_identifier: str) -> int:
+    parts = _validate_table_identifier(table_identifier)
+    namespace = parts[0]
+    table = parts[-1]
+    snapshot_entry = _canonical_mart_snapshot_entry(table, namespace=namespace)
+    if snapshot_entry is not None:
+        return int(snapshot_entry["snapshot_id"])
+    if _is_canonical_mart_table(table, namespace):
+        raise CanonicalTableNotFound(table_identifier)
+
+    try:
+        metadata_location = _latest_metadata_location_for_identifier(table_identifier)
+    except FileNotFoundError as exc:
+        raise CanonicalTableNotFound(table_identifier) from exc
+    metadata = json.loads(metadata_location.read_text(encoding="utf-8"))
+    snapshot_id = metadata.get("current-snapshot-id")
+    if isinstance(snapshot_id, int):
+        return snapshot_id
+    raise CanonicalTableNotFound(table_identifier)
 
 
 def _iceberg_snapshot_expression(table_identifier: str, snapshot_id: int) -> str:
@@ -261,13 +362,20 @@ def _iceberg_table_location(table_identifier: str) -> Path:
     return warehouse_path.joinpath(*parts)
 
 
-def _canonical_mart_snapshot_entry(table: str) -> dict[str, str | int] | None:
-    manifest_path = _canonical_mart_snapshot_manifest_path()
+def _canonical_mart_snapshot_entry(
+    table: str,
+    *,
+    namespace: str = CANONICAL_NAMESPACE,
+) -> dict[str, str | int] | None:
+    manifest_path = _canonical_mart_snapshot_manifest_path(namespace)
     if not manifest_path.exists():
         return None
 
     payload = json.loads(manifest_path.read_text(encoding="utf-8"))
-    tables = payload.get("tables", {})
+    manifest_key = _CANONICAL_MART_MANIFEST_KEY_BY_NAMESPACE.get(namespace)
+    if manifest_key is None:
+        return None
+    tables = payload.get(manifest_key, {})
     if not isinstance(tables, dict):
         return None
     entry = tables.get(table)
@@ -280,9 +388,16 @@ def _canonical_mart_snapshot_entry(table: str) -> dict[str, str | int] | None:
     return None
 
 
-def _canonical_mart_snapshot_manifest_path() -> Path:
+def _canonical_mart_snapshot_manifest_path(
+    namespace: str = CANONICAL_NAMESPACE,
+) -> Path:
+    _validate_identifier(namespace)
     warehouse_path = get_settings().iceberg_warehouse_path.expanduser()
-    return warehouse_path / CANONICAL_NAMESPACE / CANONICAL_MART_SNAPSHOT_SET_FILE
+    return warehouse_path / namespace / CANONICAL_MART_SNAPSHOT_SET_FILE
+
+
+def _is_canonical_mart_table(table: str, namespace: str) -> bool:
+    return table in _CANONICAL_MART_TABLES_BY_NAMESPACE.get(namespace, frozenset())
 
 
 def _quote_identifier(identifier: str) -> str:
@@ -329,7 +444,10 @@ def _sql_string_literal(value: str) -> str:
 
 def _is_missing_table_error(exc: duckdb.Error, table: str) -> bool:
     detail = str(exc).lower()
-    expected_location = str(_canonical_table_location(table)).lower()
+    if "." in table:
+        expected_location = str(_iceberg_table_location(table)).lower()
+    else:
+        expected_location = str(_canonical_table_location(table)).lower()
     missing_markers = ("does not exist", "no such file", "not found", "cannot open")
     return (
         table.lower() in detail or expected_location in detail

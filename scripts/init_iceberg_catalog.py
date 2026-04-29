@@ -34,7 +34,7 @@ def main(argv: Sequence[str] | None = None) -> int:
         print(f"failed to initialize Iceberg catalog: {exc}", file=sys.stderr)
         return 1
 
-    print("initialized Iceberg namespaces: canonical, formal, analytical")
+    print("initialized Iceberg namespaces: " + ", ".join(DEFAULT_NAMESPACES))
     return 0
 
 

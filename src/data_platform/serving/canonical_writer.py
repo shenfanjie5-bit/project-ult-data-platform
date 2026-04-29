@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import argparse
+from collections import Counter
 from dataclasses import asdict, dataclass
 from datetime import UTC, datetime
 import json
@@ -359,6 +360,427 @@ CANONICAL_MART_LOAD_SPECS: Final[tuple[CanonicalLoadSpec, ...]] = (
     ),
 )
 
+# ---------------------------------------------------------------------------
+# Canonical V2 + canonical lineage load specs.
+#
+# The v2 spec is provider-neutral by construction: canonical identifiers
+# (security_id / index_id / entity_id) instead of provider-shaped names;
+# raw-zone lineage columns move to the matching canonical_lineage spec.
+#
+# Coverage: 9 paired specs covering all canonical mart tables — dim_security,
+# stock_basic, dim_index, fact_price_bar, fact_financial_indicator,
+# fact_market_daily_feature, fact_index_price_bar, fact_forecast_event, and
+# fact_event. fact_event currently covers 8 source interfaces after M1.8
+# block_trade promotion; the 8 unstaged candidates remain blocked upstream.
+#
+# Per M1-A design + M1-B spike + M1.3 second batch + M1.6 event promotion.
+# ---------------------------------------------------------------------------
+
+CANONICAL_V2_DIM_SECURITY_LOAD_SPEC: Final[CanonicalLoadSpec] = CanonicalLoadSpec(
+    identifier="canonical_v2.dim_security",
+    duckdb_relation="mart_dim_security_v2",
+    required_columns=(
+        "security_id",
+        "symbol",
+        "display_name",
+        "market",
+        "industry",
+        "list_date",
+        "is_active",
+        "area",
+        "fullname",
+        "exchange",
+        "curr_type",
+        "list_status",
+        "delist_date",
+        "setup_date",
+        "province",
+        "city",
+        "reg_capital",
+        "employees",
+        "main_business",
+        "latest_namechange_name",
+        "latest_namechange_start_date",
+        "latest_namechange_end_date",
+        "latest_namechange_ann_date",
+        "latest_namechange_reason",
+    ),
+)
+
+CANONICAL_LINEAGE_DIM_SECURITY_LOAD_SPEC: Final[CanonicalLoadSpec] = CanonicalLoadSpec(
+    identifier="canonical_lineage.lineage_dim_security",
+    duckdb_relation="mart_lineage_dim_security",
+    required_columns=(
+        "security_id",
+        "source_provider",
+        "source_interface_id",
+        "source_run_id",
+        "raw_loaded_at",
+    ),
+)
+
+CANONICAL_V2_STOCK_BASIC_LOAD_SPEC: Final[CanonicalLoadSpec] = CanonicalLoadSpec(
+    identifier="canonical_v2.stock_basic",
+    duckdb_relation="mart_stock_basic_v2",
+    required_columns=(
+        "security_id",
+        "symbol",
+        "display_name",
+        "area",
+        "industry",
+        "market",
+        "list_date",
+        "is_active",
+    ),
+)
+
+CANONICAL_LINEAGE_STOCK_BASIC_LOAD_SPEC: Final[CanonicalLoadSpec] = CanonicalLoadSpec(
+    identifier="canonical_lineage.lineage_stock_basic",
+    duckdb_relation="mart_lineage_stock_basic",
+    required_columns=(
+        "security_id",
+        "source_provider",
+        "source_interface_id",
+        "source_run_id",
+        "raw_loaded_at",
+    ),
+)
+
+CANONICAL_V2_DIM_INDEX_LOAD_SPEC: Final[CanonicalLoadSpec] = CanonicalLoadSpec(
+    identifier="canonical_v2.dim_index",
+    duckdb_relation="mart_dim_index_v2",
+    required_columns=(
+        "index_id",
+        "index_name",
+        "index_market",
+        "index_category",
+        "first_effective_date",
+        "latest_effective_date",
+    ),
+)
+
+CANONICAL_LINEAGE_DIM_INDEX_LOAD_SPEC: Final[CanonicalLoadSpec] = CanonicalLoadSpec(
+    identifier="canonical_lineage.lineage_dim_index",
+    duckdb_relation="mart_lineage_dim_index",
+    required_columns=(
+        "index_id",
+        "source_provider",
+        "source_interface_id",
+        "source_run_id",
+        "raw_loaded_at",
+    ),
+)
+
+CANONICAL_V2_FACT_PRICE_BAR_LOAD_SPEC: Final[CanonicalLoadSpec] = CanonicalLoadSpec(
+    identifier="canonical_v2.fact_price_bar",
+    duckdb_relation="mart_fact_price_bar_v2",
+    required_columns=(
+        "security_id",
+        "trade_date",
+        "freq",
+        "open",
+        "high",
+        "low",
+        "close",
+        "pre_close",
+        "change",
+        "pct_chg",
+        "vol",
+        "amount",
+        "adj_factor",
+    ),
+)
+
+CANONICAL_LINEAGE_FACT_PRICE_BAR_LOAD_SPEC: Final[CanonicalLoadSpec] = CanonicalLoadSpec(
+    identifier="canonical_lineage.lineage_fact_price_bar",
+    duckdb_relation="mart_lineage_fact_price_bar",
+    required_columns=(
+        "security_id",
+        "trade_date",
+        "freq",
+        "source_provider",
+        "source_interface_id",
+        "source_run_id",
+        "raw_loaded_at",
+    ),
+)
+
+CANONICAL_V2_FACT_FINANCIAL_INDICATOR_LOAD_SPEC: Final[CanonicalLoadSpec] = CanonicalLoadSpec(
+    identifier="canonical_v2.fact_financial_indicator",
+    duckdb_relation="mart_fact_financial_indicator_v2",
+    required_columns=(
+        "security_id",
+        "end_date",
+        "ann_date",
+        "f_ann_date",
+        "report_type",
+        "comp_type",
+        "update_flag",
+        "is_latest",
+        "basic_eps",
+        "diluted_eps",
+        "total_revenue",
+        "revenue",
+        "operate_profit",
+        "total_profit",
+        "n_income",
+        "n_income_attr_p",
+        "money_cap",
+        "total_cur_assets",
+        "total_assets",
+        "total_cur_liab",
+        "total_liab",
+        "total_hldr_eqy_exc_min_int",
+        "total_liab_hldr_eqy",
+        "net_profit",
+        "n_cashflow_act",
+        "n_cashflow_inv_act",
+        "n_cash_flows_fnc_act",
+        "n_incr_cash_cash_equ",
+        "free_cashflow",
+        "eps",
+        "dt_eps",
+        "grossprofit_margin",
+        "netprofit_margin",
+        "roe",
+        "roa",
+        "debt_to_assets",
+        "or_yoy",
+        "netprofit_yoy",
+    ),
+)
+
+CANONICAL_LINEAGE_FACT_FINANCIAL_INDICATOR_LOAD_SPEC: Final[CanonicalLoadSpec] = CanonicalLoadSpec(
+    identifier="canonical_lineage.lineage_fact_financial_indicator",
+    duckdb_relation="mart_lineage_fact_financial_indicator",
+    required_columns=(
+        "security_id",
+        "end_date",
+        "report_type",
+        "source_provider",
+        "source_interface_id",
+        "source_run_id",
+        "raw_loaded_at",
+    ),
+)
+
+CANONICAL_V2_FACT_MARKET_DAILY_FEATURE_LOAD_SPEC: Final[CanonicalLoadSpec] = CanonicalLoadSpec(
+    identifier="canonical_v2.fact_market_daily_feature",
+    duckdb_relation="mart_fact_market_daily_feature_v2",
+    required_columns=(
+        "security_id",
+        "trade_date",
+        "close",
+        "turnover_rate",
+        "turnover_rate_f",
+        "volume_ratio",
+        "pe",
+        "pe_ttm",
+        "pb",
+        "ps",
+        "ps_ttm",
+        "dv_ratio",
+        "dv_ttm",
+        "total_share",
+        "float_share",
+        "free_share",
+        "total_mv",
+        "circ_mv",
+        "up_limit",
+        "down_limit",
+        "buy_sm_vol",
+        "buy_sm_amount",
+        "sell_sm_vol",
+        "sell_sm_amount",
+        "buy_md_vol",
+        "buy_md_amount",
+        "sell_md_vol",
+        "sell_md_amount",
+        "buy_lg_vol",
+        "buy_lg_amount",
+        "sell_lg_vol",
+        "sell_lg_amount",
+        "buy_elg_vol",
+        "buy_elg_amount",
+        "sell_elg_vol",
+        "sell_elg_amount",
+        "net_mf_vol",
+        "net_mf_amount",
+    ),
+)
+
+CANONICAL_LINEAGE_FACT_MARKET_DAILY_FEATURE_LOAD_SPEC: Final[CanonicalLoadSpec] = CanonicalLoadSpec(
+    identifier="canonical_lineage.lineage_fact_market_daily_feature",
+    duckdb_relation="mart_lineage_fact_market_daily_feature",
+    required_columns=(
+        "security_id",
+        "trade_date",
+        "source_provider",
+        "source_interface_id",
+        "source_run_id",
+        "raw_loaded_at",
+    ),
+)
+
+CANONICAL_V2_FACT_INDEX_PRICE_BAR_LOAD_SPEC: Final[CanonicalLoadSpec] = CanonicalLoadSpec(
+    identifier="canonical_v2.fact_index_price_bar",
+    duckdb_relation="mart_fact_index_price_bar_v2",
+    required_columns=(
+        "index_id",
+        "trade_date",
+        "open",
+        "high",
+        "low",
+        "close",
+        "pre_close",
+        "change",
+        "pct_chg",
+        "vol",
+        "amount",
+        "exchange",
+        "is_open",
+        "pretrade_date",
+    ),
+)
+
+CANONICAL_LINEAGE_FACT_INDEX_PRICE_BAR_LOAD_SPEC: Final[CanonicalLoadSpec] = CanonicalLoadSpec(
+    identifier="canonical_lineage.lineage_fact_index_price_bar",
+    duckdb_relation="mart_lineage_fact_index_price_bar",
+    required_columns=(
+        "index_id",
+        "trade_date",
+        "source_provider",
+        "source_interface_id",
+        "source_run_id",
+        "raw_loaded_at",
+    ),
+)
+
+CANONICAL_V2_FACT_FORECAST_EVENT_LOAD_SPEC: Final[CanonicalLoadSpec] = CanonicalLoadSpec(
+    identifier="canonical_v2.fact_forecast_event",
+    duckdb_relation="mart_fact_forecast_event_v2",
+    required_columns=(
+        "security_id",
+        "announcement_date",
+        "report_period",
+        "forecast_type",
+        "p_change_min",
+        "p_change_max",
+        "net_profit_min",
+        "net_profit_max",
+        "last_parent_net",
+        "first_ann_date",
+        "summary",
+        "change_reason",
+        "update_flag",
+    ),
+)
+
+CANONICAL_LINEAGE_FACT_FORECAST_EVENT_LOAD_SPEC: Final[CanonicalLoadSpec] = CanonicalLoadSpec(
+    identifier="canonical_lineage.lineage_fact_forecast_event",
+    duckdb_relation="mart_lineage_fact_forecast_event",
+    required_columns=(
+        "security_id",
+        "announcement_date",
+        "report_period",
+        "update_flag",
+        "forecast_type",
+        "source_provider",
+        "source_interface_id",
+        "source_run_id",
+        "raw_loaded_at",
+    ),
+)
+
+# Provider-neutral event fact. Mirrors the 11-column v2
+# spec in iceberg_tables.py. `canonical_loaded_at` is injected by the writer
+# and intentionally NOT listed in required_columns.
+CANONICAL_V2_FACT_EVENT_LOAD_SPEC: Final[CanonicalLoadSpec] = CanonicalLoadSpec(
+    identifier="canonical_v2.fact_event",
+    duckdb_relation="mart_fact_event_v2",
+    required_columns=(
+        "event_type",
+        "entity_id",
+        "event_date",
+        "event_key",
+        "title",
+        "summary",
+        "event_subtype",
+        "related_date",
+        "reference_url",
+        "rec_time",
+    ),
+)
+
+# Lineage sibling for canonical_v2.fact_event. Each row carries its true
+# `source_interface_id` (per-row, not a composite string).
+CANONICAL_LINEAGE_FACT_EVENT_LOAD_SPEC: Final[CanonicalLoadSpec] = CanonicalLoadSpec(
+    identifier="canonical_lineage.lineage_fact_event",
+    duckdb_relation="mart_lineage_fact_event",
+    required_columns=(
+        "event_type",
+        "entity_id",
+        "event_date",
+        "event_key",
+        "source_provider",
+        "source_interface_id",
+        "source_run_id",
+        "raw_loaded_at",
+    ),
+)
+
+CANONICAL_V2_MART_LOAD_SPECS: Final[tuple[CanonicalLoadSpec, ...]] = (
+    CANONICAL_V2_DIM_SECURITY_LOAD_SPEC,
+    CANONICAL_V2_STOCK_BASIC_LOAD_SPEC,
+    CANONICAL_V2_DIM_INDEX_LOAD_SPEC,
+    CANONICAL_V2_FACT_PRICE_BAR_LOAD_SPEC,
+    CANONICAL_V2_FACT_FINANCIAL_INDICATOR_LOAD_SPEC,
+    CANONICAL_V2_FACT_MARKET_DAILY_FEATURE_LOAD_SPEC,
+    CANONICAL_V2_FACT_INDEX_PRICE_BAR_LOAD_SPEC,
+    CANONICAL_V2_FACT_FORECAST_EVENT_LOAD_SPEC,
+    CANONICAL_V2_FACT_EVENT_LOAD_SPEC,
+)
+
+CANONICAL_LINEAGE_MART_LOAD_SPECS: Final[tuple[CanonicalLoadSpec, ...]] = (
+    CANONICAL_LINEAGE_DIM_SECURITY_LOAD_SPEC,
+    CANONICAL_LINEAGE_STOCK_BASIC_LOAD_SPEC,
+    CANONICAL_LINEAGE_DIM_INDEX_LOAD_SPEC,
+    CANONICAL_LINEAGE_FACT_PRICE_BAR_LOAD_SPEC,
+    CANONICAL_LINEAGE_FACT_FINANCIAL_INDICATOR_LOAD_SPEC,
+    CANONICAL_LINEAGE_FACT_MARKET_DAILY_FEATURE_LOAD_SPEC,
+    CANONICAL_LINEAGE_FACT_INDEX_PRICE_BAR_LOAD_SPEC,
+    CANONICAL_LINEAGE_FACT_FORECAST_EVENT_LOAD_SPEC,
+    CANONICAL_LINEAGE_FACT_EVENT_LOAD_SPEC,
+)
+
+# Canonical PK columns per (v2, lineage) load-spec pair. The pairing validator
+# uses these to build composite key tuples for row-set comparison. NOTE: lineage
+# spec may declare additional canonical PK columns beyond what canonical_v2
+# carries (fact_financial_indicator: lineage uses `report_type` for uniqueness,
+# while canonical_v2 keeps the full feature set).
+CANONICAL_V2_PAIRING_KEY_COLUMNS: Final[dict[str, tuple[str, ...]]] = {
+    "canonical_v2.dim_security": ("security_id",),
+    "canonical_v2.stock_basic": ("security_id",),
+    "canonical_v2.dim_index": ("index_id",),
+    "canonical_v2.fact_price_bar": ("security_id", "trade_date", "freq"),
+    "canonical_v2.fact_financial_indicator": ("security_id", "end_date", "report_type"),
+    "canonical_v2.fact_market_daily_feature": ("security_id", "trade_date"),
+    "canonical_v2.fact_index_price_bar": ("index_id", "trade_date"),
+    "canonical_v2.fact_forecast_event": (
+        "security_id",
+        "announcement_date",
+        "report_period",
+        "update_flag",
+        "forecast_type",
+    ),
+    "canonical_v2.fact_event": (
+        "event_type",
+        "entity_id",
+        "event_date",
+        "event_key",
+    ),
+}
+
 
 def load_canonical_table(
     catalog: SqlCatalog,
@@ -383,14 +805,22 @@ def load_canonical_table(
 
 def _reject_public_mart_load(spec: CanonicalLoadSpec) -> None:
     mart_identifiers = {mart_spec.identifier for mart_spec in CANONICAL_MART_LOAD_SPECS}
-    if spec.identifier not in mart_identifiers:
-        return
-
-    msg = (
-        f"{spec.identifier} is part of the canonical mart snapshot set; "
-        "publish marts with load_canonical_marts"
-    )
-    raise ValueError(msg)
+    v2_mart_identifiers = {mart_spec.identifier for mart_spec in CANONICAL_V2_MART_LOAD_SPECS}
+    lineage_mart_identifiers = {
+        mart_spec.identifier for mart_spec in CANONICAL_LINEAGE_MART_LOAD_SPECS
+    }
+    if spec.identifier in mart_identifiers:
+        msg = (
+            f"{spec.identifier} is part of the canonical mart snapshot set; "
+            "publish marts with load_canonical_marts"
+        )
+        raise ValueError(msg)
+    if spec.identifier in v2_mart_identifiers or spec.identifier in lineage_mart_identifiers:
+        msg = (
+            f"{spec.identifier} is part of the canonical_v2 / canonical_lineage "
+            "mart snapshot set; publish via load_canonical_v2_marts"
+        )
+        raise ValueError(msg)
 
 
 def _prepare_canonical_load(
@@ -399,10 +829,16 @@ def _prepare_canonical_load(
     spec: CanonicalLoadSpec,
     *,
     allow_empty: bool,
+    canonical_loaded_at: datetime | None = None,
 ) -> _PreparedCanonicalLoad:
     table = catalog.load_table(spec.identifier)
     target_columns = _table_field_names(table)
-    table_arrow = _read_duckdb_relation(duckdb_path, spec, target_columns)
+    table_arrow = _read_duckdb_relation(
+        duckdb_path,
+        spec,
+        target_columns,
+        canonical_loaded_at=canonical_loaded_at,
+    )
     _validate_no_forbidden_payload_fields(table_arrow)
     _validate_payload_fields_match_target(spec.identifier, table, table_arrow)
     _validate_non_empty_staging(spec, table_arrow, allow_empty=allow_empty)
@@ -492,6 +928,353 @@ def load_canonical_marts(
     return results
 
 
+def load_canonical_v2_marts(
+    catalog: SqlCatalog,
+    duckdb_path: Path,
+    *,
+    allow_empty: bool = False,
+) -> list[WriteResult]:
+    """Load canonical_v2 mart tables and their canonical_lineage siblings together.
+
+    Canonical_v2 rows are provider-neutral by construction; the matching lineage
+    rows carry source/run metadata 1:1 keyed on the canonical PK. This function
+    writes both sets in lock-step inside one Python frame so the
+    `_mart_snapshot_set.json` v2 sidecar pins them as a co-published pair.
+
+    Coverage: 9 paired specs — dim_security, stock_basic, dim_index,
+    fact_price_bar, fact_financial_indicator, fact_market_daily_feature,
+    fact_index_price_bar, fact_forecast_event, and fact_event. The pairing-key validator
+    (`_validate_canonical_v2_mart_pairings`) enforces 1:1 row matching on the
+    composite PK declared in `CANONICAL_V2_PAIRING_KEY_COLUMNS`.
+    """
+
+    if len(CANONICAL_V2_MART_LOAD_SPECS) != len(CANONICAL_LINEAGE_MART_LOAD_SPECS):
+        msg = (
+            "canonical_v2 and canonical_lineage mart spec sets must be the same "
+            "length (paired publish); "
+            f"got v2={len(CANONICAL_V2_MART_LOAD_SPECS)} "
+            f"lineage={len(CANONICAL_LINEAGE_MART_LOAD_SPECS)}"
+        )
+        raise RuntimeError(msg)
+
+    paired_canonical_loaded_at = datetime.now(UTC).replace(tzinfo=None)
+    prepared_v2_loads = [
+        _prepare_canonical_load(
+            catalog,
+            duckdb_path,
+            spec,
+            allow_empty=allow_empty,
+            canonical_loaded_at=paired_canonical_loaded_at,
+        )
+        for spec in CANONICAL_V2_MART_LOAD_SPECS
+    ]
+    prepared_lineage_loads = [
+        _prepare_canonical_load(
+            catalog,
+            duckdb_path,
+            spec,
+            allow_empty=allow_empty,
+            canonical_loaded_at=paired_canonical_loaded_at,
+        )
+        for spec in CANONICAL_LINEAGE_MART_LOAD_SPECS
+    ]
+    _validate_canonical_v2_mart_pairings(prepared_v2_loads, prepared_lineage_loads)
+
+    results: list[WriteResult] = []
+    canonical_v2_snapshot_set: dict[str, dict[str, int | str]] = {}
+    canonical_lineage_snapshot_set: dict[str, dict[str, int | str]] = {}
+    load_id = str(uuid4())
+    original_snapshot_ids = {
+        prepared.spec.identifier: _current_snapshot_id_or_none(prepared.table)
+        for prepared in (*prepared_v2_loads, *prepared_lineage_loads)
+    }
+    attempted_overwrites: list[_PreparedCanonicalLoad] = []
+
+    try:
+        for prepared_v2, prepared_lineage in zip(
+            prepared_v2_loads,
+            prepared_lineage_loads,
+            strict=True,
+        ):
+            attempted_overwrites.append(prepared_v2)
+            v2_result, v2_refreshed = _overwrite_prepared_load(
+                prepared_v2,
+                started_at=perf_counter(),
+            )
+            attempted_overwrites.append(prepared_lineage)
+            lineage_result, lineage_refreshed = _overwrite_prepared_load(
+                prepared_lineage,
+                started_at=perf_counter(),
+            )
+            results.append(v2_result)
+            results.append(lineage_result)
+            canonical_v2_snapshot_set[_table_name_from_identifier(v2_result.table)] = {
+                "identifier": v2_result.table,
+                "snapshot_id": v2_result.snapshot_id,
+                "metadata_location": str(
+                    _local_path_from_location(v2_refreshed.metadata_location)
+                ),
+            }
+            canonical_lineage_snapshot_set[_table_name_from_identifier(lineage_result.table)] = {
+                "identifier": lineage_result.table,
+                "snapshot_id": lineage_result.snapshot_id,
+                "metadata_location": str(
+                    _local_path_from_location(lineage_refreshed.metadata_location)
+                ),
+            }
+
+        _write_canonical_v2_snapshot_set_manifest(
+            prepared_v2_loads[0].table,
+            load_id=load_id,
+            canonical_v2_tables=canonical_v2_snapshot_set,
+            canonical_lineage_tables=canonical_lineage_snapshot_set,
+        )
+    except Exception:
+        _rollback_attempted_overwrites(attempted_overwrites, original_snapshot_ids)
+        raise
+    return results
+
+
+def _validate_canonical_v2_mart_pairings(
+    prepared_v2_loads: Sequence[_PreparedCanonicalLoad],
+    prepared_lineage_loads: Sequence[_PreparedCanonicalLoad],
+) -> None:
+    for prepared_v2, prepared_lineage in zip(
+        prepared_v2_loads,
+        prepared_lineage_loads,
+        strict=True,
+    ):
+        key_columns = _canonical_v2_pairing_keys(prepared_v2.spec, prepared_lineage.spec)
+        _validate_canonical_v2_mart_pairing(
+            prepared_v2,
+            prepared_lineage,
+            key_columns=key_columns,
+        )
+
+
+def _canonical_v2_pairing_keys(
+    v2_spec: CanonicalLoadSpec,
+    lineage_spec: CanonicalLoadSpec,
+) -> tuple[str, ...]:
+    """Return the composite canonical PK columns shared by a v2/lineage pair.
+
+    Falls back to the leading column shared between both specs when the v2
+    identifier is not registered in `CANONICAL_V2_PAIRING_KEY_COLUMNS`.
+    """
+
+    declared = CANONICAL_V2_PAIRING_KEY_COLUMNS.get(v2_spec.identifier)
+    if declared is not None:
+        missing_in_v2 = [col for col in declared if col not in v2_spec.required_columns]
+        missing_in_lineage = [
+            col for col in declared if col not in lineage_spec.required_columns
+        ]
+        if missing_in_v2 or missing_in_lineage:
+            msg = (
+                "canonical_v2 / canonical_lineage spec is missing declared pairing "
+                f"key columns for {v2_spec.identifier} + {lineage_spec.identifier}: "
+                f"missing_in_v2={missing_in_v2}, missing_in_lineage={missing_in_lineage}"
+            )
+            raise RuntimeError(msg)
+        return declared
+
+    key_column = v2_spec.required_columns[0]
+    lineage_key_column = lineage_spec.required_columns[0]
+    if key_column == lineage_key_column:
+        return (key_column,)
+
+    msg = (
+        "canonical_v2 and canonical_lineage mart specs must share the same "
+        "leading canonical key column or be registered in "
+        "CANONICAL_V2_PAIRING_KEY_COLUMNS; "
+        f"got {v2_spec.identifier}.{key_column} and "
+        f"{lineage_spec.identifier}.{lineage_key_column}"
+    )
+    raise RuntimeError(msg)
+
+
+def _validate_canonical_v2_mart_pairing(
+    prepared_v2: _PreparedCanonicalLoad,
+    prepared_lineage: _PreparedCanonicalLoad,
+    *,
+    key_columns: tuple[str, ...],
+) -> None:
+    if not key_columns:
+        msg = (
+            "canonical_v2 / canonical_lineage pairing requires at least one "
+            f"canonical key column; got empty tuple for {prepared_v2.spec.identifier}"
+        )
+        raise RuntimeError(msg)
+
+    key_label = ",".join(key_columns)
+    v2_keys = _canonical_key_values(prepared_v2, key_columns)
+    lineage_keys = _canonical_key_values(prepared_lineage, key_columns)
+    if len(v2_keys) != len(lineage_keys):
+        msg = (
+            "canonical_v2 and canonical_lineage row_count mismatch for paired "
+            f"publish {prepared_v2.spec.identifier} + {prepared_lineage.spec.identifier} "
+            f"on ({key_label}): v2={len(v2_keys)} lineage={len(lineage_keys)} "
+            f"lineage_coverage={_lineage_coverage(v2_keys, lineage_keys):.1%}"
+        )
+        raise ValueError(msg)
+
+    _validate_unique_canonical_keys(prepared_v2.spec.identifier, key_label, v2_keys)
+    _validate_unique_canonical_keys(
+        prepared_lineage.spec.identifier,
+        key_label,
+        lineage_keys,
+    )
+
+    v2_key_set = set(v2_keys)
+    lineage_key_set = set(lineage_keys)
+    if v2_key_set == lineage_key_set:
+        return
+
+    missing_lineage_keys = sorted(v2_key_set - lineage_key_set, key=str)
+    extra_lineage_keys = sorted(lineage_key_set - v2_key_set, key=str)
+    details = [
+        f"lineage_coverage={_lineage_coverage(v2_keys, lineage_keys):.1%}",
+    ]
+    if missing_lineage_keys:
+        details.append(
+            "missing lineage key(s): " + ", ".join(_format_key_sample(missing_lineage_keys))
+        )
+    if extra_lineage_keys:
+        details.append(
+            "extra lineage key(s): " + ", ".join(_format_key_sample(extra_lineage_keys))
+        )
+    msg = (
+        "canonical_v2 and canonical_lineage key set mismatch for paired publish "
+        f"{prepared_v2.spec.identifier} + {prepared_lineage.spec.identifier} "
+        f"on ({key_label}): "
+        + "; ".join(details)
+    )
+    raise ValueError(msg)
+
+
+def _canonical_key_values(
+    prepared: _PreparedCanonicalLoad,
+    key_columns: tuple[str, ...],
+) -> list[tuple[object, ...]]:
+    """Build a list of composite canonical-key tuples from the payload."""
+
+    schema_names = set(prepared.table_arrow.schema.names)
+    missing = [col for col in key_columns if col not in schema_names]
+    if missing:
+        msg = (
+            f"{prepared.spec.identifier} payload is missing canonical key "
+            f"column(s) {missing}"
+        )
+        raise ValueError(msg)
+
+    column_values: list[list[object]] = [
+        list(prepared.table_arrow.column(col).to_pylist()) for col in key_columns
+    ]
+    row_count = len(column_values[0]) if column_values else 0
+
+    composite: list[tuple[object, ...]] = []
+    for row_idx in range(row_count):
+        row_key = tuple(column_values[col_idx][row_idx] for col_idx in range(len(key_columns)))
+        if any(value is None for value in row_key):
+            msg = (
+                f"{prepared.spec.identifier} payload contains null canonical key "
+                f"in column(s) {','.join(key_columns)} at row {row_idx}"
+            )
+            raise ValueError(msg)
+        composite.append(row_key)
+    return composite
+
+
+def _validate_unique_canonical_keys(
+    identifier: str,
+    key_label: str,
+    values: Sequence[tuple[object, ...]],
+) -> None:
+    duplicate_keys = [key for key, count in Counter(values).items() if count > 1]
+    if not duplicate_keys:
+        return
+
+    msg = (
+        f"{identifier} has duplicate canonical key(s) in ({key_label}): "
+        + ", ".join(_format_key_sample(sorted(duplicate_keys, key=str)))
+    )
+    raise ValueError(msg)
+
+
+def _lineage_coverage(v2_keys: Sequence[object], lineage_keys: Sequence[object]) -> float:
+    v2_key_set = set(v2_keys)
+    if not v2_key_set:
+        return 1.0
+    return len(v2_key_set.intersection(lineage_keys)) / len(v2_key_set)
+
+
+def _format_key_sample(keys: Sequence[object], *, limit: int = 5) -> list[str]:
+    formatted = [str(key) for key in keys[:limit]]
+    if len(keys) > limit:
+        formatted.append("...")
+    return formatted
+
+
+def _current_snapshot_id_or_none(table: Table) -> int | None:
+    snapshot = table.current_snapshot()
+    if snapshot is None:
+        return None
+    return int(snapshot.snapshot_id)
+
+
+def _rollback_attempted_overwrites(
+    attempted_overwrites: Sequence[_PreparedCanonicalLoad],
+    original_snapshot_ids: dict[str, int | None],
+) -> None:
+    rolled_back_identifiers: set[str] = set()
+    for prepared in reversed(attempted_overwrites):
+        identifier = prepared.spec.identifier
+        if identifier in rolled_back_identifiers:
+            continue
+        rolled_back_identifiers.add(identifier)
+        original_snapshot_id = original_snapshot_ids[identifier]
+        if original_snapshot_id is None:
+            logger.warning(
+                "canonical_v2_rollback_skipped_no_prior_snapshot",
+                extra={"table": identifier},
+            )
+            continue
+        try:
+            prepared.table.refresh().manage_snapshots().rollback_to_snapshot(
+                original_snapshot_id
+            ).commit()
+            logger.info(
+                "canonical_v2_rollback",
+                extra={"table": identifier, "snapshot": original_snapshot_id},
+            )
+        except Exception:
+            logger.warning(
+                "canonical_v2_rollback_failed",
+                extra={"table": identifier, "snapshot": original_snapshot_id},
+                exc_info=True,
+            )
+
+
+def _write_canonical_v2_snapshot_set_manifest(
+    table: Table,
+    *,
+    load_id: str,
+    canonical_v2_tables: dict[str, dict[str, int | str]],
+    canonical_lineage_tables: dict[str, dict[str, int | str]],
+) -> None:
+    manifest_path = _mart_snapshot_set_manifest_path(table)
+    manifest_path.parent.mkdir(parents=True, exist_ok=True)
+    payload = {
+        "version": 2,
+        "load_id": load_id,
+        "published_at": datetime.now(UTC).isoformat(),
+        "canonical_v2_tables": canonical_v2_tables,
+        "canonical_lineage_tables": canonical_lineage_tables,
+    }
+    temp_path = manifest_path.with_name(f".{manifest_path.name}.{load_id}.tmp")
+    temp_path.write_text(json.dumps(payload, sort_keys=True), encoding="utf-8")
+    temp_path.replace(manifest_path)
+
+
 def main(argv: Sequence[str] | None = None) -> int:
     try:
         parser = _JsonErrorArgumentParser(
@@ -538,6 +1321,8 @@ def _read_duckdb_relation(
     duckdb_path: Path,
     spec: CanonicalLoadSpec,
     target_columns: Sequence[str],
+    *,
+    canonical_loaded_at: datetime | None = None,
 ) -> pa.Table:
     select_expressions: list[str] = []
     for column in spec.required_columns:
@@ -545,7 +1330,18 @@ def _read_duckdb_relation(
         select_expressions.append(f"{quoted_column} AS {quoted_column}")
     if CANONICAL_LOADED_AT_COLUMN in target_columns:
         quoted_column = _quote_identifier(CANONICAL_LOADED_AT_COLUMN)
-        select_expressions.append(f"CAST(current_timestamp AS TIMESTAMP) AS {quoted_column}")
+        if canonical_loaded_at is None:
+            select_expressions.append(
+                f"CAST(current_timestamp AS TIMESTAMP) AS {quoted_column}"
+            )
+        else:
+            loaded_at_literal = canonical_loaded_at.isoformat(
+                sep=" ",
+                timespec="microseconds",
+            )
+            select_expressions.append(
+                f"TIMESTAMP '{loaded_at_literal}' AS {quoted_column}"
+            )
 
     sql = f"""
 SELECT
@@ -684,13 +1480,35 @@ def _serialize_result(result: WriteResult | list[WriteResult]) -> object:
 
 
 __all__ = [
+    "CANONICAL_LINEAGE_DIM_INDEX_LOAD_SPEC",
+    "CANONICAL_LINEAGE_DIM_SECURITY_LOAD_SPEC",
+    "CANONICAL_LINEAGE_FACT_EVENT_LOAD_SPEC",
+    "CANONICAL_LINEAGE_FACT_FINANCIAL_INDICATOR_LOAD_SPEC",
+    "CANONICAL_LINEAGE_FACT_FORECAST_EVENT_LOAD_SPEC",
+    "CANONICAL_LINEAGE_FACT_INDEX_PRICE_BAR_LOAD_SPEC",
+    "CANONICAL_LINEAGE_FACT_MARKET_DAILY_FEATURE_LOAD_SPEC",
+    "CANONICAL_LINEAGE_FACT_PRICE_BAR_LOAD_SPEC",
+    "CANONICAL_LINEAGE_MART_LOAD_SPECS",
+    "CANONICAL_LINEAGE_STOCK_BASIC_LOAD_SPEC",
     "CANONICAL_MART_LOAD_SPECS",
     "CANONICAL_MART_SNAPSHOT_SET_FILE",
+    "CANONICAL_V2_DIM_INDEX_LOAD_SPEC",
+    "CANONICAL_V2_DIM_SECURITY_LOAD_SPEC",
+    "CANONICAL_V2_FACT_EVENT_LOAD_SPEC",
+    "CANONICAL_V2_FACT_FINANCIAL_INDICATOR_LOAD_SPEC",
+    "CANONICAL_V2_FACT_FORECAST_EVENT_LOAD_SPEC",
+    "CANONICAL_V2_FACT_INDEX_PRICE_BAR_LOAD_SPEC",
+    "CANONICAL_V2_FACT_MARKET_DAILY_FEATURE_LOAD_SPEC",
+    "CANONICAL_V2_FACT_PRICE_BAR_LOAD_SPEC",
+    "CANONICAL_V2_MART_LOAD_SPECS",
+    "CANONICAL_V2_PAIRING_KEY_COLUMNS",
+    "CANONICAL_V2_STOCK_BASIC_LOAD_SPEC",
     "CanonicalLoadSpec",
     "WriteResult",
     "load_canonical_marts",
     "load_canonical_stock_basic",
     "load_canonical_table",
+    "load_canonical_v2_marts",
     "main",
 ]
 

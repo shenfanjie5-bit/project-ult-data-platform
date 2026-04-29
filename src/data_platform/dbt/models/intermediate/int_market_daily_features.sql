@@ -63,7 +63,13 @@ select
         daily_basic.raw_loaded_at,
         stk_limit.raw_loaded_at,
         moneyflow.raw_loaded_at
-    ) as raw_loaded_at
+    ) as raw_loaded_at,
+    daily_basic.source_run_id as daily_basic_source_run_id,
+    stk_limit.source_run_id as stk_limit_source_run_id,
+    moneyflow.source_run_id as moneyflow_source_run_id,
+    daily_basic.raw_loaded_at as daily_basic_raw_loaded_at,
+    stk_limit.raw_loaded_at as stk_limit_raw_loaded_at,
+    moneyflow.raw_loaded_at as moneyflow_raw_loaded_at
 from market_keys
 left join {{ ref('stg_daily_basic') }} as daily_basic
     on market_keys.ts_code = daily_basic.ts_code

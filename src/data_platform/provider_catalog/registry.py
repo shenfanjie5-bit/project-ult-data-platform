@@ -680,11 +680,18 @@ CANONICAL_DATASETS: Final[dict[str, CanonicalDataset]] = {
         _dataset(
             "financial_forecast_event",
             description="Earnings forecast and express financial events.",
-            primary_key=("security_id", "announcement_date", "report_period", "forecast_type"),
+            primary_key=(
+                "security_id",
+                "announcement_date",
+                "report_period",
+                "update_flag",
+                "forecast_type",
+            ),
             fields=(
                 _field("security_id", "canonical identifier", "Security id."),
                 _field("announcement_date", "date", "Announcement date."),
                 _field("report_period", "date", "Financial report period end."),
+                _field("update_flag", "text", "Forecast version/update discriminator."),
                 _field("forecast_type", "enum", "Forecast or express event type."),
                 _field("summary", "text", "Forecast summary."),
             ),
@@ -898,7 +905,14 @@ PROVIDER_MAPPINGS: Final[tuple[ProviderDatasetMapping, ...]] = (
             ("share_float", "promoted", ("ts_code", "ann_date", "float_date")),
             ("stk_holdernumber", "promoted", ("ts_code", "ann_date", "end_date")),
             ("disclosure_date", "promoted", ("ts_code", "ann_date", "end_date")),
-            ("block_trade", "promoted", ("ts_code", "trade_date")),
+            # Tushare exposes no immutable execution id for block_trade; use
+            # the full row-shape identity as the provider dedupe/natural key
+            # so multiple executions on the same (ts_code, trade_date) survive.
+            (
+                "block_trade",
+                "promoted",
+                ("ts_code", "trade_date", "buyer", "seller", "price", "vol", "amount"),
+            ),
         )
     ),
     *(

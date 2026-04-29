@@ -145,6 +145,69 @@ def test_write_arrow_records_manifest_v2_metadata(
     assert artifact_entry["schema_hash"] == "schema-hash-1"
 
 
+def test_write_arrow_rejects_unknown_tushare_source_interface_id(
+    raw_zone_path: Path,
+    source_id: str,
+) -> None:
+    writer = RawWriter()
+
+    with pytest.raises(ValueError, match="unknown Tushare source_interface_id"):
+        writer.write_arrow(
+            source_id,
+            "daily",
+            PARTITION_DATE,
+            str(uuid.uuid4()),
+            pa.table({"symbol": ["000001.SZ"]}),
+            metadata={
+                "provider": "tushare",
+                "source_interface_id": "not_a_real_interface",
+                "doc_api": "daily",
+            },
+        )
+
+
+def test_write_arrow_rejects_tushare_doc_api_mismatch(
+    raw_zone_path: Path,
+    source_id: str,
+) -> None:
+    writer = RawWriter()
+
+    with pytest.raises(ValueError, match="doc_api does not match source_interface_id"):
+        writer.write_arrow(
+            source_id,
+            "daily",
+            PARTITION_DATE,
+            str(uuid.uuid4()),
+            pa.table({"symbol": ["000001.SZ"]}),
+            metadata={
+                "provider": "tushare",
+                "source_interface_id": "daily",
+                "doc_api": "trade_cal",
+            },
+        )
+
+
+def test_write_arrow_rejects_tushare_source_interface_dataset_mismatch(
+    raw_zone_path: Path,
+    source_id: str,
+) -> None:
+    writer = RawWriter()
+
+    with pytest.raises(ValueError, match="dataset does not match source_interface_id"):
+        writer.write_arrow(
+            source_id,
+            "trade_cal",
+            PARTITION_DATE,
+            str(uuid.uuid4()),
+            pa.table({"cal_date": ["20260415"]}),
+            metadata={
+                "provider": "tushare",
+                "source_interface_id": "trade_cal_futures",
+                "doc_api": "trade_cal",
+            },
+        )
+
+
 def test_reader_accepts_manifest_without_v2_metadata(
     raw_zone_path: Path,
     source_id: str,
