@@ -3,6 +3,8 @@
 from __future__ import annotations
 
 from contextlib import contextmanager
+from dataclasses import dataclass
+from datetime import datetime
 from typing import Any
 
 import pyarrow as pa  # type: ignore[import-untyped]
@@ -11,9 +13,11 @@ import pytest
 from contracts.schemas import CandidateGraphDelta
 
 from data_platform.cycle.graph_phase1_adapters import (
+    IcebergCanonicalGraphWriter,
     IcebergEntityAnchorReader,
     PostgresCandidateDeltaReader,
     StubCanonicalGraphWriter,
+    _FailClosedCanonicalGraphWriter,
 )
 
 
@@ -286,16 +290,290 @@ def test_entity_anchor_reader_returns_empty_set_for_empty_input() -> None:
 
 
 # ---------------------------------------------------------------------------
-# StubCanonicalGraphWriter
+# IcebergCanonicalGraphWriter (M2.6 follow-up #1: real Phase 1 write-back)
 # ---------------------------------------------------------------------------
 
 
-def test_stub_canonical_graph_writer_raises_not_implemented_with_followup_note() -> None:
-    writer = StubCanonicalGraphWriter()
+def test_stub_canonical_graph_writer_alias_now_points_at_iceberg_impl() -> None:
+    """Backwards-compatibility alias: importing ``StubCanonicalGraphWriter``
+    must continue to work and now resolve to the real
+    ``IcebergCanonicalGraphWriter`` class."""
 
-    with pytest.raises(NotImplementedError, match="not yet implemented"):
-        writer.write_canonical_records(object())
+    assert StubCanonicalGraphWriter is IcebergCanonicalGraphWriter
+    assert isinstance(StubCanonicalGraphWriter(), IcebergCanonicalGraphWriter)
 
 
-def test_stub_canonical_graph_writer_from_env_returns_instance() -> None:
-    assert isinstance(StubCanonicalGraphWriter.from_env(), StubCanonicalGraphWriter)
+def test_iceberg_writer_from_env_returns_lazy_instance() -> None:
+    """``from_env`` must NOT eagerly load the catalog so the writer is
+    constructable in environments without live Iceberg access (Definitions-
+    load-time use case for the orchestrator)."""
+
+    writer = IcebergCanonicalGraphWriter.from_env()
+    assert isinstance(writer, IcebergCanonicalGraphWriter)
+    assert writer._catalog is None
+
+
+class _FakeIcebergTable:
+    """Minimal Iceberg table fake that records ``append`` calls for tests."""
+
+    def __init__(self, identifier: str) -> None:
+        self.identifier = identifier
+        self.appended: list[Any] = []
+
+    def append(self, table_arrow: Any) -> None:
+        self.appended.append(table_arrow)
+
+
+class _FakeCatalog:
+    """Records ``load_table`` lookups + returns _FakeIcebergTable instances."""
+
+    def __init__(self) -> None:
+        self.tables: dict[str, _FakeIcebergTable] = {}
+        self.lookups: list[str] = []
+
+    def load_table(self, identifier: str) -> _FakeIcebergTable:
+        self.lookups.append(identifier)
+        if identifier not in self.tables:
+            self.tables[identifier] = _FakeIcebergTable(identifier)
+        return self.tables[identifier]
+
+
+@dataclass
+class _FakeNodeRecord:
+    node_id: str
+    canonical_entity_id: str
+    label: str
+    properties: dict[str, Any]
+    created_at: datetime
+    updated_at: datetime
+
+
+@dataclass
+class _FakeEdgeRecord:
+    edge_id: str
+    source_node_id: str
+    target_node_id: str
+    relationship_type: str
+    properties: dict[str, Any]
+    weight: float
+    created_at: datetime
+    updated_at: datetime
+
+
+@dataclass
+class _FakeAssertionRecord:
+    assertion_id: str
+    source_node_id: str
+    target_node_id: str | None
+    assertion_type: str
+    evidence: dict[str, Any]
+    confidence: float
+    created_at: datetime
+
+
+@dataclass
+class _FakePromotionPlan:
+    cycle_id: str
+    selection_ref: str
+    delta_ids: list[str]
+    node_records: list[_FakeNodeRecord]
+    edge_records: list[_FakeEdgeRecord]
+    assertion_records: list[_FakeAssertionRecord]
+    created_at: datetime
+
+
+def _now() -> datetime:
+    return datetime(2026, 4, 30, 12, 0, 0)
+
+
+def _node_record(*, node_id: str = "n-1") -> _FakeNodeRecord:
+    return _FakeNodeRecord(
+        node_id=node_id,
+        canonical_entity_id="ent-1",
+        label="Entity",
+        properties={"sector": "tech", "weight": 1.0},
+        created_at=_now(),
+        updated_at=_now(),
+    )
+
+
+def _edge_record(*, edge_id: str = "e-1") -> _FakeEdgeRecord:
+    return _FakeEdgeRecord(
+        edge_id=edge_id,
+        source_node_id="n-1",
+        target_node_id="n-2",
+        relationship_type="SUPPLY_CHAIN",
+        properties={"strength": 0.8, "evidence_refs": ["fact-1"]},
+        weight=1.0,
+        created_at=_now(),
+        updated_at=_now(),
+    )
+
+
+def _assertion_record(*, assertion_id: str = "a-1") -> _FakeAssertionRecord:
+    return _FakeAssertionRecord(
+        assertion_id=assertion_id,
+        source_node_id="n-1",
+        target_node_id="n-2",
+        assertion_type="OPERATES_IN",
+        evidence={"source": "test", "score": 0.95},
+        confidence=0.95,
+        created_at=_now(),
+    )
+
+
+def _plan(
+    *,
+    cycle_id: str = "CYCLE_20260430",
+    nodes: list[_FakeNodeRecord] | None = None,
+    edges: list[_FakeEdgeRecord] | None = None,
+    assertions: list[_FakeAssertionRecord] | None = None,
+) -> _FakePromotionPlan:
+    # Use ``is None`` (not ``or [...]``) so callers can pass ``[]`` to
+    # explicitly seed an empty list; ``[] or default`` would resolve to
+    # the default and break the empty-slice test.
+    return _FakePromotionPlan(
+        cycle_id=cycle_id,
+        selection_ref=f"cycle_candidate_selection:{cycle_id}",
+        delta_ids=["d-1"],
+        node_records=[_node_record()] if nodes is None else nodes,
+        edge_records=[_edge_record()] if edges is None else edges,
+        assertion_records=[_assertion_record()] if assertions is None else assertions,
+        created_at=_now(),
+    )
+
+
+def test_iceberg_writer_appends_to_three_canonical_graph_tables() -> None:
+    catalog = _FakeCatalog()
+    writer = IcebergCanonicalGraphWriter(catalog=catalog)
+
+    writer.write_canonical_records(_plan())
+
+    # All three tables loaded + appended exactly once.
+    assert catalog.lookups == [
+        "canonical.graph_node",
+        "canonical.graph_edge",
+        "canonical.graph_assertion",
+    ]
+    assert len(catalog.tables["canonical.graph_node"].appended) == 1
+    assert len(catalog.tables["canonical.graph_edge"].appended) == 1
+    assert len(catalog.tables["canonical.graph_assertion"].appended) == 1
+
+
+def test_iceberg_writer_node_arrow_schema_and_values() -> None:
+    catalog = _FakeCatalog()
+    writer = IcebergCanonicalGraphWriter(catalog=catalog)
+
+    writer.write_canonical_records(_plan(cycle_id="CYCLE_20260501"))
+
+    appended = catalog.tables["canonical.graph_node"].appended[0]
+    assert appended.column_names == [
+        "node_id",
+        "canonical_entity_id",
+        "label",
+        "properties_json",
+        "cycle_id",
+        "created_at",
+        "updated_at",
+    ]
+    assert appended.column("node_id").to_pylist() == ["n-1"]
+    assert appended.column("canonical_entity_id").to_pylist() == ["ent-1"]
+    # properties dict serialised as sorted JSON string.
+    assert appended.column("properties_json").to_pylist() == [
+        '{"sector": "tech", "weight": 1.0}'
+    ]
+    assert appended.column("cycle_id").to_pylist() == ["CYCLE_20260501"]
+
+
+def test_iceberg_writer_edge_arrow_schema_and_values() -> None:
+    catalog = _FakeCatalog()
+    writer = IcebergCanonicalGraphWriter(catalog=catalog)
+
+    writer.write_canonical_records(_plan())
+
+    appended = catalog.tables["canonical.graph_edge"].appended[0]
+    assert appended.column_names == [
+        "edge_id",
+        "source_node_id",
+        "target_node_id",
+        "relationship_type",
+        "properties_json",
+        "weight",
+        "cycle_id",
+        "created_at",
+        "updated_at",
+    ]
+    assert appended.column("edge_id").to_pylist() == ["e-1"]
+    assert appended.column("relationship_type").to_pylist() == ["SUPPLY_CHAIN"]
+    # weight column is float64 and the value 1.0 round-trips.
+    assert appended.column("weight").to_pylist() == [1.0]
+
+
+def test_iceberg_writer_assertion_arrow_schema_and_values() -> None:
+    catalog = _FakeCatalog()
+    writer = IcebergCanonicalGraphWriter(catalog=catalog)
+
+    writer.write_canonical_records(_plan())
+
+    appended = catalog.tables["canonical.graph_assertion"].appended[0]
+    assert appended.column_names == [
+        "assertion_id",
+        "source_node_id",
+        "target_node_id",
+        "assertion_type",
+        "evidence_json",
+        "confidence",
+        "cycle_id",
+        "created_at",
+    ]
+    assert appended.column("confidence").to_pylist() == [0.95]
+
+
+def test_iceberg_writer_skips_table_when_record_list_empty() -> None:
+    """Empty record lists must NOT load_table or append (no empty Iceberg
+    snapshot for an empty plan slice)."""
+
+    catalog = _FakeCatalog()
+    writer = IcebergCanonicalGraphWriter(catalog=catalog)
+
+    plan_with_only_nodes = _plan(edges=[], assertions=[])
+    writer.write_canonical_records(plan_with_only_nodes)
+
+    assert catalog.lookups == ["canonical.graph_node"]
+    assert "canonical.graph_edge" not in catalog.tables
+    assert "canonical.graph_assertion" not in catalog.tables
+
+
+def test_iceberg_writer_handles_assertion_with_null_target_node_id() -> None:
+    catalog = _FakeCatalog()
+    writer = IcebergCanonicalGraphWriter(catalog=catalog)
+
+    null_target_assertion = _assertion_record()
+    null_target_assertion.target_node_id = None
+    writer.write_canonical_records(_plan(assertions=[null_target_assertion]))
+
+    appended = catalog.tables["canonical.graph_assertion"].appended[0]
+    assert appended.column("target_node_id").to_pylist() == [None]
+
+
+def test_iceberg_writer_serialises_properties_with_sorted_keys() -> None:
+    """Determinism: the properties_json column must be byte-stable for a
+    given dict (sorted keys + default=str for non-JSON-native types)."""
+
+    catalog = _FakeCatalog()
+    writer = IcebergCanonicalGraphWriter(catalog=catalog)
+
+    record = _node_record()
+    record.properties = {"z_key": 1, "a_key": 2, "m_key": 3}
+    writer.write_canonical_records(_plan(nodes=[record]))
+
+    appended = catalog.tables["canonical.graph_node"].appended[0]
+    serialised = appended.column("properties_json").to_pylist()[0]
+    # Sorted-key invariant: a_key < m_key < z_key.
+    assert serialised == '{"a_key": 2, "m_key": 3, "z_key": 1}'
+
+
+def test_fail_closed_canonical_graph_writer_raises_runtime_error() -> None:
+    writer = _FailClosedCanonicalGraphWriter()
+    with pytest.raises(RuntimeError, match="fail-closed"):
+        writer.write_canonical_records(_plan())

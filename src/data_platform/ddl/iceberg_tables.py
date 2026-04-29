@@ -119,6 +119,79 @@ ENTITY_ALIAS_SPEC: Final[TableSpec] = TableSpec(
 )
 
 # ---------------------------------------------------------------------------
+# Canonical graph promotion records (M2.6 follow-up #1).
+#
+# Phase 1 ``GraphPhase1Service`` produces a ``PromotionPlan`` containing
+# ``GraphNodeRecord`` / ``GraphEdgeRecord`` / ``GraphAssertionRecord``
+# Pydantic models (graph-engine ``models.py:56-112``). The
+# ``IcebergCanonicalGraphWriter`` (``cycle/graph_phase1_adapters.py``)
+# converts those records to PyArrow batches and appends to these three
+# tables. Properties / evidence dicts serialise to JSON strings to fit
+# the Iceberg/PyArrow schema (no native struct on top of arbitrary keys).
+#
+# All three tables carry ``cycle_id`` (the Phase 1 promotion's cycle)
+# for traceability + partition-friendly queries; this is **not** the
+# ingest-metadata `submitted_at`/`ingest_seq` set, so the canonical
+# forbidden-fields guard is satisfied.
+
+CANONICAL_GRAPH_NODE_SPEC: Final[TableSpec] = TableSpec(
+    namespace=CANONICAL_NAMESPACE,
+    name="graph_node",
+    schema=pa.schema(
+        [
+            pa.field("node_id", pa.string()),
+            pa.field("canonical_entity_id", pa.string()),
+            pa.field("label", pa.string()),
+            pa.field("properties_json", pa.string()),
+            pa.field("cycle_id", pa.string()),
+            pa.field("created_at", TIMESTAMP_TYPE),
+            pa.field("updated_at", TIMESTAMP_TYPE),
+        ]
+    ),
+)
+
+CANONICAL_GRAPH_EDGE_SPEC: Final[TableSpec] = TableSpec(
+    namespace=CANONICAL_NAMESPACE,
+    name="graph_edge",
+    schema=pa.schema(
+        [
+            pa.field("edge_id", pa.string()),
+            pa.field("source_node_id", pa.string()),
+            pa.field("target_node_id", pa.string()),
+            pa.field("relationship_type", pa.string()),
+            pa.field("properties_json", pa.string()),
+            pa.field("weight", pa.float64()),
+            pa.field("cycle_id", pa.string()),
+            pa.field("created_at", TIMESTAMP_TYPE),
+            pa.field("updated_at", TIMESTAMP_TYPE),
+        ]
+    ),
+)
+
+CANONICAL_GRAPH_ASSERTION_SPEC: Final[TableSpec] = TableSpec(
+    namespace=CANONICAL_NAMESPACE,
+    name="graph_assertion",
+    schema=pa.schema(
+        [
+            pa.field("assertion_id", pa.string()),
+            pa.field("source_node_id", pa.string()),
+            pa.field("target_node_id", pa.string()),
+            pa.field("assertion_type", pa.string()),
+            pa.field("evidence_json", pa.string()),
+            pa.field("confidence", pa.float64()),
+            pa.field("cycle_id", pa.string()),
+            pa.field("created_at", TIMESTAMP_TYPE),
+        ]
+    ),
+)
+
+CANONICAL_GRAPH_PROMOTION_TABLE_SPECS: Final[tuple[TableSpec, ...]] = (
+    CANONICAL_GRAPH_NODE_SPEC,
+    CANONICAL_GRAPH_EDGE_SPEC,
+    CANONICAL_GRAPH_ASSERTION_SPEC,
+)
+
+# ---------------------------------------------------------------------------
 # Canonical V2 namespace.
 #
 # Provider-neutral by construction: canonical identifiers
@@ -610,6 +683,7 @@ CANONICAL_LINEAGE_TABLE_SPECS: Final[tuple[TableSpec, ...]] = (
 DEFAULT_TABLE_SPECS: Final[tuple[TableSpec, ...]] = (
     CANONICAL_ENTITY_SPEC,
     ENTITY_ALIAS_SPEC,
+    *CANONICAL_GRAPH_PROMOTION_TABLE_SPECS,
     *CANONICAL_V2_TABLE_SPECS,
     *CANONICAL_LINEAGE_TABLE_SPECS,
 )
@@ -779,6 +853,10 @@ def _identity_partition_spec(schema: pa.Schema, partition_by: Sequence[str]) -> 
 
 __all__ = [
     "CANONICAL_ENTITY_SPEC",
+    "CANONICAL_GRAPH_ASSERTION_SPEC",
+    "CANONICAL_GRAPH_EDGE_SPEC",
+    "CANONICAL_GRAPH_NODE_SPEC",
+    "CANONICAL_GRAPH_PROMOTION_TABLE_SPECS",
     "CANONICAL_LINEAGE_DIM_INDEX_SPEC",
     "CANONICAL_LINEAGE_DIM_SECURITY_SPEC",
     "CANONICAL_LINEAGE_FACT_EVENT_SPEC",

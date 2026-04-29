@@ -246,36 +246,233 @@ class IcebergEntityAnchorReader:
         return cls()
 
 
-class StubCanonicalGraphWriter:
-    """Stub implementation of graph-engine ``CanonicalWriter`` for M2.3a-2.
+class IcebergCanonicalGraphWriter:
+    """Real Phase 1 graph promotion canonical write-back (M2.6 follow-up #1).
 
-    The real Phase 1 graph-promotion write path back into Layer A
-    canonical storage is not yet defined in data-platform's Iceberg schema
-    (no ``canonical.graph_*`` tables exist yet). For M2.3a-2 we expose a
-    type-correct stub that satisfies the Protocol so Phase 1 can be wired
-    end-to-end, but actually invoking ``write_canonical_records`` raises
-    ``NotImplementedError`` to prevent silent data loss.
+    Replaces the M2.3a-2 ``StubCanonicalGraphWriter`` (which raised
+    ``NotImplementedError``). For each ``PromotionPlan`` produced by
+    ``GraphPhase1Service``, this writer appends the contained
+    ``GraphNodeRecord`` / ``GraphEdgeRecord`` / ``GraphAssertionRecord``
+    Pydantic models to the three canonical Iceberg tables defined at
+    ``data_platform.ddl.iceberg_tables.CANONICAL_GRAPH_PROMOTION_TABLE_SPECS``:
 
-    Closure tracking: see M2.6 follow-up — design the
-    ``canonical.graph_promotion_record`` table family + write path here.
+    * ``canonical.graph_node`` — per-promotion node identity rows
+    * ``canonical.graph_edge`` — per-promotion edge rows
+    * ``canonical.graph_assertion`` — per-promotion assertion rows
+
+    Properties / evidence dicts are JSON-serialised into ``properties_json``
+    / ``evidence_json`` columns (Iceberg/PyArrow does not have a native
+    arbitrary-key struct type). Each record carries the ``cycle_id`` of
+    the promotion that produced it for traceability.
+
+    **Append semantics:** each ``write_canonical_records`` call appends
+    the plan's records to the existing tables; this writer does NOT
+    deduplicate against prior cycles. Cross-cycle deduplication is the
+    Phase 1 service's responsibility (via
+    ``EntityAnchorReader.existing_entity_ids``).
+
+    **Atomicity:** the three table appends happen sequentially. A failure
+    on the second append leaves the first append committed. Production
+    deployments should treat this as a known limitation and rely on
+    Phase 1's idempotent re-run to recover; Iceberg snapshots at the
+    table level let operators inspect partial writes via the catalog.
     """
 
+    def __init__(self, *, catalog: Any | None = None) -> None:
+        self._catalog = catalog
+        self._catalog_lock = Lock()
+
+    def _resolve_catalog(self) -> Any:
+        # Thread-safe lazy initialisation mirroring
+        # PostgresCandidateDeltaReader._resolve_engine.
+        if self._catalog is None:
+            with self._catalog_lock:
+                if self._catalog is None:
+                    from data_platform.serving.catalog import load_catalog
+
+                    self._catalog = load_catalog()
+        return self._catalog
+
     def write_canonical_records(self, plan: Any) -> None:
-        raise NotImplementedError(
-            "Graph promotion canonical write-back is not yet implemented in "
-            "data-platform; the canonical.graph_* table family must be "
-            "defined and persisted before M2.6 Phase 1 promotion can run "
-            "end-to-end. This stub satisfies the CanonicalWriter Protocol "
-            "for runtime wire-up only.",
+        """Append the plan's records to the three canonical.graph_* tables.
+
+        ``plan`` is a ``graph_engine.models.PromotionPlan``. The append
+        order (node → edge → assertion) preserves referential intent in
+        the Iceberg snapshot history if a downstream reader inspects
+        partial writes after a failure.
+        """
+
+        catalog = self._resolve_catalog()
+        cycle_id = plan.cycle_id
+
+        node_arrow = self._node_records_to_arrow(plan.node_records, cycle_id)
+        edge_arrow = self._edge_records_to_arrow(plan.edge_records, cycle_id)
+        assertion_arrow = self._assertion_records_to_arrow(
+            plan.assertion_records, cycle_id
+        )
+
+        if node_arrow is not None:
+            self._append_to_table(catalog, "canonical.graph_node", node_arrow)
+        if edge_arrow is not None:
+            self._append_to_table(catalog, "canonical.graph_edge", edge_arrow)
+        if assertion_arrow is not None:
+            self._append_to_table(
+                catalog, "canonical.graph_assertion", assertion_arrow
+            )
+
+    @staticmethod
+    def _append_to_table(catalog: Any, identifier: str, table_arrow: Any) -> None:
+        target_table = catalog.load_table(identifier)
+        target_table.append(table_arrow)
+
+    @staticmethod
+    def _node_records_to_arrow(records: list, cycle_id: str) -> Any:
+        if not records:
+            return None
+        import json
+
+        import pyarrow as pa
+
+        return pa.table(
+            {
+                "node_id": [r.node_id for r in records],
+                "canonical_entity_id": [r.canonical_entity_id for r in records],
+                "label": [r.label for r in records],
+                "properties_json": [
+                    json.dumps(r.properties, sort_keys=True, default=str)
+                    for r in records
+                ],
+                "cycle_id": [cycle_id for _ in records],
+                "created_at": [r.created_at for r in records],
+                "updated_at": [r.updated_at for r in records],
+            },
+            schema=pa.schema(
+                [
+                    pa.field("node_id", pa.string()),
+                    pa.field("canonical_entity_id", pa.string()),
+                    pa.field("label", pa.string()),
+                    pa.field("properties_json", pa.string()),
+                    pa.field("cycle_id", pa.string()),
+                    pa.field("created_at", pa.timestamp("us")),
+                    pa.field("updated_at", pa.timestamp("us")),
+                ]
+            ),
+        )
+
+    @staticmethod
+    def _edge_records_to_arrow(records: list, cycle_id: str) -> Any:
+        if not records:
+            return None
+        import json
+
+        import pyarrow as pa
+
+        return pa.table(
+            {
+                "edge_id": [r.edge_id for r in records],
+                "source_node_id": [r.source_node_id for r in records],
+                "target_node_id": [r.target_node_id for r in records],
+                "relationship_type": [r.relationship_type for r in records],
+                "properties_json": [
+                    json.dumps(r.properties, sort_keys=True, default=str)
+                    for r in records
+                ],
+                "weight": [float(r.weight) for r in records],
+                "cycle_id": [cycle_id for _ in records],
+                "created_at": [r.created_at for r in records],
+                "updated_at": [r.updated_at for r in records],
+            },
+            schema=pa.schema(
+                [
+                    pa.field("edge_id", pa.string()),
+                    pa.field("source_node_id", pa.string()),
+                    pa.field("target_node_id", pa.string()),
+                    pa.field("relationship_type", pa.string()),
+                    pa.field("properties_json", pa.string()),
+                    pa.field("weight", pa.float64()),
+                    pa.field("cycle_id", pa.string()),
+                    pa.field("created_at", pa.timestamp("us")),
+                    pa.field("updated_at", pa.timestamp("us")),
+                ]
+            ),
+        )
+
+    @staticmethod
+    def _assertion_records_to_arrow(records: list, cycle_id: str) -> Any:
+        if not records:
+            return None
+        import json
+
+        import pyarrow as pa
+
+        return pa.table(
+            {
+                "assertion_id": [r.assertion_id for r in records],
+                "source_node_id": [r.source_node_id for r in records],
+                "target_node_id": [r.target_node_id for r in records],
+                "assertion_type": [r.assertion_type for r in records],
+                "evidence_json": [
+                    json.dumps(r.evidence, sort_keys=True, default=str)
+                    for r in records
+                ],
+                "confidence": [float(r.confidence) for r in records],
+                "cycle_id": [cycle_id for _ in records],
+                "created_at": [r.created_at for r in records],
+            },
+            schema=pa.schema(
+                [
+                    pa.field("assertion_id", pa.string()),
+                    pa.field("source_node_id", pa.string()),
+                    pa.field("target_node_id", pa.string()),  # nullable per
+                    # GraphAssertionRecord (graph-engine models.py:108).
+                    pa.field("assertion_type", pa.string()),
+                    pa.field("evidence_json", pa.string()),
+                    pa.field("confidence", pa.float64()),
+                    pa.field("cycle_id", pa.string()),
+                    pa.field("created_at", pa.timestamp("us")),
+                ]
+            ),
         )
 
     @classmethod
-    def from_env(cls) -> StubCanonicalGraphWriter:
+    def from_env(cls) -> IcebergCanonicalGraphWriter:
+        """Construct a lazy-initialising writer.
+
+        ``DP_PG_DSN`` (Iceberg SQL catalog backing) +
+        ``DP_ICEBERG_WAREHOUSE_PATH`` are consumed by ``load_catalog()``
+        on first ``write_canonical_records`` call. This delays catalog
+        connection so the writer is constructable in Definitions-load
+        environments without live Iceberg access.
+        """
+
         return cls()
 
 
+# Backwards-compatibility alias: ``StubCanonicalGraphWriter`` is retained
+# so any existing imports do not break. The alias now points at the real
+# IcebergCanonicalGraphWriter; callers that genuinely want fail-closed
+# behaviour can construct ``_FailClosedCanonicalGraphWriter`` directly.
+StubCanonicalGraphWriter = IcebergCanonicalGraphWriter
+
+
+class _FailClosedCanonicalGraphWriter:
+    """Explicit fail-closed writer for environments where Iceberg is
+    unavailable. Mirrors the orchestrator's ``_FailClosedGraphStatusProvider``
+    pattern: callers wire this when they want
+    ``write_canonical_records`` to raise rather than attempt a real
+    Iceberg write."""
+
+    def write_canonical_records(self, plan: Any) -> None:
+        raise RuntimeError(
+            "Canonical graph writer is fail-closed; configure DP_PG_DSN + "
+            "DP_ICEBERG_WAREHOUSE_PATH and use IcebergCanonicalGraphWriter "
+            "to enable writes",
+        )
+
+
 __all__ = [
+    "IcebergCanonicalGraphWriter",
     "IcebergEntityAnchorReader",
     "PostgresCandidateDeltaReader",
-    "StubCanonicalGraphWriter",
+    "StubCanonicalGraphWriter",  # retained alias for backwards compat
 ]
