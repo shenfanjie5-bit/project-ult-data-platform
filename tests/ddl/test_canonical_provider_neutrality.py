@@ -1,25 +1,23 @@
 """Schema-parity tests for canonical Iceberg DDL provider neutrality.
 
-These tests assert the M1 target end-state: canonical Iceberg specs must not
-embed raw-zone lineage fields (`source_run_id`, `raw_loaded_at`) and must not
-expose provider-shaped identifier columns (`ts_code`, `index_code`) on
-business rows. Today (pre-M1-D) the legacy `canonical.*` specs still carry
-both; expect failures here that flip to PASS as M1-D moves each spec into the
-`canonical_v2.*` namespace and the lineage column moves to
-`canonical_lineage.*`.
+After M1.12 Phase B retirement, the legacy `CANONICAL_STOCK_BASIC_SPEC`
++ `CANONICAL_MART_TABLE_SPECS` are gone. The remaining canonical
+business specs all live under the `canonical_v2` namespace and by
+construction must not embed raw-zone lineage fields (`source_run_id`,
+`raw_loaded_at`) or provider-shaped identifier columns (`ts_code`,
+`index_code`).
 
-Per ult_milestone.md M1-C: tests may fail initially. M1-D is responsible for
-making them pass or clearly marking the remaining failures as blockers.
+Per data-platform CLAUDE.md: Raw Zone (raw lineage) ≠ Canonical Zone.
+After M1.12 step 4, `FORBIDDEN_SCHEMA_FIELDS` extends to the raw-zone
+lineage block, with a namespace bypass at `_forbidden_schema_fields_for`
+that permits them only on `canonical_lineage.*` specs.
 
-Per data-platform CLAUDE.md: Raw Zone (raw lineage) ≠ Canonical Zone. The
-existing `FORBIDDEN_SCHEMA_FIELDS` (`{"submitted_at", "ingest_seq"}`) only
-covers the Layer-B ingest-queue boundary; this test file extends coverage to
-the raw-zone lineage boundary.
+These tests are now strict (no xfail). The previous
+`_M1D_LEGACY_RETIREMENT_XFAIL` marker was removed in M1.12 Step 5.
 """
 
 from __future__ import annotations
 
-import os
 from typing import Final
 
 import pyarrow as pa  # type: ignore[import-untyped]
@@ -28,20 +26,15 @@ import pytest
 from data_platform.ddl import iceberg_tables
 
 
-_M1D_LEGACY_RETIREMENT_XFAIL = pytest.mark.xfail(
-    reason=(
-        "M1-D step 5 legacy canonical retirement is not complete; run with "
-        "DP_ENFORCE_M1D_PROVIDER_NEUTRALITY=1 or pytest --runxfail to enforce."
-    ),
-    condition=os.environ.get("DP_ENFORCE_M1D_PROVIDER_NEUTRALITY") != "1",
-    strict=False,
-)
-
 CANONICAL_BUSINESS_SPECS: Final[tuple[iceberg_tables.TableSpec, ...]] = (
-    iceberg_tables.CANONICAL_STOCK_BASIC_SPEC,
-    *iceberg_tables.CANONICAL_MART_TABLE_SPECS,
+    iceberg_tables.CANONICAL_V2_TABLE_SPECS
 )
-"""All canonical Iceberg specs that hold business rows (excluding entity stores)."""
+"""All canonical Iceberg specs that hold business rows.
+
+After M1.12 retirement, the canonical business surface is the
+`canonical_v2.*` namespace alone — the 9 v2 specs cover the original
+8 mart tables plus stock_basic.
+"""
 
 FORBIDDEN_RAW_LINEAGE_FIELDS: Final[frozenset[str]] = frozenset(
     {"source_run_id", "raw_loaded_at"}
@@ -71,7 +64,6 @@ def _spec_id(spec: iceberg_tables.TableSpec) -> str:
     CANONICAL_BUSINESS_SPECS,
     ids=_spec_id,
 )
-@_M1D_LEGACY_RETIREMENT_XFAIL
 def test_canonical_business_spec_does_not_carry_raw_lineage(
     spec: iceberg_tables.TableSpec,
 ) -> None:
@@ -90,7 +82,6 @@ def test_canonical_business_spec_does_not_carry_raw_lineage(
     CANONICAL_BUSINESS_SPECS,
     ids=_spec_id,
 )
-@_M1D_LEGACY_RETIREMENT_XFAIL
 def test_canonical_business_spec_does_not_carry_provider_shaped_identifier(
     spec: iceberg_tables.TableSpec,
 ) -> None:
@@ -106,38 +97,33 @@ def test_canonical_business_spec_does_not_carry_provider_shaped_identifier(
     )
 
 
-@_M1D_LEGACY_RETIREMENT_XFAIL
 def test_FORBIDDEN_SCHEMA_FIELDS_includes_canonical_lineage_block() -> None:
-    """`FORBIDDEN_SCHEMA_FIELDS` must extend to raw-zone lineage after M1-D step 5.
+    """`FORBIDDEN_SCHEMA_FIELDS` blocks the raw-zone lineage block.
 
-    Today this set blocks only Layer-B ingest fields. After M1-D step 5
-    extends it to include raw-zone lineage, no future canonical spec can
-    silently re-introduce `source_run_id` / `raw_loaded_at`.
+    After M1.12 step 4, no future canonical business spec can silently
+    re-introduce `source_run_id` / `raw_loaded_at`. The
+    `canonical_lineage.*` namespace is exempted via
+    `_forbidden_schema_fields_for`.
     """
 
     missing = sorted(FORBIDDEN_RAW_LINEAGE_FIELDS - iceberg_tables.FORBIDDEN_SCHEMA_FIELDS)
     assert not missing, (
-        f"FORBIDDEN_SCHEMA_FIELDS does not yet block {missing}; M1-D step 5 must "
-        "extend it once canonical_v2 is the only canonical write path"
+        f"FORBIDDEN_SCHEMA_FIELDS does not block {missing}; M1.12 step 4 must "
+        "extend it so canonical_v2 specs cannot re-introduce raw-zone lineage"
     )
 
 
 def test_canonical_lineage_namespace_specs_keep_canonical_pk_first() -> None:
-    """After M1-D, every canonical_lineage.* spec must lead with the canonical PK
-    columns it joins on (followed by lineage payload columns).
-
-    This test discovers `CANONICAL_LINEAGE_*_SPEC` symbols by name on the
-    `iceberg_tables` module. Today no such symbol exists; the test passes
-    vacuously. After M1-D adds them, this test enforces the join shape.
-    """
+    """Every canonical_lineage.* spec leads with the canonical PK columns."""
 
     lineage_specs = [
         value
         for name, value in vars(iceberg_tables).items()
         if name.startswith("CANONICAL_LINEAGE_") and isinstance(value, iceberg_tables.TableSpec)
     ]
-    if not lineage_specs:
-        pytest.skip("no canonical_lineage.* specs declared yet — defers to M1-D")
+    assert lineage_specs, (
+        "canonical_lineage.* specs must exist after M1.12 retirement"
+    )
 
     for spec in lineage_specs:
         names = list(spec.schema.names)
@@ -166,18 +152,14 @@ def test_canonical_lineage_namespace_specs_keep_canonical_pk_first() -> None:
 
 
 def test_canonical_v2_namespace_specs_do_not_carry_raw_lineage() -> None:
-    """After M1-D, every canonical_v2.* spec must be lineage-free at the storage layer.
-
-    Vacuous PASS today (no v2 specs); becomes binding as M1-D adds them.
-    """
+    """Every canonical_v2.* spec must be lineage-free at the storage layer."""
 
     v2_specs = [
         value
         for name, value in vars(iceberg_tables).items()
         if name.startswith("CANONICAL_V2_") and isinstance(value, iceberg_tables.TableSpec)
     ]
-    if not v2_specs:
-        pytest.skip("no canonical_v2.* specs declared yet — defers to M1-D")
+    assert v2_specs, "canonical_v2.* specs must exist after M1.12 retirement"
 
     for spec in v2_specs:
         field_names = {field.name for field in spec.schema}

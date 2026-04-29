@@ -20,7 +20,7 @@ def test_plan_schema_evolution_add_column_requires_backfill() -> None:
     current_schema = pa.schema([pa.field("ts_code", pa.string())])
     target_schema = current_schema.append(pa.field("source_run_id", pa.string()))
 
-    plan = plan_schema_evolution("canonical.stock_basic", current_schema, target_schema)
+    plan = plan_schema_evolution("canonical.canonical_entity", current_schema, target_schema)
 
     assert plan.changes == [
         SchemaChange(
@@ -38,7 +38,7 @@ def test_plan_schema_evolution_rejects_unsupported_add_column_type() -> None:
     current_schema = pa.schema([pa.field("ts_code", pa.string())])
     target_schema = current_schema.append(pa.field("aliases", pa.list_(pa.string())))
 
-    plan = plan_schema_evolution("canonical.stock_basic", current_schema, target_schema)
+    plan = plan_schema_evolution("canonical.canonical_entity", current_schema, target_schema)
 
     assert plan.changes == []
     assert plan.requires_backfill is False
@@ -61,7 +61,7 @@ def test_plan_schema_evolution_allows_whitelisted_type_widening() -> None:
         ]
     )
 
-    plan = plan_schema_evolution("canonical.fact_price_bar", current_schema, target_schema)
+    plan = plan_schema_evolution("canonical.entity_alias", current_schema, target_schema)
 
     assert plan.changes == [
         SchemaChange(
@@ -119,7 +119,7 @@ def test_plan_schema_evolution_rejects_breaking_changes(
         ]
     )
 
-    plan = plan_schema_evolution("canonical.stock_basic", current_schema, target_schema)
+    plan = plan_schema_evolution("canonical.canonical_entity", current_schema, target_schema)
 
     assert any(expected_rejection in rejection for rejection in plan.rejections)
 
@@ -129,7 +129,7 @@ def test_apply_schema_evolution_add_column_preserves_old_snapshot(
 ) -> None:
     catalog = _create_catalog(tmp_path)
     table = catalog.create_table(
-        "canonical.stock_basic",
+        "canonical.canonical_entity",
         schema=pa.schema([pa.field("ts_code", pa.string())]),
     )
     table.append(pa.table({"ts_code": ["000001.SZ"]}))
@@ -145,17 +145,17 @@ def test_apply_schema_evolution_add_column_preserves_old_snapshot(
     )
     dry_run_plan = apply_schema_evolution(
         catalog,  # type: ignore[arg-type]
-        "canonical.stock_basic",
+        "canonical.canonical_entity",
         target_schema,
     )
     applied_plan = apply_schema_evolution(
         catalog,  # type: ignore[arg-type]
-        "canonical.stock_basic",
+        "canonical.canonical_entity",
         target_schema,
         dry_run=False,
     )
 
-    refreshed = catalog.load_table("canonical.stock_basic")
+    refreshed = catalog.load_table("canonical.canonical_entity")
     current_rows = refreshed.scan().to_arrow()
     old_rows = refreshed.scan(snapshot_id=old_snapshot.snapshot_id).to_arrow()
 
@@ -172,19 +172,19 @@ def test_apply_schema_evolution_add_column_preserves_old_snapshot(
 def test_apply_schema_evolution_widens_column_type(tmp_path: Path) -> None:
     catalog = _create_catalog(tmp_path)
     catalog.create_table(
-        "canonical.fact_price_bar",
+        "canonical.entity_alias",
         schema=pa.schema([pa.field("trade_count", pa.int32())]),
     )
     target_schema = pa.schema([pa.field("trade_count", pa.int64())])
 
     plan = apply_schema_evolution(
         catalog,  # type: ignore[arg-type]
-        "canonical.fact_price_bar",
+        "canonical.entity_alias",
         target_schema,
         dry_run=False,
     )
 
-    refreshed = catalog.load_table("canonical.fact_price_bar")
+    refreshed = catalog.load_table("canonical.entity_alias")
     assert plan.rejections == []
     assert plan.changes == [
         SchemaChange(
@@ -227,39 +227,39 @@ def test_apply_schema_evolution_rejects_undeclared_canonical_identifier() -> Non
 
 def test_run_canonical_backfill_dry_run_does_not_write_snapshot(tmp_path: Path) -> None:
     catalog = _create_catalog(tmp_path)
-    catalog.create_table("canonical.stock_basic", schema=_backfill_target_schema())
+    catalog.create_table("canonical.canonical_entity", schema=_backfill_target_schema())
     duckdb_path = tmp_path / "backfill.duckdb"
     _write_backfill_source(duckdb_path)
 
     result = run_canonical_backfill(
         catalog,  # type: ignore[arg-type]
         duckdb_path,
-        "canonical.stock_basic",
+        "canonical.canonical_entity",
         "SELECT id, value FROM source_rows",
         dry_run=True,
     )
 
     assert result is None
-    assert catalog.load_table("canonical.stock_basic").current_snapshot() is None
+    assert catalog.load_table("canonical.canonical_entity").current_snapshot() is None
     assert _backfill_view_names(duckdb_path) == []
 
 
 def test_run_canonical_backfill_writes_with_write_result(tmp_path: Path) -> None:
     catalog = _create_catalog(tmp_path)
-    catalog.create_table("canonical.stock_basic", schema=_backfill_target_schema())
+    catalog.create_table("canonical.canonical_entity", schema=_backfill_target_schema())
     duckdb_path = tmp_path / "backfill.duckdb"
     _write_backfill_source(duckdb_path)
 
     result = run_canonical_backfill(
         catalog,  # type: ignore[arg-type]
         duckdb_path,
-        "canonical.stock_basic",
+        "canonical.canonical_entity",
         "SELECT id, value FROM source_rows",
     )
 
-    rows = catalog.load_table("canonical.stock_basic").scan().to_arrow()
+    rows = catalog.load_table("canonical.canonical_entity").scan().to_arrow()
     assert result is not None
-    assert result.table == "canonical.stock_basic"
+    assert result.table == "canonical.canonical_entity"
     assert result.row_count == 2
     assert result.snapshot_id
     assert rows.schema.names == ["id", "value", "canonical_loaded_at"]
@@ -279,7 +279,7 @@ def test_run_canonical_backfill_rejects_non_single_select_without_mutating_duckd
     select_sql: str,
 ) -> None:
     catalog = _create_catalog(tmp_path)
-    catalog.create_table("canonical.stock_basic", schema=_backfill_target_schema())
+    catalog.create_table("canonical.canonical_entity", schema=_backfill_target_schema())
     duckdb_path = tmp_path / "backfill.duckdb"
     _write_backfill_source(duckdb_path)
 
@@ -287,7 +287,7 @@ def test_run_canonical_backfill_rejects_non_single_select_without_mutating_duckd
         run_canonical_backfill(
             catalog,  # type: ignore[arg-type]
             duckdb_path,
-            "canonical.stock_basic",
+            "canonical.canonical_entity",
             select_sql,
             dry_run=True,
         )

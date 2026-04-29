@@ -13,8 +13,6 @@ from pyiceberg.catalog.memory import InMemoryCatalog
 
 from data_platform.ddl.iceberg_tables import (
     CANONICAL_LINEAGE_TABLE_SPECS,
-    CANONICAL_MART_TABLE_SPECS,
-    CANONICAL_STOCK_BASIC_SPEC,
     CANONICAL_V2_TABLE_SPECS,
     TableSpec,
 )
@@ -24,14 +22,8 @@ from data_platform.serving.canonical_datasets import (
     USE_CANONICAL_V2_ENV_VAR,
 )
 from data_platform.serving.canonical_writer import (
-    CANONICAL_MART_LOAD_SPECS,
     CANONICAL_MART_SNAPSHOT_SET_FILE,
-    CANONICAL_STOCK_BASIC_IDENTIFIER,
-    FORBIDDEN_PAYLOAD_FIELDS,
     CanonicalLoadSpec,
-    load_canonical_marts,
-    load_canonical_stock_basic,
-    load_canonical_table,
     load_canonical_v2_marts,
 )
 from data_platform.serving.reader import (
@@ -50,186 +42,46 @@ class FakeSettings:
     duckdb_path: Path
 
 
-def test_load_canonical_stock_basic_overwrites_idempotently(tmp_path: Path) -> None:
-    catalog = create_stock_basic_catalog(tmp_path)
-    duckdb_path = tmp_path / "staging.duckdb"
-    rows = stock_basic_rows()
-    write_staging_stock_basic(duckdb_path, rows)
-
-    first = load_canonical_stock_basic(catalog, duckdb_path)  # type: ignore[arg-type]
-    second = load_canonical_stock_basic(catalog, duckdb_path)  # type: ignore[arg-type]
-
-    assert first.table == CANONICAL_STOCK_BASIC_IDENTIFIER
-    assert first.row_count == len(rows)
-    assert second.row_count == len(rows)
-    assert second.snapshot_id != first.snapshot_id
-
-    table = catalog.load_table(CANONICAL_STOCK_BASIC_IDENTIFIER)
-    current_snapshot = table.current_snapshot()
-    assert current_snapshot is not None
-    assert current_snapshot.snapshot_id == second.snapshot_id
-
-    current_rows = table.scan().to_arrow()
-    old_rows = table.scan(snapshot_id=first.snapshot_id).to_arrow()
-    assert current_rows.num_rows == len(rows)
-    assert old_rows.num_rows == len(rows)
-    assert current_rows.schema.names == CANONICAL_STOCK_BASIC_SPEC.schema.names
-
-
-def test_load_canonical_stock_basic_does_not_propagate_queue_fields(
-    tmp_path: Path,
-) -> None:
-    catalog = create_stock_basic_catalog(tmp_path)
-    duckdb_path = tmp_path / "staging.duckdb"
-    write_staging_stock_basic(duckdb_path, stock_basic_rows(), include_queue_fields=True)
-
-    load_canonical_stock_basic(catalog, duckdb_path)  # type: ignore[arg-type]
-
-    payload = catalog.load_table(CANONICAL_STOCK_BASIC_IDENTIFIER).scan().to_arrow()
-    assert not FORBIDDEN_PAYLOAD_FIELDS.intersection(
-        field_name.lower() for field_name in payload.schema.names
-    )
-
-
-@pytest.mark.parametrize(
-    "target_schema, expected_error",
-    [
-        (
-            pa.schema(
-                [
-                    field
-                    for field in CANONICAL_STOCK_BASIC_SPEC.schema
-                    if field.name != "market"
-                ]
-            ),
-            "extra payload fields: market",
-        ),
-        (
-            CANONICAL_STOCK_BASIC_SPEC.schema.append(pa.field("extra", pa.string())),
-            "missing payload fields: extra",
-        ),
-    ],
-)
-def test_load_canonical_stock_basic_rejects_target_payload_field_mismatch(
-    tmp_path: Path,
-    target_schema: pa.Schema,
-    expected_error: str,
-) -> None:
-    catalog = create_stock_basic_catalog(tmp_path, schema=target_schema)
-    duckdb_path = tmp_path / "staging.duckdb"
-    write_staging_stock_basic(duckdb_path, stock_basic_rows())
-
-    with pytest.raises(ValueError, match=expected_error):
-        load_canonical_stock_basic(catalog, duckdb_path)  # type: ignore[arg-type]
-
-    assert catalog.load_table(CANONICAL_STOCK_BASIC_IDENTIFIER).current_snapshot() is None
-
-
-def test_load_canonical_stock_basic_rejects_empty_staging_before_overwrite(
-    tmp_path: Path,
-) -> None:
-    catalog = create_stock_basic_catalog(tmp_path)
-    duckdb_path = tmp_path / "staging.duckdb"
-    rows = stock_basic_rows()
-    write_staging_stock_basic(duckdb_path, rows)
-    first = load_canonical_stock_basic(catalog, duckdb_path)  # type: ignore[arg-type]
-    write_staging_stock_basic(duckdb_path, [])
-
-    with pytest.raises(ValueError, match="zero rows"):
-        load_canonical_stock_basic(catalog, duckdb_path)  # type: ignore[arg-type]
-
-    table = catalog.load_table(CANONICAL_STOCK_BASIC_IDENTIFIER)
-    current_snapshot = table.current_snapshot()
-    assert current_snapshot is not None
-    assert current_snapshot.snapshot_id == first.snapshot_id
-    assert table.scan().to_arrow().num_rows == len(rows)
-
-
-def test_load_canonical_stock_basic_allows_empty_staging_with_explicit_flag(
-    tmp_path: Path,
-) -> None:
-    catalog = create_stock_basic_catalog(tmp_path)
-    duckdb_path = tmp_path / "staging.duckdb"
-    rows = stock_basic_rows()
-    write_staging_stock_basic(duckdb_path, rows)
-    first = load_canonical_stock_basic(catalog, duckdb_path)  # type: ignore[arg-type]
-    write_staging_stock_basic(duckdb_path, [])
-
-    second = load_canonical_stock_basic(  # type: ignore[arg-type]
-        catalog,
-        duckdb_path,
-        allow_empty=True,
-    )
-
-    table = catalog.load_table(CANONICAL_STOCK_BASIC_IDENTIFIER)
-    assert second.row_count == 0
-    assert second.snapshot_id != first.snapshot_id
-    assert table.scan().to_arrow().num_rows == 0
-    assert table.scan(snapshot_id=first.snapshot_id).to_arrow().num_rows == len(rows)
-
-
 def test_canonical_load_spec_rejects_queue_fields() -> None:
-    with pytest.raises(ValueError, match="producer queue fields"):
+    with pytest.raises(ValueError, match="forbidden payload fields"):
         CanonicalLoadSpec(
-            identifier="canonical.bad",
+            identifier="canonical_v2.bad",
             duckdb_relation="bad_relation",
             required_columns=("submitted_at",),
         )
 
 
-def test_load_canonical_marts_writes_all_tables_in_fixed_order(tmp_path: Path) -> None:
-    catalog = create_catalog(tmp_path, CANONICAL_MART_TABLE_SPECS)
-    duckdb_path = tmp_path / "marts.duckdb"
-    write_mart_relations(duckdb_path)
+def test_canonical_load_spec_rejects_raw_lineage_fields_on_business_namespace() -> None:
+    """M1.12 step 4 — canonical_v2.* spec must reject raw-zone lineage payload."""
 
-    results = load_canonical_marts(catalog, duckdb_path)  # type: ignore[arg-type]
-    manifest_path = tmp_path / "warehouse" / "canonical" / CANONICAL_MART_SNAPSHOT_SET_FILE
-    manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
-
-    assert [result.table for result in results] == [
-        spec.identifier for spec in CANONICAL_MART_LOAD_SPECS
-    ]
-    assert [result.row_count for result in results] == [1] * len(CANONICAL_MART_LOAD_SPECS)
-    assert all(result.snapshot_id for result in results)
-
-    for load_spec, table_spec in zip(
-        CANONICAL_MART_LOAD_SPECS,
-        CANONICAL_MART_TABLE_SPECS,
-        strict=True,
-    ):
-        payload = catalog.load_table(load_spec.identifier).scan().to_arrow()
-        assert payload.num_rows == 1
-        assert payload.schema.names == table_spec.schema.names
-        assert "canonical_loaded_at" in payload.schema.names
-
-        table_name = load_spec.identifier.rsplit(".", maxsplit=1)[-1]
-        assert manifest["tables"][table_name]["identifier"] == load_spec.identifier
-        assert manifest["tables"][table_name]["snapshot_id"] == results[
-            CANONICAL_MART_LOAD_SPECS.index(load_spec)
-        ].snapshot_id
-        assert manifest["tables"][table_name]["metadata_location"].endswith(".metadata.json")
+    with pytest.raises(ValueError, match="forbidden payload fields"):
+        CanonicalLoadSpec(
+            identifier="canonical_v2.bad",
+            duckdb_relation="bad_relation",
+            required_columns=("source_run_id", "ts_code"),
+        )
 
 
-def test_load_canonical_marts_preflights_all_relations_before_overwrite(
-    tmp_path: Path,
-) -> None:
-    catalog = create_catalog(tmp_path, CANONICAL_MART_TABLE_SPECS)
-    duckdb_path = tmp_path / "marts.duckdb"
-    write_mart_relations(duckdb_path)
-    connection = duckdb.connect(str(duckdb_path))
-    try:
-        connection.execute("ALTER TABLE mart_fact_price_bar DROP COLUMN adj_factor")
-    finally:
-        connection.close()
+def test_canonical_lineage_load_spec_permits_raw_lineage_fields() -> None:
+    """M1.12 step 4 — canonical_lineage.* spec bypass permits source_run_id + raw_loaded_at."""
 
-    with pytest.raises(duckdb.Error, match="adj_factor"):
-        load_canonical_marts(catalog, duckdb_path)  # type: ignore[arg-type]
+    spec = CanonicalLoadSpec(
+        identifier="canonical_lineage.bad",
+        duckdb_relation="bad_relation",
+        required_columns=("ts_code", "source_run_id", "raw_loaded_at"),
+    )
+    assert spec.identifier == "canonical_lineage.bad"
 
-    for load_spec in CANONICAL_MART_LOAD_SPECS:
-        assert catalog.load_table(load_spec.identifier).current_snapshot() is None
 
-    manifest_path = tmp_path / "warehouse" / "canonical" / CANONICAL_MART_SNAPSHOT_SET_FILE
-    assert not manifest_path.exists()
+def test_canonical_lineage_load_spec_still_rejects_queue_fields() -> None:
+    """M1.12 step 4 — canonical_lineage.* spec still rejects ingest-queue boundary fields."""
+
+    with pytest.raises(ValueError, match="forbidden payload fields"):
+        CanonicalLoadSpec(
+            identifier="canonical_lineage.bad",
+            duckdb_relation="bad_relation",
+            required_columns=("submitted_at", "raw_loaded_at"),
+        )
 
 
 def test_load_canonical_v2_marts_writes_manifest_with_paired_snapshot_ids(
@@ -591,120 +443,82 @@ def test_load_canonical_v2_marts_closed_loop_under_v2_flag_reads_pinned_snapshot
         reader_module._duckdb_connection.cache_clear()
 
 
-def test_load_canonical_table_rejects_missing_relation_column(tmp_path: Path) -> None:
-    catalog = create_stock_basic_catalog(tmp_path)
-    duckdb_path = tmp_path / "staging.duckdb"
-    write_staging_stock_basic(duckdb_path, stock_basic_rows())
-    bad_spec = CanonicalLoadSpec(
-        identifier=CANONICAL_STOCK_BASIC_IDENTIFIER,
-        duckdb_relation="stg_stock_basic",
-        required_columns=(
-            *canonical_writer.STOCK_BASIC_LOAD_SPEC.required_columns,
-            "missing_from_target",
-        ),
+def test_overwrite_failure_does_not_refresh_or_report_snapshot(
+    tmp_path: Path,
+) -> None:
+    catalog = create_catalog(
+        tmp_path,
+        [*CANONICAL_V2_TABLE_SPECS, *CANONICAL_LINEAGE_TABLE_SPECS],
     )
-
-    with pytest.raises(duckdb.Error, match="missing_from_target"):
-        load_canonical_table(catalog, duckdb_path, bad_spec)  # type: ignore[arg-type]
-
-    assert catalog.load_table(CANONICAL_STOCK_BASIC_IDENTIFIER).current_snapshot() is None
-
-
-def test_load_canonical_table_rejects_public_single_mart_publish(tmp_path: Path) -> None:
-    catalog = create_catalog(tmp_path, [CANONICAL_MART_TABLE_SPECS[0]])
     duckdb_path = tmp_path / "marts.duckdb"
-    write_mart_relations(duckdb_path)
+    write_canonical_v2_mart_relations(duckdb_path)
 
-    with pytest.raises(ValueError, match="publish marts with load_canonical_marts"):
-        load_canonical_table(  # type: ignore[arg-type]
-            catalog,
-            duckdb_path,
-            CANONICAL_MART_LOAD_SPECS[0],
+    class FailingOverwrite(Exception):
+        pass
+
+    def failing_overwrite(*_args: object, **_kwargs: object) -> object:
+        raise FailingOverwrite("overwrite failed")
+
+    target_v2 = canonical_writer.CANONICAL_V2_MART_LOAD_SPECS[0].identifier
+    target_lineage = canonical_writer.CANONICAL_LINEAGE_MART_LOAD_SPECS[0].identifier
+    real_overwrite = canonical_writer._overwrite_prepared_load
+    refreshed_calls: list[str] = []
+    original_overwrite_calls: list[str] = []
+
+    def tracking_overwrite(prepared: object, *, started_at: float) -> object:
+        identifier = getattr(prepared, "spec").identifier
+        original_overwrite_calls.append(identifier)
+        if identifier == target_v2:
+            raise FailingOverwrite("overwrite failed")
+        return real_overwrite(prepared, started_at=started_at)
+
+    import unittest.mock as mock
+    with mock.patch.object(
+        canonical_writer,
+        "_overwrite_prepared_load",
+        tracking_overwrite,
+    ):
+        with pytest.raises(FailingOverwrite, match="overwrite failed"):
+            load_canonical_v2_marts(catalog, duckdb_path)  # type: ignore[arg-type]
+
+    assert original_overwrite_calls == [target_v2]
+    assert catalog.load_table(target_v2).current_snapshot() is None
+    assert catalog.load_table(target_lineage).current_snapshot() is None
+
+
+def test_cli_writes_v2_marts_result_json(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    catalog = create_catalog(
+        tmp_path,
+        [*CANONICAL_V2_TABLE_SPECS, *CANONICAL_LINEAGE_TABLE_SPECS],
+    )
+    duckdb_path = tmp_path / "marts.duckdb"
+    write_canonical_v2_mart_relations(duckdb_path)
+    monkeypatch.setattr(canonical_writer, "load_catalog", lambda: catalog)
+    monkeypatch.setattr(canonical_writer, "get_settings", lambda: FakeSettings(duckdb_path))
+
+    exit_code = canonical_writer.main(["--table", "v2_marts", "--json"])
+
+    captured = capsys.readouterr()
+    assert exit_code == 0
+    assert captured.err == ""
+    payload = json.loads(captured.out)
+    expected_count = len(canonical_writer.CANONICAL_V2_MART_LOAD_SPECS) + len(
+        canonical_writer.CANONICAL_LINEAGE_MART_LOAD_SPECS
+    )
+    assert len(payload) == expected_count
+    payload_tables = {item["table"] for item in payload}
+    expected_tables = {
+        spec.identifier
+        for spec in (
+            *canonical_writer.CANONICAL_V2_MART_LOAD_SPECS,
+            *canonical_writer.CANONICAL_LINEAGE_MART_LOAD_SPECS,
         )
-
-    assert catalog.load_table("canonical.dim_security").current_snapshot() is None
-
-
-def test_overwrite_failure_does_not_refresh_or_report_snapshot(tmp_path: Path) -> None:
-    duckdb_path = tmp_path / "staging.duckdb"
-    rows = stock_basic_rows()
-    write_staging_stock_basic(duckdb_path, rows)
-
-    class FailingTable:
-        schema = CANONICAL_STOCK_BASIC_SPEC.schema
-
-        def __init__(self) -> None:
-            self.overwritten_rows: int | None = None
-            self.refresh_called = False
-
-        def overwrite(self, table_arrow: pa.Table) -> None:
-            self.overwritten_rows = table_arrow.num_rows
-            raise RuntimeError("overwrite failed")
-
-        def refresh(self) -> FailingTable:
-            self.refresh_called = True
-            return self
-
-    class FakeCatalog:
-        def __init__(self) -> None:
-            self.table = FailingTable()
-
-        def load_table(self, identifier: str) -> FailingTable:
-            assert identifier == CANONICAL_STOCK_BASIC_IDENTIFIER
-            return self.table
-
-    catalog = FakeCatalog()
-
-    with pytest.raises(RuntimeError, match="overwrite failed"):
-        load_canonical_stock_basic(catalog, duckdb_path)  # type: ignore[arg-type]
-
-    assert catalog.table.overwritten_rows == len(rows)
-    assert catalog.table.refresh_called is False
-
-
-def test_cli_writes_result_json(
-    tmp_path: Path,
-    monkeypatch: pytest.MonkeyPatch,
-    capsys: pytest.CaptureFixture[str],
-) -> None:
-    catalog = create_stock_basic_catalog(tmp_path)
-    duckdb_path = tmp_path / "staging.duckdb"
-    write_staging_stock_basic(duckdb_path, stock_basic_rows())
-    monkeypatch.setattr(canonical_writer, "load_catalog", lambda: catalog)
-    monkeypatch.setattr(canonical_writer, "get_settings", lambda: FakeSettings(duckdb_path))
-
-    exit_code = canonical_writer.main(["--table", "stock_basic"])
-
-    captured = capsys.readouterr()
-    assert exit_code == 0
-    assert captured.err == ""
-    payload = json.loads(captured.out)
-    assert payload["table"] == CANONICAL_STOCK_BASIC_IDENTIFIER
-    assert payload["row_count"] == len(stock_basic_rows())
-    assert catalog.load_table(CANONICAL_STOCK_BASIC_IDENTIFIER).current_snapshot() is not None
-
-
-def test_cli_writes_marts_result_json(
-    tmp_path: Path,
-    monkeypatch: pytest.MonkeyPatch,
-    capsys: pytest.CaptureFixture[str],
-) -> None:
-    catalog = create_catalog(tmp_path, CANONICAL_MART_TABLE_SPECS)
-    duckdb_path = tmp_path / "marts.duckdb"
-    write_mart_relations(duckdb_path)
-    monkeypatch.setattr(canonical_writer, "load_catalog", lambda: catalog)
-    monkeypatch.setattr(canonical_writer, "get_settings", lambda: FakeSettings(duckdb_path))
-
-    exit_code = canonical_writer.main(["--table", "marts", "--json"])
-
-    captured = capsys.readouterr()
-    assert exit_code == 0
-    assert captured.err == ""
-    payload = json.loads(captured.out)
-    assert [item["table"] for item in payload] == [
-        spec.identifier for spec in CANONICAL_MART_LOAD_SPECS
-    ]
-    assert [item["row_count"] for item in payload] == [1] * len(CANONICAL_MART_LOAD_SPECS)
+    }
+    assert payload_tables == expected_tables
 
 
 def test_cli_reports_failure_as_json(
@@ -724,7 +538,7 @@ def test_cli_reports_failure_as_json(
     "argv, expected_detail",
     [
         ([], "the following arguments are required: --table"),
-        (["--table", "stock_basic", "--unknown"], "unrecognized arguments: --unknown"),
+        (["--table", "v2_marts", "--unknown"], "unrecognized arguments: --unknown"),
     ],
 )
 def test_cli_reports_argument_failures_as_json(
@@ -748,18 +562,6 @@ def create_catalog(tmp_path: Path, specs: Sequence[TableSpec]) -> InMemoryCatalo
     for spec in specs:
         catalog.create_namespace_if_not_exists((spec.namespace,))
         catalog.create_table(f"{spec.namespace}.{spec.name}", schema=spec.schema)
-    return catalog
-
-
-def create_stock_basic_catalog(
-    tmp_path: Path,
-    *,
-    schema: pa.Schema = CANONICAL_STOCK_BASIC_SPEC.schema,
-) -> InMemoryCatalog:
-    warehouse_path = tmp_path / "warehouse"
-    catalog = InMemoryCatalog("test", warehouse=f"file://{warehouse_path}")
-    catalog.create_namespace_if_not_exists(("canonical",))
-    catalog.create_table(CANONICAL_STOCK_BASIC_IDENTIFIER, schema=schema)
     return catalog
 
 

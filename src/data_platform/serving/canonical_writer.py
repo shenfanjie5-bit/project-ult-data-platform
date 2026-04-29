@@ -27,12 +27,38 @@ from data_platform.serving.catalog import load_catalog
 
 logger = logging.getLogger(__name__)
 
-TABLE_STOCK_BASIC = "stock_basic"
-TABLE_MARTS = "marts"
-CANONICAL_STOCK_BASIC_IDENTIFIER = "canonical.stock_basic"
+TABLE_V2_MARTS = "v2_marts"
 CANONICAL_LOADED_AT_COLUMN = "canonical_loaded_at"
 CANONICAL_MART_SNAPSHOT_SET_FILE = "_mart_snapshot_set.json"
-FORBIDDEN_PAYLOAD_FIELDS = frozenset({"submitted_at", "ingest_seq"})
+FORBIDDEN_PAYLOAD_FIELDS = frozenset(
+    {"submitted_at", "ingest_seq", "source_run_id", "raw_loaded_at"}
+)
+"""Columns that must never appear on canonical business payload writes.
+
+Includes both Layer-B ingest-queue fields (`submitted_at`, `ingest_seq`)
+and raw-zone lineage fields (`source_run_id`, `raw_loaded_at`). The
+`canonical_lineage.*` namespace legitimately carries the lineage block,
+so the bypass at `_forbidden_payload_fields_for` strips those from the
+forbidden set when the identifier is in `canonical_lineage`.
+"""
+
+_CANONICAL_LINEAGE_NAMESPACE = "canonical_lineage"
+_CANONICAL_LINEAGE_ALLOWED_FIELDS = frozenset({"source_run_id", "raw_loaded_at"})
+
+
+def _forbidden_payload_fields_for(identifier: str) -> frozenset[str]:
+    """Return the forbidden-payload-fields set for one canonical identifier.
+
+    Canonical_lineage specs legitimately carry `source_run_id` /
+    `raw_loaded_at`; the ingest-queue boundary still applies there.
+    """
+
+    namespace = identifier.split(".", maxsplit=1)[0]
+    if namespace == _CANONICAL_LINEAGE_NAMESPACE:
+        return FORBIDDEN_PAYLOAD_FIELDS - _CANONICAL_LINEAGE_ALLOWED_FIELDS
+    return FORBIDDEN_PAYLOAD_FIELDS
+
+
 _IDENTIFIER_PATTERN: Final[re.Pattern[str]] = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*$")
 
 
@@ -73,12 +99,12 @@ class CanonicalLoadSpec:
             _validate_identifier(column)
 
         forbidden_fields = sorted(
-            FORBIDDEN_PAYLOAD_FIELDS.intersection(
+            _forbidden_payload_fields_for(identifier).intersection(
                 column.lower() for column in self.required_columns
             )
         )
         if forbidden_fields:
-            msg = "canonical load spec must not include producer queue fields: "
+            msg = "canonical load spec must not include forbidden payload fields: "
             raise ValueError(msg + ", ".join(forbidden_fields))
 
         object.__setattr__(self, "identifier", identifier)
@@ -121,244 +147,6 @@ def _validate_identifier(identifier: str) -> None:
     msg = f"invalid SQL identifier: {identifier!r}"
     raise ValueError(msg)
 
-
-STOCK_BASIC_LOAD_SPEC: Final[CanonicalLoadSpec] = CanonicalLoadSpec(
-    identifier=CANONICAL_STOCK_BASIC_IDENTIFIER,
-    duckdb_relation="stg_stock_basic",
-    required_columns=(
-        "ts_code",
-        "symbol",
-        "name",
-        "area",
-        "industry",
-        "market",
-        "list_date",
-        "is_active",
-        "source_run_id",
-    ),
-)
-
-CANONICAL_MART_LOAD_SPECS: Final[tuple[CanonicalLoadSpec, ...]] = (
-    CanonicalLoadSpec(
-        identifier="canonical.dim_security",
-        duckdb_relation="mart_dim_security",
-        required_columns=(
-            "ts_code",
-            "symbol",
-            "name",
-            "market",
-            "industry",
-            "list_date",
-            "is_active",
-            "area",
-            "fullname",
-            "exchange",
-            "curr_type",
-            "list_status",
-            "delist_date",
-            "setup_date",
-            "province",
-            "city",
-            "reg_capital",
-            "employees",
-            "main_business",
-            "latest_namechange_name",
-            "latest_namechange_start_date",
-            "latest_namechange_end_date",
-            "latest_namechange_ann_date",
-            "latest_namechange_reason",
-            "source_run_id",
-            "raw_loaded_at",
-        ),
-    ),
-    CanonicalLoadSpec(
-        identifier="canonical.dim_index",
-        duckdb_relation="mart_dim_index",
-        required_columns=(
-            "index_code",
-            "index_name",
-            "index_market",
-            "index_category",
-            "first_effective_date",
-            "latest_effective_date",
-            "source_run_id",
-            "raw_loaded_at",
-        ),
-    ),
-    CanonicalLoadSpec(
-        identifier="canonical.fact_price_bar",
-        duckdb_relation="mart_fact_price_bar",
-        required_columns=(
-            "ts_code",
-            "trade_date",
-            "freq",
-            "open",
-            "high",
-            "low",
-            "close",
-            "pre_close",
-            "change",
-            "pct_chg",
-            "vol",
-            "amount",
-            "adj_factor",
-            "source_run_id",
-            "raw_loaded_at",
-        ),
-    ),
-    CanonicalLoadSpec(
-        identifier="canonical.fact_financial_indicator",
-        duckdb_relation="mart_fact_financial_indicator",
-        required_columns=(
-            "ts_code",
-            "end_date",
-            "ann_date",
-            "f_ann_date",
-            "report_type",
-            "comp_type",
-            "update_flag",
-            "is_latest",
-            "basic_eps",
-            "diluted_eps",
-            "total_revenue",
-            "revenue",
-            "operate_profit",
-            "total_profit",
-            "n_income",
-            "n_income_attr_p",
-            "money_cap",
-            "total_cur_assets",
-            "total_assets",
-            "total_cur_liab",
-            "total_liab",
-            "total_hldr_eqy_exc_min_int",
-            "total_liab_hldr_eqy",
-            "net_profit",
-            "n_cashflow_act",
-            "n_cashflow_inv_act",
-            "n_cash_flows_fnc_act",
-            "n_incr_cash_cash_equ",
-            "free_cashflow",
-            "eps",
-            "dt_eps",
-            "grossprofit_margin",
-            "netprofit_margin",
-            "roe",
-            "roa",
-            "debt_to_assets",
-            "or_yoy",
-            "netprofit_yoy",
-            "source_run_id",
-            "raw_loaded_at",
-        ),
-    ),
-    CanonicalLoadSpec(
-        identifier="canonical.fact_event",
-        duckdb_relation="mart_fact_event",
-        required_columns=(
-            "event_type",
-            "ts_code",
-            "event_date",
-            "title",
-            "summary",
-            "event_subtype",
-            "related_date",
-            "reference_url",
-            "rec_time",
-            "source_run_id",
-            "raw_loaded_at",
-        ),
-    ),
-    CanonicalLoadSpec(
-        identifier="canonical.fact_market_daily_feature",
-        duckdb_relation="mart_fact_market_daily_feature",
-        required_columns=(
-            "ts_code",
-            "trade_date",
-            "close",
-            "turnover_rate",
-            "turnover_rate_f",
-            "volume_ratio",
-            "pe",
-            "pe_ttm",
-            "pb",
-            "ps",
-            "ps_ttm",
-            "dv_ratio",
-            "dv_ttm",
-            "total_share",
-            "float_share",
-            "free_share",
-            "total_mv",
-            "circ_mv",
-            "up_limit",
-            "down_limit",
-            "buy_sm_vol",
-            "buy_sm_amount",
-            "sell_sm_vol",
-            "sell_sm_amount",
-            "buy_md_vol",
-            "buy_md_amount",
-            "sell_md_vol",
-            "sell_md_amount",
-            "buy_lg_vol",
-            "buy_lg_amount",
-            "sell_lg_vol",
-            "sell_lg_amount",
-            "buy_elg_vol",
-            "buy_elg_amount",
-            "sell_elg_vol",
-            "sell_elg_amount",
-            "net_mf_vol",
-            "net_mf_amount",
-            "source_run_id",
-            "raw_loaded_at",
-        ),
-    ),
-    CanonicalLoadSpec(
-        identifier="canonical.fact_index_price_bar",
-        duckdb_relation="mart_fact_index_price_bar",
-        required_columns=(
-            "index_code",
-            "trade_date",
-            "open",
-            "high",
-            "low",
-            "close",
-            "pre_close",
-            "change",
-            "pct_chg",
-            "vol",
-            "amount",
-            "exchange",
-            "is_open",
-            "pretrade_date",
-            "source_run_id",
-            "raw_loaded_at",
-        ),
-    ),
-    CanonicalLoadSpec(
-        identifier="canonical.fact_forecast_event",
-        duckdb_relation="mart_fact_forecast_event",
-        required_columns=(
-            "ts_code",
-            "ann_date",
-            "end_date",
-            "forecast_type",
-            "p_change_min",
-            "p_change_max",
-            "net_profit_min",
-            "net_profit_max",
-            "last_parent_net",
-            "first_ann_date",
-            "summary",
-            "change_reason",
-            "update_flag",
-            "source_run_id",
-            "raw_loaded_at",
-        ),
-    ),
-)
 
 # ---------------------------------------------------------------------------
 # Canonical V2 + canonical lineage load specs.
@@ -789,7 +577,14 @@ def load_canonical_table(
     *,
     allow_empty: bool = False,
 ) -> WriteResult:
-    """Load one DuckDB relation into its canonical Iceberg table via full overwrite."""
+    """Load one DuckDB relation into a single canonical Iceberg table.
+
+    Mart specs (`canonical_v2.*` or `canonical_lineage.*`) MUST be
+    published via `load_canonical_v2_marts` so the paired snapshot
+    manifest stays consistent. This function is reserved for non-mart
+    canonical tables (entity stores + schema-evolution single-table
+    overwrites consumed by `serving.schema_evolution`).
+    """
 
     _reject_public_mart_load(spec)
     start = perf_counter()
@@ -804,17 +599,12 @@ def load_canonical_table(
 
 
 def _reject_public_mart_load(spec: CanonicalLoadSpec) -> None:
-    mart_identifiers = {mart_spec.identifier for mart_spec in CANONICAL_MART_LOAD_SPECS}
-    v2_mart_identifiers = {mart_spec.identifier for mart_spec in CANONICAL_V2_MART_LOAD_SPECS}
+    v2_mart_identifiers = {
+        mart_spec.identifier for mart_spec in CANONICAL_V2_MART_LOAD_SPECS
+    }
     lineage_mart_identifiers = {
         mart_spec.identifier for mart_spec in CANONICAL_LINEAGE_MART_LOAD_SPECS
     }
-    if spec.identifier in mart_identifiers:
-        msg = (
-            f"{spec.identifier} is part of the canonical mart snapshot set; "
-            "publish marts with load_canonical_marts"
-        )
-        raise ValueError(msg)
     if spec.identifier in v2_mart_identifiers or spec.identifier in lineage_mart_identifiers:
         msg = (
             f"{spec.identifier} is part of the canonical_v2 / canonical_lineage "
@@ -839,7 +629,7 @@ def _prepare_canonical_load(
         target_columns,
         canonical_loaded_at=canonical_loaded_at,
     )
-    _validate_no_forbidden_payload_fields(table_arrow)
+    _validate_no_forbidden_payload_fields(table_arrow, spec.identifier)
     _validate_payload_fields_match_target(spec.identifier, table, table_arrow)
     _validate_non_empty_staging(spec, table_arrow, allow_empty=allow_empty)
     return _PreparedCanonicalLoad(spec=spec, table=table, table_arrow=table_arrow)
@@ -869,63 +659,6 @@ def _overwrite_prepared_load(
         },
     )
     return result, refreshed_table
-
-
-def load_canonical_stock_basic(
-    catalog: SqlCatalog,
-    duckdb_path: Path,
-    *,
-    allow_empty: bool = False,
-) -> WriteResult:
-    """Load DuckDB stg_stock_basic into canonical.stock_basic via full overwrite."""
-
-    return load_canonical_table(
-        catalog,
-        duckdb_path,
-        STOCK_BASIC_LOAD_SPEC,
-        allow_empty=allow_empty,
-    )
-
-
-def load_canonical_marts(
-    catalog: SqlCatalog,
-    duckdb_path: Path,
-    *,
-    allow_empty: bool = False,
-) -> list[WriteResult]:
-    """Load all canonical mart tables in the project-defined dependency order."""
-
-    prepared_loads = [
-        _prepare_canonical_load(
-            catalog,
-            duckdb_path,
-            spec,
-            allow_empty=allow_empty,
-        )
-        for spec in CANONICAL_MART_LOAD_SPECS
-    ]
-
-    results: list[WriteResult] = []
-    snapshot_set_tables: dict[str, dict[str, int | str]] = {}
-    load_id = str(uuid4())
-    for prepared in prepared_loads:
-        result, refreshed_table = _overwrite_prepared_load(
-            prepared,
-            started_at=perf_counter(),
-        )
-        results.append(result)
-        snapshot_set_tables[_table_name_from_identifier(result.table)] = {
-            "identifier": result.table,
-            "snapshot_id": result.snapshot_id,
-            "metadata_location": str(_local_path_from_location(refreshed_table.metadata_location)),
-        }
-
-    _write_mart_snapshot_set_manifest(
-        prepared_loads[0].table,
-        load_id=load_id,
-        tables=snapshot_set_tables,
-    )
-    return results
 
 
 def load_canonical_v2_marts(
@@ -1293,14 +1026,8 @@ def main(argv: Sequence[str] | None = None) -> int:
         )
         args = parser.parse_args(argv)
         result: WriteResult | list[WriteResult]
-        if args.table == TABLE_STOCK_BASIC:
-            result = load_canonical_stock_basic(
-                load_catalog(),
-                get_settings().duckdb_path,
-                allow_empty=args.allow_empty,
-            )
-        elif args.table == TABLE_MARTS:
-            result = load_canonical_marts(
+        if args.table == TABLE_V2_MARTS:
+            result = load_canonical_v2_marts(
                 load_catalog(),
                 get_settings().duckdb_path,
                 allow_empty=args.allow_empty,
@@ -1355,16 +1082,18 @@ FROM {_quote_qualified_identifier(spec.duckdb_relation)}
         connection.close()
 
 
-def _validate_no_forbidden_payload_fields(table_arrow: pa.Table) -> None:
+def _validate_no_forbidden_payload_fields(
+    table_arrow: pa.Table, identifier: str
+) -> None:
     forbidden_fields = sorted(
-        FORBIDDEN_PAYLOAD_FIELDS.intersection(
+        _forbidden_payload_fields_for(identifier).intersection(
             field_name.lower() for field_name in table_arrow.schema.names
         )
     )
     if not forbidden_fields:
         return
 
-    msg = "canonical payload must not include producer queue fields: "
+    msg = "canonical payload must not include forbidden payload fields: "
     raise ValueError(msg + ", ".join(forbidden_fields))
 
 
@@ -1435,25 +1164,6 @@ def _current_snapshot_id(table: Table, identifier: str) -> int:
     return int(snapshot.snapshot_id)
 
 
-def _write_mart_snapshot_set_manifest(
-    table: Table,
-    *,
-    load_id: str,
-    tables: dict[str, dict[str, int | str]],
-) -> None:
-    manifest_path = _mart_snapshot_set_manifest_path(table)
-    manifest_path.parent.mkdir(parents=True, exist_ok=True)
-    payload = {
-        "version": 1,
-        "load_id": load_id,
-        "published_at": datetime.now(UTC).isoformat(),
-        "tables": tables,
-    }
-    temp_path = manifest_path.with_name(f".{manifest_path.name}.{load_id}.tmp")
-    temp_path.write_text(json.dumps(payload, sort_keys=True), encoding="utf-8")
-    temp_path.replace(manifest_path)
-
-
 def _mart_snapshot_set_manifest_path(table: Table) -> Path:
     table_location = _local_path_from_location(table.location())
     return table_location.parent / CANONICAL_MART_SNAPSHOT_SET_FILE
@@ -1490,7 +1200,6 @@ __all__ = [
     "CANONICAL_LINEAGE_FACT_PRICE_BAR_LOAD_SPEC",
     "CANONICAL_LINEAGE_MART_LOAD_SPECS",
     "CANONICAL_LINEAGE_STOCK_BASIC_LOAD_SPEC",
-    "CANONICAL_MART_LOAD_SPECS",
     "CANONICAL_MART_SNAPSHOT_SET_FILE",
     "CANONICAL_V2_DIM_INDEX_LOAD_SPEC",
     "CANONICAL_V2_DIM_SECURITY_LOAD_SPEC",
@@ -1505,8 +1214,6 @@ __all__ = [
     "CANONICAL_V2_STOCK_BASIC_LOAD_SPEC",
     "CanonicalLoadSpec",
     "WriteResult",
-    "load_canonical_marts",
-    "load_canonical_stock_basic",
     "load_canonical_table",
     "load_canonical_v2_marts",
     "main",
