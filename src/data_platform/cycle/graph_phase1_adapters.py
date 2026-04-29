@@ -265,17 +265,21 @@ class IcebergCanonicalGraphWriter:
     arbitrary-key struct type). Each record carries the ``cycle_id`` of
     the promotion that produced it for traceability.
 
-    **Append semantics:** each ``write_canonical_records`` call appends
-    the plan's records to the existing tables; this writer does NOT
-    deduplicate against prior cycles. Cross-cycle deduplication is the
-    Phase 1 service's responsibility (via
-    ``EntityAnchorReader.existing_entity_ids``).
+    **Re-run idempotency (M2.6 follow-up #1 review-fold P1-A):** each write
+    issues an Iceberg row-filter overwrite scoped to the plan's ``cycle_id``
+    rather than a blind append. A retried Phase 1 run for the same
+    ``cycle_id`` first deletes the rows with that ``cycle_id`` and then
+    writes the new rows, so duplicate node/edge/assertion rows cannot
+    accumulate across retries. Rows for *other* ``cycle_id`` values are
+    untouched (verified by ``test_iceberg_writer_appends_across_two_cycles``
+    + ``test_iceberg_writer_is_idempotent_across_two_runs_of_same_cycle``).
 
-    **Atomicity:** the three table appends happen sequentially. A failure
-    on the second append leaves the first append committed. Production
-    deployments should treat this as a known limitation and rely on
-    Phase 1's idempotent re-run to recover; Iceberg snapshots at the
-    table level let operators inspect partial writes via the catalog.
+    **Atomicity:** the three table overwrites happen sequentially. A
+    failure on the second table leaves the first table's overwrite
+    committed. Re-running the same cycle is the recovery contract — the
+    cycle-scoped overwrite means a second run produces the correct final
+    state regardless of how far the first run got. Iceberg snapshots at
+    the table level let operators inspect partial writes via the catalog.
     """
 
     def __init__(self, *, catalog: Any | None = None) -> None:
@@ -294,12 +298,26 @@ class IcebergCanonicalGraphWriter:
         return self._catalog
 
     def write_canonical_records(self, plan: Any) -> None:
-        """Append the plan's records to the three canonical.graph_* tables.
+        """Cycle-scoped overwrite of the three canonical.graph_* tables.
 
-        ``plan`` is a ``graph_engine.models.PromotionPlan``. The append
-        order (node → edge → assertion) preserves referential intent in
+        ``plan`` is a ``graph_engine.models.PromotionPlan``. For each
+        table, the writer issues
+        ``target.overwrite(arrow, overwrite_filter=EqualTo("cycle_id",
+        plan.cycle_id))`` — atomically replacing the rows belonging to
+        this ``cycle_id`` with the plan's records. This makes Phase 1
+        retries idempotent at the table level (P1-A review-fold).
+
+        Order (node → edge → assertion) preserves referential intent in
         the Iceberg snapshot history if a downstream reader inspects
         partial writes after a failure.
+
+        Empty record slices skip the overwrite entirely; if Phase 1 ever
+        produces a plan with zero edges for a cycle, leftover edges from
+        a prior run for that same cycle will NOT be cleared. This is
+        deliberate: an empty slice means "the producer did not run", not
+        "the producer ran and produced nothing". Callers that need to
+        clear a cycle's slice explicitly should pass an empty arrow
+        table to ``target.overwrite`` directly.
         """
 
         catalog = self._resolve_catalog()
@@ -312,26 +330,44 @@ class IcebergCanonicalGraphWriter:
         )
 
         if node_arrow is not None:
-            self._append_to_table(catalog, "canonical.graph_node", node_arrow)
+            self._overwrite_cycle_slice(
+                catalog, "canonical.graph_node", node_arrow, cycle_id
+            )
         if edge_arrow is not None:
-            self._append_to_table(catalog, "canonical.graph_edge", edge_arrow)
+            self._overwrite_cycle_slice(
+                catalog, "canonical.graph_edge", edge_arrow, cycle_id
+            )
         if assertion_arrow is not None:
-            self._append_to_table(
-                catalog, "canonical.graph_assertion", assertion_arrow
+            self._overwrite_cycle_slice(
+                catalog, "canonical.graph_assertion", assertion_arrow, cycle_id
             )
 
     @staticmethod
-    def _append_to_table(catalog: Any, identifier: str, table_arrow: Any) -> None:
+    def _overwrite_cycle_slice(
+        catalog: Any, identifier: str, table_arrow: Any, cycle_id: str
+    ) -> None:
+        # Lazy import: ``pyiceberg.expressions`` is only needed when a
+        # real Iceberg target is wired up; tests pass a fake catalog
+        # whose ``_FakeIcebergTable.overwrite`` ignores the filter.
+        from pyiceberg.expressions import EqualTo
+
         target_table = catalog.load_table(identifier)
-        target_table.append(table_arrow)
+        target_table.overwrite(
+            table_arrow, overwrite_filter=EqualTo("cycle_id", cycle_id)
+        )
 
     @staticmethod
-    def _node_records_to_arrow(records: list, cycle_id: str) -> Any:
+    def _node_records_to_arrow(records: list[Any], cycle_id: str) -> Any:
         if not records:
             return None
         import json
 
         import pyarrow as pa
+
+        # Single source of truth: derive schema from the canonical TableSpec
+        # (M2.6 follow-up #1 review-fold P1-C). If the spec evolves a column,
+        # the writer no longer needs a parallel update.
+        from data_platform.ddl.iceberg_tables import CANONICAL_GRAPH_NODE_SPEC
 
         return pa.table(
             {
@@ -346,26 +382,18 @@ class IcebergCanonicalGraphWriter:
                 "created_at": [r.created_at for r in records],
                 "updated_at": [r.updated_at for r in records],
             },
-            schema=pa.schema(
-                [
-                    pa.field("node_id", pa.string()),
-                    pa.field("canonical_entity_id", pa.string()),
-                    pa.field("label", pa.string()),
-                    pa.field("properties_json", pa.string()),
-                    pa.field("cycle_id", pa.string()),
-                    pa.field("created_at", pa.timestamp("us")),
-                    pa.field("updated_at", pa.timestamp("us")),
-                ]
-            ),
+            schema=CANONICAL_GRAPH_NODE_SPEC.schema,
         )
 
     @staticmethod
-    def _edge_records_to_arrow(records: list, cycle_id: str) -> Any:
+    def _edge_records_to_arrow(records: list[Any], cycle_id: str) -> Any:
         if not records:
             return None
         import json
 
         import pyarrow as pa
+
+        from data_platform.ddl.iceberg_tables import CANONICAL_GRAPH_EDGE_SPEC
 
         return pa.table(
             {
@@ -382,28 +410,23 @@ class IcebergCanonicalGraphWriter:
                 "created_at": [r.created_at for r in records],
                 "updated_at": [r.updated_at for r in records],
             },
-            schema=pa.schema(
-                [
-                    pa.field("edge_id", pa.string()),
-                    pa.field("source_node_id", pa.string()),
-                    pa.field("target_node_id", pa.string()),
-                    pa.field("relationship_type", pa.string()),
-                    pa.field("properties_json", pa.string()),
-                    pa.field("weight", pa.float64()),
-                    pa.field("cycle_id", pa.string()),
-                    pa.field("created_at", pa.timestamp("us")),
-                    pa.field("updated_at", pa.timestamp("us")),
-                ]
-            ),
+            schema=CANONICAL_GRAPH_EDGE_SPEC.schema,
         )
 
     @staticmethod
-    def _assertion_records_to_arrow(records: list, cycle_id: str) -> Any:
+    def _assertion_records_to_arrow(records: list[Any], cycle_id: str) -> Any:
         if not records:
             return None
         import json
 
         import pyarrow as pa
+
+        # ``target_node_id`` is nullable per ``GraphAssertionRecord``
+        # (graph-engine models.py:108); the spec field defaults to
+        # nullable=True under PyArrow which round-trips ``None`` correctly.
+        from data_platform.ddl.iceberg_tables import (
+            CANONICAL_GRAPH_ASSERTION_SPEC,
+        )
 
         return pa.table(
             {
@@ -419,19 +442,7 @@ class IcebergCanonicalGraphWriter:
                 "cycle_id": [cycle_id for _ in records],
                 "created_at": [r.created_at for r in records],
             },
-            schema=pa.schema(
-                [
-                    pa.field("assertion_id", pa.string()),
-                    pa.field("source_node_id", pa.string()),
-                    pa.field("target_node_id", pa.string()),  # nullable per
-                    # GraphAssertionRecord (graph-engine models.py:108).
-                    pa.field("assertion_type", pa.string()),
-                    pa.field("evidence_json", pa.string()),
-                    pa.field("confidence", pa.float64()),
-                    pa.field("cycle_id", pa.string()),
-                    pa.field("created_at", pa.timestamp("us")),
-                ]
-            ),
+            schema=CANONICAL_GRAPH_ASSERTION_SPEC.schema,
         )
 
     @classmethod
@@ -470,9 +481,14 @@ class _FailClosedCanonicalGraphWriter:
         )
 
 
+# NOTE: ``StubCanonicalGraphWriter`` is intentionally NOT in ``__all__`` (M2.6
+# follow-up #1 review-fold P2-1). The alias is retained at module level for
+# import compatibility with M2.3a-2 callers, but a name containing "Stub" that
+# resolves to a production writer would be misleading via ``import *``. New
+# code should reference ``IcebergCanonicalGraphWriter`` (or
+# ``_FailClosedCanonicalGraphWriter`` for explicit fail-closed wiring).
 __all__ = [
     "IcebergCanonicalGraphWriter",
     "IcebergEntityAnchorReader",
     "PostgresCandidateDeltaReader",
-    "StubCanonicalGraphWriter",  # retained alias for backwards compat
 ]

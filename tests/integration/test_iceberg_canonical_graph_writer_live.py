@@ -19,60 +19,26 @@ from __future__ import annotations
 import os
 from collections.abc import Iterator
 from contextlib import contextmanager
-from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
 import pytest
 
+# Shared fake dataclasses live in tests/_graph_promotion_fakes.py so unit
+# + integration tests use the same definitions (M2.6 follow-up #1
+# review-fold P2-4 — eliminates the unit/integration timestamp drift the
+# review caught).
+from _graph_promotion_fakes import (  # type: ignore[import-not-found]
+    FakeAssertionRecord as _FakeAssertionRecord,
+    FakeEdgeRecord as _FakeEdgeRecord,
+    FakeNodeRecord as _FakeNodeRecord,
+    FakePromotionPlan as _FakePromotionPlan,
+)
+
 
 def _now() -> datetime:
     return datetime(2026, 4, 30, 12, 0, 0, tzinfo=timezone.utc)
-
-
-@dataclass
-class _FakeNodeRecord:
-    node_id: str
-    canonical_entity_id: str
-    label: str
-    properties: dict[str, Any]
-    created_at: datetime
-    updated_at: datetime
-
-
-@dataclass
-class _FakeEdgeRecord:
-    edge_id: str
-    source_node_id: str
-    target_node_id: str
-    relationship_type: str
-    properties: dict[str, Any]
-    weight: float
-    created_at: datetime
-    updated_at: datetime
-
-
-@dataclass
-class _FakeAssertionRecord:
-    assertion_id: str
-    source_node_id: str
-    target_node_id: str | None
-    assertion_type: str
-    evidence: dict[str, Any]
-    confidence: float
-    created_at: datetime
-
-
-@dataclass
-class _FakePromotionPlan:
-    cycle_id: str
-    selection_ref: str
-    delta_ids: list[str]
-    node_records: list[_FakeNodeRecord]
-    edge_records: list[_FakeEdgeRecord]
-    assertion_records: list[_FakeAssertionRecord]
-    created_at: datetime
 
 
 @contextmanager
@@ -198,10 +164,15 @@ def test_iceberg_canonical_graph_writer_round_trip_against_live_catalog(
         assert assertion_rows.column("confidence").to_pylist() == [0.95]
 
 
-def test_iceberg_writer_appends_across_two_cycles(tmp_path: Path) -> None:
+def test_iceberg_writer_writes_distinct_cycles_without_overwriting_each_other(
+    tmp_path: Path,
+) -> None:
     """Cycle A writes 1 node; cycle B writes 1 different node. After both
-    appends, the canonical.graph_node table contains 2 rows (the writer
-    is append-only, not overwrite-only)."""
+    writes, the canonical.graph_node table contains 2 rows. Cycle B's
+    overwrite-filter is scoped to ``cycle_id == 'CYCLE_20260501'`` so
+    cycle A's row is preserved (M2.6 follow-up #1 review-fold P1-A:
+    cycle-scoped overwrite, not append, but writes for *different*
+    cycles still accumulate)."""
 
     pytest.importorskip("pyiceberg.catalog.sql")
 
@@ -242,3 +213,51 @@ def test_iceberg_writer_appends_across_two_cycles(tmp_path: Path) -> None:
         assert node_ids == ["live-node-A", "live-node-B"]
         cycle_ids = sorted(set(node_rows.column("cycle_id").to_pylist()))
         assert cycle_ids == ["CYCLE_20260430", "CYCLE_20260501"]
+
+
+def test_iceberg_writer_is_idempotent_across_two_runs_of_same_cycle(
+    tmp_path: Path,
+) -> None:
+    """Phase 1 retry recovery contract: re-running the same cycle's plan
+    twice MUST leave the graph_node / graph_edge / graph_assertion
+    tables in the same state as a single run. This is the new behaviour
+    introduced by M2.6 follow-up #1 review-fold P1-A — replacing the
+    blind append with a cycle-scoped Iceberg row-filter overwrite."""
+
+    pytest.importorskip("pyiceberg.catalog.sql")
+
+    from data_platform.cycle.graph_phase1_adapters import (
+        IcebergCanonicalGraphWriter,
+    )
+
+    plan = _FakePromotionPlan(
+        cycle_id="CYCLE_20260430",
+        selection_ref="cycle_candidate_selection:CYCLE_20260430",
+        delta_ids=["d-1"],
+        node_records=[_node(node_id="live-node-1")],
+        edge_records=[_edge(edge_id="live-edge-1")],
+        assertion_records=[_assertion(assertion_id="live-assert-1")],
+        created_at=_now(),
+    )
+
+    with _live_iceberg(tmp_path) as catalog:
+        writer = IcebergCanonicalGraphWriter(catalog=catalog)
+        writer.write_canonical_records(plan)
+        writer.write_canonical_records(plan)  # retry with the same plan
+
+        for identifier, expected_id_col, expected_id in (
+            ("canonical.graph_node", "node_id", "live-node-1"),
+            ("canonical.graph_edge", "edge_id", "live-edge-1"),
+            ("canonical.graph_assertion", "assertion_id", "live-assert-1"),
+        ):
+            rows = catalog.load_table(identifier).scan().to_arrow()
+            # Each table holds exactly one row regardless of retry count;
+            # the cycle-scoped overwrite cleared the prior write before
+            # appending the new one.
+            assert rows.num_rows == 1, identifier
+            assert rows.column(expected_id_col).to_pylist() == [
+                expected_id
+            ], identifier
+            assert rows.column("cycle_id").to_pylist() == [
+                "CYCLE_20260430"
+            ], identifier

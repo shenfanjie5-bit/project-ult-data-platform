@@ -3,8 +3,7 @@
 from __future__ import annotations
 
 from contextlib import contextmanager
-from dataclasses import dataclass
-from datetime import datetime
+from datetime import datetime, timezone
 from typing import Any
 
 import pyarrow as pa  # type: ignore[import-untyped]
@@ -18,6 +17,15 @@ from data_platform.cycle.graph_phase1_adapters import (
     PostgresCandidateDeltaReader,
     StubCanonicalGraphWriter,
     _FailClosedCanonicalGraphWriter,
+)
+
+# Shared fake dataclasses live one level up so the integration tests can
+# import the same definitions (M2.6 follow-up #1 review-fold P2-4).
+from _graph_promotion_fakes import (  # type: ignore[import-not-found]
+    FakeAssertionRecord as _FakeAssertionRecord,
+    FakeEdgeRecord as _FakeEdgeRecord,
+    FakeNodeRecord as _FakeNodeRecord,
+    FakePromotionPlan as _FakePromotionPlan,
 )
 
 
@@ -314,14 +322,29 @@ def test_iceberg_writer_from_env_returns_lazy_instance() -> None:
 
 
 class _FakeIcebergTable:
-    """Minimal Iceberg table fake that records ``append`` calls for tests."""
+    """Minimal Iceberg table fake that records ``overwrite`` (and legacy
+    ``append``) calls for tests. ``IcebergCanonicalGraphWriter`` issues
+    cycle-scoped ``overwrite`` since M2.6 follow-up #1 review-fold P1-A;
+    legacy ``append`` is retained on the fake so any test path that still
+    constructs an append-only fake still works."""
 
     def __init__(self, identifier: str) -> None:
         self.identifier = identifier
         self.appended: list[Any] = []
+        # Each entry: (arrow_table, overwrite_filter)
+        self.overwritten: list[tuple[Any, Any]] = []
 
     def append(self, table_arrow: Any) -> None:
         self.appended.append(table_arrow)
+
+    def overwrite(
+        self,
+        table_arrow: Any,
+        *,
+        overwrite_filter: Any = None,
+        **_: Any,
+    ) -> None:
+        self.overwritten.append((table_arrow, overwrite_filter))
 
 
 class _FakeCatalog:
@@ -338,52 +361,11 @@ class _FakeCatalog:
         return self.tables[identifier]
 
 
-@dataclass
-class _FakeNodeRecord:
-    node_id: str
-    canonical_entity_id: str
-    label: str
-    properties: dict[str, Any]
-    created_at: datetime
-    updated_at: datetime
-
-
-@dataclass
-class _FakeEdgeRecord:
-    edge_id: str
-    source_node_id: str
-    target_node_id: str
-    relationship_type: str
-    properties: dict[str, Any]
-    weight: float
-    created_at: datetime
-    updated_at: datetime
-
-
-@dataclass
-class _FakeAssertionRecord:
-    assertion_id: str
-    source_node_id: str
-    target_node_id: str | None
-    assertion_type: str
-    evidence: dict[str, Any]
-    confidence: float
-    created_at: datetime
-
-
-@dataclass
-class _FakePromotionPlan:
-    cycle_id: str
-    selection_ref: str
-    delta_ids: list[str]
-    node_records: list[_FakeNodeRecord]
-    edge_records: list[_FakeEdgeRecord]
-    assertion_records: list[_FakeAssertionRecord]
-    created_at: datetime
-
-
 def _now() -> datetime:
-    return datetime(2026, 4, 30, 12, 0, 0)
+    # tz-aware to match the canonical.graph_* schema's
+    # GRAPH_TIMESTAMP_TYPE = pa.timestamp("us", tz="UTC")
+    # (M2.6 follow-up #1 review-fold P1-B).
+    return datetime(2026, 4, 30, 12, 0, 0, tzinfo=timezone.utc)
 
 
 def _node_record(*, node_id: str = "n-1") -> _FakeNodeRecord:
@@ -443,21 +425,62 @@ def _plan(
     )
 
 
-def test_iceberg_writer_appends_to_three_canonical_graph_tables() -> None:
+def _overwrite_arrow(
+    table: _FakeIcebergTable, idx: int = 0
+) -> Any:
+    """Helper: pull the arrow payload out of a recorded ``overwrite`` call
+    on the fake table (the fake records ``(arrow, overwrite_filter)``
+    pairs since the writer issues cycle-scoped overwrites for re-run
+    idempotency)."""
+
+    arrow, _filter = table.overwritten[idx]
+    return arrow
+
+
+def test_iceberg_writer_overwrites_three_canonical_graph_tables() -> None:
     catalog = _FakeCatalog()
     writer = IcebergCanonicalGraphWriter(catalog=catalog)
 
     writer.write_canonical_records(_plan())
 
-    # All three tables loaded + appended exactly once.
+    # All three tables loaded + overwritten (cycle-scoped) exactly once.
     assert catalog.lookups == [
         "canonical.graph_node",
         "canonical.graph_edge",
         "canonical.graph_assertion",
     ]
-    assert len(catalog.tables["canonical.graph_node"].appended) == 1
-    assert len(catalog.tables["canonical.graph_edge"].appended) == 1
-    assert len(catalog.tables["canonical.graph_assertion"].appended) == 1
+    assert len(catalog.tables["canonical.graph_node"].overwritten) == 1
+    assert len(catalog.tables["canonical.graph_edge"].overwritten) == 1
+    assert len(catalog.tables["canonical.graph_assertion"].overwritten) == 1
+    # Append must NOT be used since M2.6 follow-up #1 review-fold P1-A;
+    # cycle-scoped overwrite is the recovery contract.
+    assert catalog.tables["canonical.graph_node"].appended == []
+
+
+def test_iceberg_writer_overwrite_filter_pins_cycle_id() -> None:
+    """Re-run idempotency: the overwrite_filter MUST be EqualTo("cycle_id",
+    plan.cycle_id) on every call so retries replace only that cycle's
+    rows and never duplicate or touch other cycles
+    (M2.6 follow-up #1 review-fold P1-A)."""
+
+    from pyiceberg.expressions import EqualTo
+
+    catalog = _FakeCatalog()
+    writer = IcebergCanonicalGraphWriter(catalog=catalog)
+
+    writer.write_canonical_records(_plan(cycle_id="CYCLE_20260430"))
+
+    for identifier in (
+        "canonical.graph_node",
+        "canonical.graph_edge",
+        "canonical.graph_assertion",
+    ):
+        _arrow, overwrite_filter = catalog.tables[identifier].overwritten[0]
+        # Pinned via class + value so a regression to ALWAYS_TRUE or a
+        # different column is caught here.
+        assert isinstance(overwrite_filter, EqualTo)
+        assert overwrite_filter.term.name == "cycle_id"
+        assert overwrite_filter.literal.value == "CYCLE_20260430"
 
 
 def test_iceberg_writer_node_arrow_schema_and_values() -> None:
@@ -466,8 +489,8 @@ def test_iceberg_writer_node_arrow_schema_and_values() -> None:
 
     writer.write_canonical_records(_plan(cycle_id="CYCLE_20260501"))
 
-    appended = catalog.tables["canonical.graph_node"].appended[0]
-    assert appended.column_names == [
+    written = _overwrite_arrow(catalog.tables["canonical.graph_node"])
+    assert written.column_names == [
         "node_id",
         "canonical_entity_id",
         "label",
@@ -476,13 +499,13 @@ def test_iceberg_writer_node_arrow_schema_and_values() -> None:
         "created_at",
         "updated_at",
     ]
-    assert appended.column("node_id").to_pylist() == ["n-1"]
-    assert appended.column("canonical_entity_id").to_pylist() == ["ent-1"]
+    assert written.column("node_id").to_pylist() == ["n-1"]
+    assert written.column("canonical_entity_id").to_pylist() == ["ent-1"]
     # properties dict serialised as sorted JSON string.
-    assert appended.column("properties_json").to_pylist() == [
+    assert written.column("properties_json").to_pylist() == [
         '{"sector": "tech", "weight": 1.0}'
     ]
-    assert appended.column("cycle_id").to_pylist() == ["CYCLE_20260501"]
+    assert written.column("cycle_id").to_pylist() == ["CYCLE_20260501"]
 
 
 def test_iceberg_writer_edge_arrow_schema_and_values() -> None:
@@ -491,8 +514,8 @@ def test_iceberg_writer_edge_arrow_schema_and_values() -> None:
 
     writer.write_canonical_records(_plan())
 
-    appended = catalog.tables["canonical.graph_edge"].appended[0]
-    assert appended.column_names == [
+    written = _overwrite_arrow(catalog.tables["canonical.graph_edge"])
+    assert written.column_names == [
         "edge_id",
         "source_node_id",
         "target_node_id",
@@ -503,10 +526,10 @@ def test_iceberg_writer_edge_arrow_schema_and_values() -> None:
         "created_at",
         "updated_at",
     ]
-    assert appended.column("edge_id").to_pylist() == ["e-1"]
-    assert appended.column("relationship_type").to_pylist() == ["SUPPLY_CHAIN"]
+    assert written.column("edge_id").to_pylist() == ["e-1"]
+    assert written.column("relationship_type").to_pylist() == ["SUPPLY_CHAIN"]
     # weight column is float64 and the value 1.0 round-trips.
-    assert appended.column("weight").to_pylist() == [1.0]
+    assert written.column("weight").to_pylist() == [1.0]
 
 
 def test_iceberg_writer_assertion_arrow_schema_and_values() -> None:
@@ -515,8 +538,8 @@ def test_iceberg_writer_assertion_arrow_schema_and_values() -> None:
 
     writer.write_canonical_records(_plan())
 
-    appended = catalog.tables["canonical.graph_assertion"].appended[0]
-    assert appended.column_names == [
+    written = _overwrite_arrow(catalog.tables["canonical.graph_assertion"])
+    assert written.column_names == [
         "assertion_id",
         "source_node_id",
         "target_node_id",
@@ -526,12 +549,14 @@ def test_iceberg_writer_assertion_arrow_schema_and_values() -> None:
         "cycle_id",
         "created_at",
     ]
-    assert appended.column("confidence").to_pylist() == [0.95]
+    assert written.column("confidence").to_pylist() == [0.95]
 
 
 def test_iceberg_writer_skips_table_when_record_list_empty() -> None:
-    """Empty record lists must NOT load_table or append (no empty Iceberg
-    snapshot for an empty plan slice)."""
+    """Empty record lists must NOT load_table or overwrite (no empty
+    Iceberg snapshot for an empty plan slice; a missing slice means
+    'producer did not emit that record type for this cycle', not
+    'producer cleared all rows for this cycle')."""
 
     catalog = _FakeCatalog()
     writer = IcebergCanonicalGraphWriter(catalog=catalog)
@@ -552,8 +577,8 @@ def test_iceberg_writer_handles_assertion_with_null_target_node_id() -> None:
     null_target_assertion.target_node_id = None
     writer.write_canonical_records(_plan(assertions=[null_target_assertion]))
 
-    appended = catalog.tables["canonical.graph_assertion"].appended[0]
-    assert appended.column("target_node_id").to_pylist() == [None]
+    written = _overwrite_arrow(catalog.tables["canonical.graph_assertion"])
+    assert written.column("target_node_id").to_pylist() == [None]
 
 
 def test_iceberg_writer_serialises_properties_with_sorted_keys() -> None:
@@ -567,8 +592,8 @@ def test_iceberg_writer_serialises_properties_with_sorted_keys() -> None:
     record.properties = {"z_key": 1, "a_key": 2, "m_key": 3}
     writer.write_canonical_records(_plan(nodes=[record]))
 
-    appended = catalog.tables["canonical.graph_node"].appended[0]
-    serialised = appended.column("properties_json").to_pylist()[0]
+    written = _overwrite_arrow(catalog.tables["canonical.graph_node"])
+    serialised = written.column("properties_json").to_pylist()[0]
     # Sorted-key invariant: a_key < m_key < z_key.
     assert serialised == '{"a_key": 2, "m_key": 3, "z_key": 1}'
 
@@ -577,3 +602,54 @@ def test_fail_closed_canonical_graph_writer_raises_runtime_error() -> None:
     writer = _FailClosedCanonicalGraphWriter()
     with pytest.raises(RuntimeError, match="fail-closed"):
         writer.write_canonical_records(_plan())
+
+
+def test_iceberg_writer_partial_write_exception_propagates_after_first_table(
+) -> None:
+    """Atomicity contract (M2.6 follow-up #1 review-fold P2-3): if the
+    second table's overwrite raises, the exception MUST propagate to the
+    caller (so Phase 1 marks the cycle as failed and re-runs trigger
+    recovery), and the first table's overwrite MUST already be committed
+    on the catalog (so the cycle-scoped overwrite on retry replaces it
+    cleanly)."""
+
+    class _FailOnEdgeIcebergTable(_FakeIcebergTable):
+        def overwrite(self, table_arrow: Any, **kwargs: Any) -> None:
+            raise RuntimeError("simulated catalog failure on graph_edge")
+
+    class _PartialFailureCatalog:
+        """Records overwrites on graph_node + graph_assertion normally;
+        raises on the second table (graph_edge) to simulate a mid-write
+        catalog failure."""
+
+        def __init__(self) -> None:
+            self.tables: dict[str, _FakeIcebergTable] = {}
+            self.lookups: list[str] = []
+
+        def load_table(self, identifier: str) -> _FakeIcebergTable:
+            self.lookups.append(identifier)
+            if identifier not in self.tables:
+                if identifier == "canonical.graph_edge":
+                    self.tables[identifier] = _FailOnEdgeIcebergTable(
+                        identifier
+                    )
+                else:
+                    self.tables[identifier] = _FakeIcebergTable(identifier)
+            return self.tables[identifier]
+
+    catalog = _PartialFailureCatalog()
+    writer = IcebergCanonicalGraphWriter(catalog=catalog)
+
+    with pytest.raises(
+        RuntimeError, match="simulated catalog failure on graph_edge"
+    ):
+        writer.write_canonical_records(_plan())
+
+    # graph_node overwrite must have committed BEFORE the failure on
+    # graph_edge; this is what the Phase 1 retry contract relies on.
+    assert "canonical.graph_node" in catalog.tables
+    assert len(catalog.tables["canonical.graph_node"].overwritten) == 1
+
+    # graph_assertion overwrite must NOT have been attempted (control
+    # flow halted on the graph_edge exception).
+    assert "canonical.graph_assertion" not in catalog.tables
