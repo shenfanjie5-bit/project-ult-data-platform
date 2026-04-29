@@ -18,7 +18,6 @@ from data_platform import daily_refresh
 from data_platform.config import reset_settings_cache
 from data_platform.serving.canonical_writer import (
     CANONICAL_LINEAGE_MART_LOAD_SPECS,
-    CANONICAL_MART_LOAD_SPECS,
     CANONICAL_V2_MART_LOAD_SPECS,
     WriteResult,
 )
@@ -102,9 +101,7 @@ def test_mock_daily_refresh_is_repeatable_and_writes_report(
     assert [item["row_count"] for item in write_results] == [
         1
     ] * (
-        1
-        + len(CANONICAL_MART_LOAD_SPECS)
-        + len(CANONICAL_V2_MART_LOAD_SPECS)
+        len(CANONICAL_V2_MART_LOAD_SPECS)
         + len(CANONICAL_LINEAGE_MART_LOAD_SPECS)
     )
     assert canonical_step["metadata"]["skipped_writes"] == []
@@ -434,9 +431,7 @@ def test_mock_daily_refresh_real_pipeline_repeatable_when_pg_available(
     ]
     assert first_rows == second_rows
     assert len(second_rows) == (
-        1
-        + len(CANONICAL_MART_LOAD_SPECS)
-        + len(CANONICAL_V2_MART_LOAD_SPECS)
+        len(CANONICAL_V2_MART_LOAD_SPECS)
         + len(CANONICAL_LINEAGE_MART_LOAD_SPECS)
     )
     assert all(row_count > 0 for row_count in second_rows)
@@ -493,25 +488,6 @@ def _install_fast_success_stubs(monkeypatch: pytest.MonkeyPatch) -> None:
             "duckdb_path": settings.duckdb_path,
         }
 
-    def fake_load_stock_basic(_catalog: object, _duckdb_path: Path) -> WriteResult:
-        return WriteResult(
-            table="canonical.stock_basic",
-            snapshot_id=next(snapshots),
-            row_count=1,
-            duration_ms=0,
-        )
-
-    def fake_load_marts(_catalog: object, _duckdb_path: Path) -> list[WriteResult]:
-        return [
-            WriteResult(
-                table=spec.identifier,
-                snapshot_id=next(snapshots),
-                row_count=1,
-                duration_ms=0,
-            )
-            for spec in CANONICAL_MART_LOAD_SPECS
-        ]
-
     def fake_load_v2_marts(_catalog: object, _duckdb_path: Path) -> list[WriteResult]:
         return [
             WriteResult(
@@ -531,8 +507,6 @@ def _install_fast_success_stubs(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(daily_refresh, "build_resources", fake_build_resources)
     monkeypatch.setattr(daily_refresh, "ensure_namespaces", lambda *_args: None)
     monkeypatch.setattr(daily_refresh, "ensure_tables", lambda *_args: [])
-    monkeypatch.setattr(daily_refresh, "load_canonical_stock_basic", fake_load_stock_basic)
-    monkeypatch.setattr(daily_refresh, "load_canonical_marts", fake_load_marts)
     monkeypatch.setattr(daily_refresh, "load_canonical_v2_marts", fake_load_v2_marts)
 
 

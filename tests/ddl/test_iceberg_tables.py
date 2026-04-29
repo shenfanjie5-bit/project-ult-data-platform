@@ -10,19 +10,11 @@ from pyiceberg.catalog.memory import InMemoryCatalog
 
 from data_platform.ddl import iceberg_tables
 from data_platform.ddl.iceberg_tables import (
-    CANONICAL_DIM_INDEX_SPEC,
-    CANONICAL_DIM_SECURITY_SPEC,
     CANONICAL_ENTITY_SPEC,
-    CANONICAL_FACT_EVENT_SPEC,
-    CANONICAL_FACT_FINANCIAL_INDICATOR_SPEC,
-    CANONICAL_FACT_PRICE_BAR_SPEC,
     CANONICAL_LINEAGE_DIM_SECURITY_SPEC,
     CANONICAL_LINEAGE_TABLE_SPECS,
-    CANONICAL_MART_TABLE_SPECS,
-    CANONICAL_STOCK_BASIC_SPEC,
     CANONICAL_V2_DIM_SECURITY_SPEC,
     CANONICAL_V2_TABLE_SPECS,
-    DECIMAL_TYPE,
     DEFAULT_TABLE_SPECS,
     ENTITY_ALIAS_SPEC,
     TableSpec,
@@ -74,23 +66,6 @@ class FakeCatalog:
         self.tables.pop(identifier, None)
 
 
-def test_canonical_stock_basic_schema_matches_contract() -> None:
-    assert CANONICAL_STOCK_BASIC_SPEC.namespace == "canonical"
-    assert CANONICAL_STOCK_BASIC_SPEC.name == "stock_basic"
-    assert [(field.name, field.type) for field in CANONICAL_STOCK_BASIC_SPEC.schema] == [
-        ("ts_code", pa.string()),
-        ("symbol", pa.string()),
-        ("name", pa.string()),
-        ("area", pa.string()),
-        ("industry", pa.string()),
-        ("market", pa.string()),
-        ("list_date", pa.date32()),
-        ("is_active", pa.bool_()),
-        ("source_run_id", pa.string()),
-        ("canonical_loaded_at", pa.timestamp("us")),
-    ]
-
-
 def test_entity_storage_point_schemas_are_minimal() -> None:
     assert CANONICAL_ENTITY_SPEC.namespace == "canonical"
     assert CANONICAL_ENTITY_SPEC.name == "canonical_entity"
@@ -103,81 +78,6 @@ def test_entity_storage_point_schemas_are_minimal() -> None:
         "canonical_entity_id",
         "source",
         "created_at",
-    ]
-
-
-def test_canonical_mart_storage_point_schemas_match_contract() -> None:
-    assert CANONICAL_DIM_SECURITY_SPEC.namespace == "canonical"
-    assert CANONICAL_DIM_SECURITY_SPEC.name == "dim_security"
-    assert CANONICAL_DIM_SECURITY_SPEC.schema.names == [
-        "ts_code",
-        "symbol",
-        "name",
-        "market",
-        "industry",
-        "list_date",
-        "is_active",
-        "area",
-        "fullname",
-        "exchange",
-        "curr_type",
-        "list_status",
-        "delist_date",
-        "setup_date",
-        "province",
-        "city",
-        "reg_capital",
-        "employees",
-        "main_business",
-        "latest_namechange_name",
-        "latest_namechange_start_date",
-        "latest_namechange_end_date",
-        "latest_namechange_ann_date",
-        "latest_namechange_reason",
-        "source_run_id",
-        "raw_loaded_at",
-        "canonical_loaded_at",
-    ]
-    assert CANONICAL_DIM_SECURITY_SPEC.schema.field("reg_capital").type == DECIMAL_TYPE
-    assert CANONICAL_DIM_SECURITY_SPEC.schema.field("raw_loaded_at").type == pa.timestamp("us")
-
-    assert CANONICAL_DIM_INDEX_SPEC.namespace == "canonical"
-    assert CANONICAL_DIM_INDEX_SPEC.name == "dim_index"
-    assert CANONICAL_DIM_INDEX_SPEC.schema.names == [
-        "index_code",
-        "index_name",
-        "index_market",
-        "index_category",
-        "first_effective_date",
-        "latest_effective_date",
-        "source_run_id",
-        "raw_loaded_at",
-        "canonical_loaded_at",
-    ]
-
-    assert CANONICAL_FACT_PRICE_BAR_SPEC.name == "fact_price_bar"
-    assert CANONICAL_FACT_PRICE_BAR_SPEC.schema.field("trade_date").type == pa.date32()
-    assert CANONICAL_FACT_PRICE_BAR_SPEC.schema.field("open").type == DECIMAL_TYPE
-    assert CANONICAL_FACT_PRICE_BAR_SPEC.schema.field("adj_factor").type == DECIMAL_TYPE
-
-    assert CANONICAL_FACT_FINANCIAL_INDICATOR_SPEC.name == "fact_financial_indicator"
-    assert CANONICAL_FACT_FINANCIAL_INDICATOR_SPEC.schema.field("end_date").type == pa.date32()
-    assert CANONICAL_FACT_FINANCIAL_INDICATOR_SPEC.schema.field("roe").type == DECIMAL_TYPE
-
-    assert CANONICAL_FACT_EVENT_SPEC.name == "fact_event"
-    assert CANONICAL_FACT_EVENT_SPEC.schema.names == [
-        "event_type",
-        "ts_code",
-        "event_date",
-        "title",
-        "summary",
-        "event_subtype",
-        "related_date",
-        "reference_url",
-        "rec_time",
-        "source_run_id",
-        "raw_loaded_at",
-        "canonical_loaded_at",
     ]
 
 
@@ -277,16 +177,7 @@ def test_ensure_tables_is_idempotent() -> None:
     assert first_tables == second_tables
     assert sorted(catalog.tables) == [
         "canonical.canonical_entity",
-        "canonical.dim_index",
-        "canonical.dim_security",
         "canonical.entity_alias",
-        "canonical.fact_event",
-        "canonical.fact_financial_indicator",
-        "canonical.fact_forecast_event",
-        "canonical.fact_index_price_bar",
-        "canonical.fact_market_daily_feature",
-        "canonical.fact_price_bar",
-        "canonical.stock_basic",
         "canonical_lineage.lineage_dim_index",
         "canonical_lineage.lineage_dim_security",
         "canonical_lineage.lineage_fact_event",
@@ -307,13 +198,8 @@ def test_ensure_tables_is_idempotent() -> None:
         "canonical_v2.stock_basic",
     ]
     assert [identifier for identifier, _ in catalog.create_calls] == [
-        "canonical.stock_basic",
         "canonical.canonical_entity",
         "canonical.entity_alias",
-        *[
-            f"{spec.namespace}.{spec.name}"
-            for spec in CANONICAL_MART_TABLE_SPECS
-        ],
         *[
             f"{spec.namespace}.{spec.name}"
             for spec in CANONICAL_V2_TABLE_SPECS

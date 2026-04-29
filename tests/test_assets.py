@@ -106,44 +106,18 @@ def test_build_assets_links_raw_staging_marts_and_canonical_specs() -> None:
 
     raw_key = ("raw", "fake", "stock_basic")
     staging_key = ("dbt", "stg_stock_basic")
-    stock_basic_key = ("canonical", "stock_basic")
-    canonical_marts_key = ("canonical", "canonical_marts")
     canonical_v2_marts_key = ("canonical_v2", "canonical_marts")
-    mart_dbt_keys = {
-        ("dbt", "mart_dim_security"),
-        ("dbt", "mart_dim_index"),
-        ("dbt", "mart_fact_price_bar"),
-        ("dbt", "mart_fact_financial_indicator"),
-        ("dbt", "mart_fact_event"),
-        ("dbt", "mart_fact_market_daily_feature"),
-        ("dbt", "mart_fact_index_price_bar"),
-        ("dbt", "mart_fact_forecast_event"),
-    }
     v2_mart_dbt_keys = EXPECTED_CANONICAL_V2_MART_DBT_KEYS
 
     assert by_key[raw_key].kind == "raw"
     assert by_key[staging_key].deps == (raw_key,)
-    assert by_key[stock_basic_key].deps == (staging_key,)
-    assert set(by_key[canonical_marts_key].deps) == mart_dbt_keys
+    assert ("canonical", "stock_basic") not in by_key
+    assert ("canonical", "canonical_marts") not in by_key
     assert set(by_key[canonical_v2_marts_key].deps) == v2_mart_dbt_keys
-    assert (
-        by_key[canonical_marts_key].metadata["identifier"]
-        == "canonical.canonical_marts"
-    )
     assert (
         by_key[canonical_v2_marts_key].metadata["identifier"]
         == "canonical_v2.canonical_marts"
     )
-    assert by_key[canonical_marts_key].metadata["canonical_identifiers"] == [
-        "canonical.dim_security",
-        "canonical.dim_index",
-        "canonical.fact_price_bar",
-        "canonical.fact_financial_indicator",
-        "canonical.fact_event",
-        "canonical.fact_market_daily_feature",
-        "canonical.fact_index_price_bar",
-        "canonical.fact_forecast_event",
-    ]
     assert (
         by_key[canonical_v2_marts_key].metadata["canonical_identifiers"]
         == EXPECTED_CANONICAL_V2_IDENTIFIERS
@@ -165,20 +139,22 @@ def test_build_assets_links_raw_staging_marts_and_canonical_specs() -> None:
     assert "update_flag" in by_key[canonical_v2_marts_key].metadata[
         "required_columns_by_identifier"
     ]["canonical_lineage.lineage_fact_forecast_event"]
-    assert by_key[canonical_marts_key].metadata["serialization_required"] is True
     assert by_key[canonical_v2_marts_key].metadata["serialization_required"] is True
-    assert by_key[canonical_marts_key].callable_import_path.endswith(
-        ":load_canonical_marts"
-    )
     assert by_key[canonical_v2_marts_key].callable_import_path.endswith(
         ":load_canonical_v2_marts"
     )
-    mart_group_specs = [
+    legacy_mart_group_specs = [
         spec
         for spec in specs
         if spec.callable_import_path.endswith(":load_canonical_marts")
     ]
-    assert [spec.key for spec in mart_group_specs] == [canonical_marts_key]
+    assert legacy_mart_group_specs == []
+    legacy_stock_basic_specs = [
+        spec
+        for spec in specs
+        if spec.callable_import_path.endswith(":load_canonical_stock_basic")
+    ]
+    assert legacy_stock_basic_specs == []
     v2_mart_group_specs = [
         spec
         for spec in specs
@@ -270,11 +246,6 @@ def test_assets_cli_outputs_stable_json_with_canonical_marts(
     canonical_keys = {
         tuple(item["key"]) for item in payload if item["kind"] == "canonical"
     }
-    canonical_marts = next(
-        item
-        for item in payload
-        if item["key"] == ["canonical", "canonical_marts"]
-    )
     canonical_v2_marts = next(
         item
         for item in payload
@@ -284,16 +255,6 @@ def test_assets_cli_outputs_stable_json_with_canonical_marts(
 
     assert exit_code == 0
     assert captured.err == ""
-    assert canonical_marts["metadata"]["canonical_identifiers"] == [
-        "canonical.dim_security",
-        "canonical.dim_index",
-        "canonical.fact_price_bar",
-        "canonical.fact_financial_indicator",
-        "canonical.fact_event",
-        "canonical.fact_market_daily_feature",
-        "canonical.fact_index_price_bar",
-        "canonical.fact_forecast_event",
-    ]
     assert (
         canonical_v2_marts["metadata"]["canonical_identifiers"]
         == EXPECTED_CANONICAL_V2_IDENTIFIERS
@@ -311,6 +272,8 @@ def test_assets_cli_outputs_stable_json_with_canonical_marts(
         *EXPECTED_CANONICAL_LINEAGE_IDENTIFIERS,
     }
     assert EXPECTED_CANONICAL_V2_MART_DBT_KEYS <= dbt_keys
+    assert ("canonical", "stock_basic") not in canonical_keys
+    assert ("canonical", "canonical_marts") not in canonical_keys
     assert ("canonical", "dim_security") not in canonical_keys
     assert ("canonical", "dim_index") not in canonical_keys
     assert ("canonical", "fact_price_bar") not in canonical_keys

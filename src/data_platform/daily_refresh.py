@@ -33,8 +33,6 @@ from data_platform.ddl.runner import MigrationRunner
 from data_platform.raw import RawArtifact, RawWriter, check_raw_zone
 from data_platform.serving.canonical_writer import (
     WriteResult,
-    load_canonical_marts,
-    load_canonical_stock_basic,
     load_canonical_v2_marts,
 )
 from data_platform.serving.catalog import DEFAULT_NAMESPACES, ensure_namespaces
@@ -577,23 +575,7 @@ def _run_canonical_step(
     write_results: list[WriteResult] = []
     skipped_writes: list[str] = []
 
-    if "stock_basic" in selected_datasets:
-        write_results.append(
-            load_canonical_stock_basic(
-                catalog,
-                Path(resources["duckdb_path"]),
-            )
-        )
-    else:
-        skipped_writes.append("canonical.stock_basic")
-
     if selected_datasets == all_datasets:
-        write_results.extend(
-            load_canonical_marts(
-                catalog,
-                Path(resources["duckdb_path"]),
-            )
-        )
         write_results.extend(
             load_canonical_v2_marts(
                 catalog,
@@ -601,7 +583,6 @@ def _run_canonical_step(
             )
         )
     else:
-        skipped_writes.append("canonical.canonical_marts")
         skipped_writes.append("canonical_v2.canonical_marts")
 
     return {
