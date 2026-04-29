@@ -240,8 +240,18 @@ def test_intermediate_models_execute_with_duckdb_raw_fixture(tmp_path: Path) -> 
         "disclosure_date",
         "dividend",
         "holder_number",
+        # M1.13 expansion (precondition 9 closure) — 8 new event_type
+        # values from the candidate event_timeline sources.
+        "hot_money_trade",
+        "institutional_survey",
         "name_change",
+        "pledge_event",
+        "pledge_summary",
+        "price_limit_event",
+        "price_limit_status",
         "share_float",
+        "share_repurchase",
+        "shareholder_trade",
         "suspend",
     ]
     assert {"body", "content", "text"}.isdisjoint(event_columns)

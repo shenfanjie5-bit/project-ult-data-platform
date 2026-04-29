@@ -36,6 +36,15 @@ TUSHARE_STK_LIMIT_ASSET_NAME = "tushare_stk_limit"
 TUSHARE_BLOCK_TRADE_ASSET_NAME = "tushare_block_trade"
 TUSHARE_MONEYFLOW_ASSET_NAME = "tushare_moneyflow"
 TUSHARE_FORECAST_ASSET_NAME = "tushare_forecast"
+# M1.13 expansion: 8 new event_timeline datasets (precondition 9 closure).
+TUSHARE_PLEDGE_STAT_ASSET_NAME = "tushare_pledge_stat"
+TUSHARE_PLEDGE_DETAIL_ASSET_NAME = "tushare_pledge_detail"
+TUSHARE_REPURCHASE_ASSET_NAME = "tushare_repurchase"
+TUSHARE_STK_HOLDERTRADE_ASSET_NAME = "tushare_stk_holdertrade"
+TUSHARE_STK_SURV_ASSET_NAME = "tushare_stk_surv"
+TUSHARE_LIMIT_LIST_THS_ASSET_NAME = "tushare_limit_list_ths"
+TUSHARE_LIMIT_LIST_D_ASSET_NAME = "tushare_limit_list_d"
+TUSHARE_HM_DETAIL_ASSET_NAME = "tushare_hm_detail"
 
 ALLOW_NULL_IDENTITY_METADATA_KEY = b"data_platform.allow_null_identity"
 ALLOW_NULL_IDENTITY_METADATA_VALUE = b"true"
@@ -403,6 +412,154 @@ TUSHARE_FORECAST_SCHEMA = pa.schema(
     ]
 )
 
+# M1.13 expansion: 8 event_timeline candidate schemas (precondition 9
+# closure). Column lists lifted verbatim from
+# `event-timeline-m1-11-candidate-schema-checkin-20260429.md` per
+# evidence file §1–§8. Numeric fields stay pa.string() per
+# TUSHARE_RAW_NUMERIC_TYPE convention; staging models cast.
+
+# §1 pledge_stat — quarterly pledge summary snapshot.
+TUSHARE_PLEDGE_STAT_SCHEMA = pa.schema(
+    [
+        ("ts_code", pa.string()),
+        ("end_date", pa.string()),
+        ("pledge_count", TUSHARE_RAW_NUMERIC_TYPE),
+        ("unrest_pledge", TUSHARE_RAW_NUMERIC_TYPE),
+        ("rest_pledge", TUSHARE_RAW_NUMERIC_TYPE),
+        ("total_share", TUSHARE_RAW_NUMERIC_TYPE),
+        ("pledge_ratio", TUSHARE_RAW_NUMERIC_TYPE),
+    ]
+)
+
+# §2 pledge_detail — per-pledge agreement events.
+TUSHARE_PLEDGE_DETAIL_SCHEMA = pa.schema(
+    [
+        ("ts_code", pa.string()),
+        ("ann_date", pa.string()),
+        ("holder_name", pa.string()),
+        ("pledge_amount", TUSHARE_RAW_NUMERIC_TYPE),
+        ("start_date", pa.string()),
+        ("end_date", pa.string()),
+        ("is_release", pa.string()),
+        ("release_date", pa.string()),
+        ("pledgor", pa.string()),
+        ("holding_amount", TUSHARE_RAW_NUMERIC_TYPE),
+        ("pledged_amount", TUSHARE_RAW_NUMERIC_TYPE),
+        ("p_total_ratio", TUSHARE_RAW_NUMERIC_TYPE),
+        ("h_total_ratio", TUSHARE_RAW_NUMERIC_TYPE),
+        ("is_buyback", pa.string()),
+    ]
+)
+
+# §3 repurchase — share repurchase announcements (multi-stage).
+TUSHARE_REPURCHASE_SCHEMA = pa.schema(
+    [
+        ("ts_code", pa.string()),
+        ("ann_date", pa.string()),
+        ("end_date", pa.string()),
+        ("proc", pa.string()),
+        ("exp_date", pa.string()),
+        ("vol", TUSHARE_RAW_NUMERIC_TYPE),
+        ("amount", TUSHARE_RAW_NUMERIC_TYPE),
+        ("high_limit", TUSHARE_RAW_NUMERIC_TYPE),
+        ("low_limit", TUSHARE_RAW_NUMERIC_TYPE),
+    ]
+)
+
+# §4 stk_holdertrade — insider/major-shareholder trades.
+TUSHARE_STK_HOLDERTRADE_SCHEMA = pa.schema(
+    [
+        ("ts_code", pa.string()),
+        ("ann_date", pa.string()),
+        ("holder_name", pa.string()),
+        ("holder_type", pa.string()),
+        ("in_de", pa.string()),
+        ("change_vol", TUSHARE_RAW_NUMERIC_TYPE),
+        ("change_ratio", TUSHARE_RAW_NUMERIC_TYPE),
+        ("after_share", TUSHARE_RAW_NUMERIC_TYPE),
+        ("after_ratio", TUSHARE_RAW_NUMERIC_TYPE),
+        ("avg_price", TUSHARE_RAW_NUMERIC_TYPE),
+        ("total_share", TUSHARE_RAW_NUMERIC_TYPE),
+    ]
+)
+
+# §5 stk_surv — institutional surveys / analyst visits.
+TUSHARE_STK_SURV_SCHEMA = pa.schema(
+    [
+        ("ts_code", pa.string()),
+        ("name", pa.string()),
+        ("surv_date", pa.string()),
+        ("fund_visitors", pa.string()),
+        ("rece_place", pa.string()),
+        ("rece_mode", pa.string()),
+        ("rece_org", pa.string()),
+        ("org_type", pa.string()),
+        ("comp_rece", pa.string()),
+    ]
+)
+
+# §6 limit_list_ths — 同花顺 intra-day limit-pool snapshots.
+TUSHARE_LIMIT_LIST_THS_SCHEMA = pa.schema(
+    [
+        ("trade_date", pa.string()),
+        ("ts_code", pa.string()),
+        ("name", pa.string()),
+        ("price", TUSHARE_RAW_NUMERIC_TYPE),
+        ("pct_chg", TUSHARE_RAW_NUMERIC_TYPE),
+        ("open_num", pa.string()),
+        ("lu_desc", pa.string()),
+        ("limit_type", pa.string()),
+        ("tag", pa.string()),
+        ("status", pa.string()),
+        ("limit_order", TUSHARE_RAW_NUMERIC_TYPE),
+        ("limit_amount", TUSHARE_RAW_NUMERIC_TYPE),
+        ("turnover_rate", TUSHARE_RAW_NUMERIC_TYPE),
+        ("free_float", TUSHARE_RAW_NUMERIC_TYPE),
+        ("lu_limit_order", pa.string()),
+        ("limit_up_suc_rate", TUSHARE_RAW_NUMERIC_TYPE),
+        ("turnover", pa.string()),
+        ("market_type", pa.string()),
+    ]
+)
+
+# §7 limit_list_d — daily limit-hit / blow-up records.
+TUSHARE_LIMIT_LIST_D_SCHEMA = pa.schema(
+    [
+        ("trade_date", pa.string()),
+        ("ts_code", pa.string()),
+        ("industry", pa.string()),
+        ("name", pa.string()),
+        ("close", TUSHARE_RAW_NUMERIC_TYPE),
+        ("pct_chg", TUSHARE_RAW_NUMERIC_TYPE),
+        ("amount", TUSHARE_RAW_NUMERIC_TYPE),
+        ("limit_amount", TUSHARE_RAW_NUMERIC_TYPE),
+        ("float_mv", TUSHARE_RAW_NUMERIC_TYPE),
+        ("total_mv", TUSHARE_RAW_NUMERIC_TYPE),
+        ("turnover_ratio", TUSHARE_RAW_NUMERIC_TYPE),
+        ("fd_amount", TUSHARE_RAW_NUMERIC_TYPE),
+        ("first_time", pa.string()),
+        ("last_time", pa.string()),
+        ("open_times", pa.string()),
+        ("up_stat", pa.string()),
+        ("limit_times", pa.string()),
+        ("limit", pa.string()),
+    ]
+)
+
+# §8 hm_detail — hot-money entity per-stock daily trades.
+TUSHARE_HM_DETAIL_SCHEMA = pa.schema(
+    [
+        ("trade_date", pa.string()),
+        ("ts_code", pa.string()),
+        ("ts_name", pa.string()),
+        ("buy_amount", TUSHARE_RAW_NUMERIC_TYPE),
+        ("sell_amount", TUSHARE_RAW_NUMERIC_TYPE),
+        ("net_amount", TUSHARE_RAW_NUMERIC_TYPE),
+        ("hm_name", pa.string()),
+        ("hm_orgs", pa.string()),
+    ]
+)
+
 
 def _financial_schema(numeric_fields: tuple[str, ...]) -> pa.Schema:
     return pa.schema(
@@ -528,6 +685,23 @@ TUSHARE_MONEYFLOW_FIELDS = tuple(TUSHARE_MONEYFLOW_SCHEMA.names)
 TUSHARE_MONEYFLOW_FIELDS_CSV = ",".join(TUSHARE_MONEYFLOW_FIELDS)
 TUSHARE_FORECAST_FIELDS = tuple(TUSHARE_FORECAST_SCHEMA.names)
 TUSHARE_FORECAST_FIELDS_CSV = ",".join(TUSHARE_FORECAST_FIELDS)
+# M1.13 expansion: 8 new event_timeline datasets' FIELDS + FIELDS_CSV exports.
+TUSHARE_PLEDGE_STAT_FIELDS = tuple(TUSHARE_PLEDGE_STAT_SCHEMA.names)
+TUSHARE_PLEDGE_STAT_FIELDS_CSV = ",".join(TUSHARE_PLEDGE_STAT_FIELDS)
+TUSHARE_PLEDGE_DETAIL_FIELDS = tuple(TUSHARE_PLEDGE_DETAIL_SCHEMA.names)
+TUSHARE_PLEDGE_DETAIL_FIELDS_CSV = ",".join(TUSHARE_PLEDGE_DETAIL_FIELDS)
+TUSHARE_REPURCHASE_FIELDS = tuple(TUSHARE_REPURCHASE_SCHEMA.names)
+TUSHARE_REPURCHASE_FIELDS_CSV = ",".join(TUSHARE_REPURCHASE_FIELDS)
+TUSHARE_STK_HOLDERTRADE_FIELDS = tuple(TUSHARE_STK_HOLDERTRADE_SCHEMA.names)
+TUSHARE_STK_HOLDERTRADE_FIELDS_CSV = ",".join(TUSHARE_STK_HOLDERTRADE_FIELDS)
+TUSHARE_STK_SURV_FIELDS = tuple(TUSHARE_STK_SURV_SCHEMA.names)
+TUSHARE_STK_SURV_FIELDS_CSV = ",".join(TUSHARE_STK_SURV_FIELDS)
+TUSHARE_LIMIT_LIST_THS_FIELDS = tuple(TUSHARE_LIMIT_LIST_THS_SCHEMA.names)
+TUSHARE_LIMIT_LIST_THS_FIELDS_CSV = ",".join(TUSHARE_LIMIT_LIST_THS_FIELDS)
+TUSHARE_LIMIT_LIST_D_FIELDS = tuple(TUSHARE_LIMIT_LIST_D_SCHEMA.names)
+TUSHARE_LIMIT_LIST_D_FIELDS_CSV = ",".join(TUSHARE_LIMIT_LIST_D_FIELDS)
+TUSHARE_HM_DETAIL_FIELDS = tuple(TUSHARE_HM_DETAIL_SCHEMA.names)
+TUSHARE_HM_DETAIL_FIELDS_CSV = ",".join(TUSHARE_HM_DETAIL_FIELDS)
 
 REFERENCE_DATA_IDENTITY_FIELDS: dict[str, tuple[str, ...]] = {
     "index_basic": ("ts_code",),
@@ -549,6 +723,15 @@ EVENT_METADATA_FIELDS: dict[str, tuple[str, ...]] = {
     "disclosure_date": TUSHARE_DISCLOSURE_DATE_FIELDS,
     # Plan §5 expansion — block_trade follows the anns multi-row pattern.
     "block_trade": TUSHARE_BLOCK_TRADE_FIELDS,
+    # M1.13 expansion — 8 candidate event_timeline sources promoted (precondition 9).
+    "pledge_stat": TUSHARE_PLEDGE_STAT_FIELDS,
+    "pledge_detail": TUSHARE_PLEDGE_DETAIL_FIELDS,
+    "repurchase": TUSHARE_REPURCHASE_FIELDS,
+    "stk_holdertrade": TUSHARE_STK_HOLDERTRADE_FIELDS,
+    "stk_surv": TUSHARE_STK_SURV_FIELDS,
+    "limit_list_ths": TUSHARE_LIMIT_LIST_THS_FIELDS,
+    "limit_list_d": TUSHARE_LIMIT_LIST_D_FIELDS,
+    "hm_detail": TUSHARE_HM_DETAIL_FIELDS,
 }
 
 FINANCIAL_DATASET_FIELDS: dict[str, tuple[str, ...]] = {
@@ -800,6 +983,65 @@ TUSHARE_FORECAST_ASSET = _tushare_asset_spec(
     schema=TUSHARE_FORECAST_SCHEMA,
 )
 
+# M1.13 expansion: 8 new AssetSpec instances for the candidate event_timeline
+# sources promoted in this round (precondition 9 closure). Appended last so
+# downstream list-iteration order is stable for the older 28 assets.
+TUSHARE_PLEDGE_STAT_ASSET = _tushare_asset_spec(
+    name=TUSHARE_PLEDGE_STAT_ASSET_NAME,
+    dataset="pledge_stat",
+    partition="daily",
+    schema=TUSHARE_PLEDGE_STAT_SCHEMA,
+)
+
+TUSHARE_PLEDGE_DETAIL_ASSET = _tushare_asset_spec(
+    name=TUSHARE_PLEDGE_DETAIL_ASSET_NAME,
+    dataset="pledge_detail",
+    partition="daily",
+    schema=TUSHARE_PLEDGE_DETAIL_SCHEMA,
+)
+
+TUSHARE_REPURCHASE_ASSET = _tushare_asset_spec(
+    name=TUSHARE_REPURCHASE_ASSET_NAME,
+    dataset="repurchase",
+    partition="daily",
+    schema=TUSHARE_REPURCHASE_SCHEMA,
+)
+
+TUSHARE_STK_HOLDERTRADE_ASSET = _tushare_asset_spec(
+    name=TUSHARE_STK_HOLDERTRADE_ASSET_NAME,
+    dataset="stk_holdertrade",
+    partition="daily",
+    schema=TUSHARE_STK_HOLDERTRADE_SCHEMA,
+)
+
+TUSHARE_STK_SURV_ASSET = _tushare_asset_spec(
+    name=TUSHARE_STK_SURV_ASSET_NAME,
+    dataset="stk_surv",
+    partition="daily",
+    schema=TUSHARE_STK_SURV_SCHEMA,
+)
+
+TUSHARE_LIMIT_LIST_THS_ASSET = _tushare_asset_spec(
+    name=TUSHARE_LIMIT_LIST_THS_ASSET_NAME,
+    dataset="limit_list_ths",
+    partition="daily",
+    schema=TUSHARE_LIMIT_LIST_THS_SCHEMA,
+)
+
+TUSHARE_LIMIT_LIST_D_ASSET = _tushare_asset_spec(
+    name=TUSHARE_LIMIT_LIST_D_ASSET_NAME,
+    dataset="limit_list_d",
+    partition="daily",
+    schema=TUSHARE_LIMIT_LIST_D_SCHEMA,
+)
+
+TUSHARE_HM_DETAIL_ASSET = _tushare_asset_spec(
+    name=TUSHARE_HM_DETAIL_ASSET_NAME,
+    dataset="hm_detail",
+    partition="daily",
+    schema=TUSHARE_HM_DETAIL_SCHEMA,
+)
+
 TUSHARE_ASSETS = [
     TUSHARE_STOCK_BASIC_ASSET,
     TUSHARE_DAILY_ASSET,
@@ -830,6 +1072,15 @@ TUSHARE_ASSETS = [
     TUSHARE_BLOCK_TRADE_ASSET,
     TUSHARE_MONEYFLOW_ASSET,
     TUSHARE_FORECAST_ASSET,
+    # M1.13 expansion (precondition 9 closure)
+    TUSHARE_PLEDGE_STAT_ASSET,
+    TUSHARE_PLEDGE_DETAIL_ASSET,
+    TUSHARE_REPURCHASE_ASSET,
+    TUSHARE_STK_HOLDERTRADE_ASSET,
+    TUSHARE_STK_SURV_ASSET,
+    TUSHARE_LIMIT_LIST_THS_ASSET,
+    TUSHARE_LIMIT_LIST_D_ASSET,
+    TUSHARE_HM_DETAIL_ASSET,
 ]
 
 __all__ = [
@@ -983,4 +1234,45 @@ __all__ = [
     "TUSHARE_STK_LIMIT_FIELDS",
     "TUSHARE_STK_LIMIT_FIELDS_CSV",
     "TUSHARE_STK_LIMIT_SCHEMA",
+    # M1.13 expansion — 8 candidate event_timeline sources promoted.
+    "TUSHARE_HM_DETAIL_ASSET",
+    "TUSHARE_HM_DETAIL_ASSET_NAME",
+    "TUSHARE_HM_DETAIL_FIELDS",
+    "TUSHARE_HM_DETAIL_FIELDS_CSV",
+    "TUSHARE_HM_DETAIL_SCHEMA",
+    "TUSHARE_LIMIT_LIST_D_ASSET",
+    "TUSHARE_LIMIT_LIST_D_ASSET_NAME",
+    "TUSHARE_LIMIT_LIST_D_FIELDS",
+    "TUSHARE_LIMIT_LIST_D_FIELDS_CSV",
+    "TUSHARE_LIMIT_LIST_D_SCHEMA",
+    "TUSHARE_LIMIT_LIST_THS_ASSET",
+    "TUSHARE_LIMIT_LIST_THS_ASSET_NAME",
+    "TUSHARE_LIMIT_LIST_THS_FIELDS",
+    "TUSHARE_LIMIT_LIST_THS_FIELDS_CSV",
+    "TUSHARE_LIMIT_LIST_THS_SCHEMA",
+    "TUSHARE_PLEDGE_DETAIL_ASSET",
+    "TUSHARE_PLEDGE_DETAIL_ASSET_NAME",
+    "TUSHARE_PLEDGE_DETAIL_FIELDS",
+    "TUSHARE_PLEDGE_DETAIL_FIELDS_CSV",
+    "TUSHARE_PLEDGE_DETAIL_SCHEMA",
+    "TUSHARE_PLEDGE_STAT_ASSET",
+    "TUSHARE_PLEDGE_STAT_ASSET_NAME",
+    "TUSHARE_PLEDGE_STAT_FIELDS",
+    "TUSHARE_PLEDGE_STAT_FIELDS_CSV",
+    "TUSHARE_PLEDGE_STAT_SCHEMA",
+    "TUSHARE_REPURCHASE_ASSET",
+    "TUSHARE_REPURCHASE_ASSET_NAME",
+    "TUSHARE_REPURCHASE_FIELDS",
+    "TUSHARE_REPURCHASE_FIELDS_CSV",
+    "TUSHARE_REPURCHASE_SCHEMA",
+    "TUSHARE_STK_HOLDERTRADE_ASSET",
+    "TUSHARE_STK_HOLDERTRADE_ASSET_NAME",
+    "TUSHARE_STK_HOLDERTRADE_FIELDS",
+    "TUSHARE_STK_HOLDERTRADE_FIELDS_CSV",
+    "TUSHARE_STK_HOLDERTRADE_SCHEMA",
+    "TUSHARE_STK_SURV_ASSET",
+    "TUSHARE_STK_SURV_ASSET_NAME",
+    "TUSHARE_STK_SURV_FIELDS",
+    "TUSHARE_STK_SURV_FIELDS_CSV",
+    "TUSHARE_STK_SURV_SCHEMA",
 ]

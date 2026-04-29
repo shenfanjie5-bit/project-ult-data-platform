@@ -255,7 +255,7 @@ def test_marts_models_execute_with_duckdb_raw_fixture(tmp_path: Path) -> None:
         Decimal("1.123456789012345678"),
         Decimal("1.123456789012345678"),
     )
-    assert event_summary == (8, 8)
+    assert event_summary == (16, 16)
     assert {"body", "content", "text"}.isdisjoint(event_columns)
     assert market_summary == (1, "DECIMAL(38,18)", "DECIMAL(38,18)", "DECIMAL(38,18)")
     assert index_price_row == ("000300.SH", True, "DECIMAL(38,18)", "DECIMAL(38,18)")
@@ -544,6 +544,170 @@ def _write_same_day_block_trade_rows(raw_zone_path: Path, tmp_path: Path) -> Non
         date(2026, 4, 15),
         str(uuid4()),
         block_trade_rows,
+    )
+
+
+# M1.13 expansion (precondition 9 closure) — 8 parity tests mirroring
+# `test_event_v2_and_lineage_marts_preserve_block_trade_fixture`.
+# Each test writes 1 raw row (the M1.11 sign-off rows) for one
+# candidate event_timeline source, materializes int_event_timeline →
+# mart_fact_event_v2 + mart_lineage_fact_event, then asserts:
+#   - int_event_timeline carries the correct event_type literal +
+#     source_interface_id
+#   - mart_fact_event_v2.event_type contains the new value
+#   - mart_lineage_fact_event.source_interface_id contains the new
+#     value
+#   - lineage columns are present only on the lineage mart
+#   - canonical PK (event_type, entity_id, event_date, event_key) is
+#     identical between v2 and lineage marts (writer-side pairing
+#     guarantee).
+
+
+def _assert_event_v2_and_lineage_pair_preserved(
+    tmp_path: Path,
+    *,
+    expected_event_type: str,
+    expected_source_interface_id: str,
+) -> None:
+    """Run the materialization + parity assertions for one M1.13 source."""
+
+    duckdb = pytest.importorskip("duckdb")
+
+    raw_zone_path = tmp_path / "raw"
+    _write_all_tushare_raw_fixtures(raw_zone_path, tmp_path)
+
+    connection = duckdb.connect(":memory:")
+    try:
+        _create_all_staging_views(connection, raw_zone_path)
+        _create_all_intermediate_tables(connection)
+
+        int_count = connection.execute(
+            f"""
+            select count(*)
+            from int_event_timeline
+            where event_type = '{expected_event_type}'
+              and source_interface_id = '{expected_source_interface_id}'
+            """
+        ).fetchone()[0]
+
+        _create_mart_table(connection, "mart_fact_event_v2", MARTS_V2_DIR)
+        _create_mart_table(connection, "mart_lineage_fact_event", MARTS_LINEAGE_DIR)
+
+        v2_event_types = {
+            row[0]
+            for row in connection.execute(
+                "select distinct event_type from mart_fact_event_v2"
+            ).fetchall()
+        }
+        lineage_source_interface_ids = {
+            row[0]
+            for row in connection.execute(
+                "select distinct source_interface_id from mart_lineage_fact_event"
+            ).fetchall()
+        }
+        v2_columns = _table_columns(connection, "mart_fact_event_v2")
+        lineage_columns = _table_columns(connection, "mart_lineage_fact_event")
+        v2_pk_rows = connection.execute(
+            """
+            select event_type, entity_id, event_date, event_key
+            from mart_fact_event_v2
+            order by event_type, entity_id, event_date, event_key
+            """
+        ).fetchall()
+        lineage_pk_rows = connection.execute(
+            """
+            select event_type, entity_id, event_date, event_key
+            from mart_lineage_fact_event
+            order by event_type, entity_id, event_date, event_key
+            """
+        ).fetchall()
+    finally:
+        connection.close()
+
+    lineage_column_names = {
+        "source_provider",
+        "source_interface_id",
+        "source_run_id",
+        "raw_loaded_at",
+    }
+
+    assert int_count == 1
+    assert expected_event_type in v2_event_types
+    assert expected_source_interface_id in lineage_source_interface_ids
+    assert lineage_column_names.isdisjoint(v2_columns)
+    assert lineage_column_names.issubset(lineage_columns)
+    assert v2_pk_rows == lineage_pk_rows
+
+
+def test_event_v2_and_lineage_marts_preserve_pledge_stat_fixture(tmp_path: Path) -> None:
+    """M1.13 — pledge_stat flows through int_event_timeline → marts."""
+    _assert_event_v2_and_lineage_pair_preserved(
+        tmp_path,
+        expected_event_type="pledge_summary",
+        expected_source_interface_id="pledge_stat",
+    )
+
+
+def test_event_v2_and_lineage_marts_preserve_pledge_detail_fixture(tmp_path: Path) -> None:
+    """M1.13 — pledge_detail flows through int_event_timeline → marts."""
+    _assert_event_v2_and_lineage_pair_preserved(
+        tmp_path,
+        expected_event_type="pledge_event",
+        expected_source_interface_id="pledge_detail",
+    )
+
+
+def test_event_v2_and_lineage_marts_preserve_repurchase_fixture(tmp_path: Path) -> None:
+    """M1.13 — repurchase flows through int_event_timeline → marts."""
+    _assert_event_v2_and_lineage_pair_preserved(
+        tmp_path,
+        expected_event_type="share_repurchase",
+        expected_source_interface_id="repurchase",
+    )
+
+
+def test_event_v2_and_lineage_marts_preserve_stk_holdertrade_fixture(tmp_path: Path) -> None:
+    """M1.13 — stk_holdertrade flows through int_event_timeline → marts."""
+    _assert_event_v2_and_lineage_pair_preserved(
+        tmp_path,
+        expected_event_type="shareholder_trade",
+        expected_source_interface_id="stk_holdertrade",
+    )
+
+
+def test_event_v2_and_lineage_marts_preserve_stk_surv_fixture(tmp_path: Path) -> None:
+    """M1.13 — stk_surv flows through int_event_timeline → marts."""
+    _assert_event_v2_and_lineage_pair_preserved(
+        tmp_path,
+        expected_event_type="institutional_survey",
+        expected_source_interface_id="stk_surv",
+    )
+
+
+def test_event_v2_and_lineage_marts_preserve_limit_list_ths_fixture(tmp_path: Path) -> None:
+    """M1.13 — limit_list_ths flows through int_event_timeline → marts."""
+    _assert_event_v2_and_lineage_pair_preserved(
+        tmp_path,
+        expected_event_type="price_limit_status",
+        expected_source_interface_id="limit_list_ths",
+    )
+
+
+def test_event_v2_and_lineage_marts_preserve_limit_list_d_fixture(tmp_path: Path) -> None:
+    """M1.13 — limit_list_d flows through int_event_timeline → marts."""
+    _assert_event_v2_and_lineage_pair_preserved(
+        tmp_path,
+        expected_event_type="price_limit_event",
+        expected_source_interface_id="limit_list_d",
+    )
+
+
+def test_event_v2_and_lineage_marts_preserve_hm_detail_fixture(tmp_path: Path) -> None:
+    """M1.13 — hm_detail flows through int_event_timeline → marts."""
+    _assert_event_v2_and_lineage_pair_preserved(
+        tmp_path,
+        expected_event_type="hot_money_trade",
+        expected_source_interface_id="hm_detail",
     )
 
 

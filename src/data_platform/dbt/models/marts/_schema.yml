@@ -131,6 +131,14 @@ models:
                   "disclosure_date",
                   "name_change",
                   "block_trade",
+                  "pledge_summary",
+                  "pledge_event",
+                  "share_repurchase",
+                  "shareholder_trade",
+                  "institutional_survey",
+                  "price_limit_status",
+                  "price_limit_event",
+                  "hot_money_trade",
                 ]
       - name: event_date
         tests:
