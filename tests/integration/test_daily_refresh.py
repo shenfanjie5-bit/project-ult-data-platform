@@ -143,7 +143,6 @@ def test_daily_refresh_full_dbt_selectors_include_v2_and_lineage() -> None:
     assert daily_refresh._dbt_selectors(assets, assets) == (
         "staging",
         "intermediate",
-        "marts",
         "marts_v2",
         "marts_lineage",
     )

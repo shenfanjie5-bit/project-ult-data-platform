@@ -44,7 +44,7 @@ DBT_SCRIPT = PROJECT_ROOT / "scripts" / "dbt.sh"
 DBT_EXECUTABLE_ENV = "DP_DBT_EXECUTABLE"
 DBT_BIN_ENV = "DBT_BIN"
 DATE_FORMAT = "%Y%m%d"
-DEFAULT_DBT_SELECTORS = ("staging", "intermediate", "marts", "marts_v2", "marts_lineage")
+DEFAULT_DBT_SELECTORS = ("staging", "intermediate", "marts_v2", "marts_lineage")
 TRUTHY_VALUES = frozenset({"1", "true", "yes", "on"})
 DEFAULT_REFRESH_LOCK_STALE_AFTER = timedelta(hours=6)
 REFRESH_LOCK_STALE_SECONDS_ENV = "DP_DAILY_REFRESH_LOCK_STALE_SECONDS"
