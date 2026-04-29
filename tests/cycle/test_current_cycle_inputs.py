@@ -83,6 +83,19 @@ def test_current_cycle_inputs_output_does_not_leak_source_fields(
 def test_current_cycle_inputs_can_read_explicit_snapshot_set(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
+    """Legacy-mode snapshot-set key resolution.
+
+    The `as_of_snapshot` dict here keys by the LEGACY table identifier
+    (`canonical.dim_security`). Under `DP_CANONICAL_USE_V2=1` the production
+    code queries the v2 identifier (`canonical_v2.dim_security`) and the
+    legacy key would be silently ignored — that's intentional v2 routing,
+    not a regression. M1.5-3 pins this test to legacy mode; the v2 mode is
+    exercised via test_canonical_datasets_v2_cutover.py and the dataset_id
+    form is tested by test_current_cycle_inputs_loads_provider_neutral_rows
+    above.
+    """
+
+    monkeypatch.delenv("DP_CANONICAL_USE_V2", raising=False)
     fixture = _CanonicalReaderFixture()
     fixture.install(monkeypatch)
 
@@ -145,9 +158,13 @@ def test_current_cycle_inputs_fails_closed_when_candidate_price_missing(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     fixture = _CanonicalReaderFixture()
+    # Provide BOTH legacy and v2 alias columns so the fixture works under
+    # either DP_CANONICAL_USE_V2 state. Production code in current_cycle_inputs
+    # picks the right one via canonical_alias_column_for_dataset().
     fixture.datasets["price_bar"] = pa.table(
         {
             "ts_code": ["000001.SZ"],
+            "security_id": ["000001.SZ"],
             "trade_date": [date(2026, 4, 16)],
             "freq": ["daily"],
             "close": [Decimal("10.5")],
@@ -202,10 +219,16 @@ class _CanonicalReaderFixture:
                 }
             ),
         }
+        # Provide BOTH legacy `ts_code` and v2 `security_id` alias columns so
+        # the fixture works under either DP_CANONICAL_USE_V2 state. Production
+        # current_cycle_inputs picks the right one via
+        # canonical_alias_column_for_dataset(). M1.5-3 v2-default-on test lane
+        # uses this for fixture flag-agnosticism.
         self.datasets: dict[str, pa.Table] = {
             "security_master": pa.table(
                 {
                     "ts_code": ["600519.SH", "000001.SZ"],
+                    "security_id": ["600519.SH", "000001.SZ"],
                     "market": ["Main", "Main"],
                     "industry": ["Liquor", "Bank"],
                 }
@@ -213,6 +236,7 @@ class _CanonicalReaderFixture:
             "price_bar": pa.table(
                 {
                     "ts_code": ["600519.SH", "000001.SZ"],
+                    "security_id": ["600519.SH", "000001.SZ"],
                     "trade_date": [date(2026, 4, 16), date(2026, 4, 16)],
                     "freq": ["daily", "daily"],
                     "close": [Decimal("1700.0"), Decimal("10.5")],

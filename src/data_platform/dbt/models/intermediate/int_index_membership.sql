@@ -38,7 +38,11 @@ membership_weights as (
         weights.weight,
         members.is_new,
         coalesce(weights.source_run_id, members.source_run_id) as source_run_id,
-        coalesce(weights.raw_loaded_at, members.raw_loaded_at) as raw_loaded_at
+        coalesce(weights.raw_loaded_at, members.raw_loaded_at) as raw_loaded_at,
+        members.source_run_id as index_member_source_run_id,
+        weights.source_run_id as index_weight_source_run_id,
+        members.raw_loaded_at as index_member_raw_loaded_at,
+        weights.raw_loaded_at as index_weight_raw_loaded_at
     from members
     left join weights
         on members.index_code = weights.index_code
@@ -63,7 +67,11 @@ unmatched_weights as (
         weights.weight,
         cast(null as varchar) as is_new,
         weights.source_run_id,
-        weights.raw_loaded_at
+        weights.raw_loaded_at,
+        cast(null as varchar) as index_member_source_run_id,
+        weights.source_run_id as index_weight_source_run_id,
+        cast(null as timestamp) as index_member_raw_loaded_at,
+        weights.raw_loaded_at as index_weight_raw_loaded_at
     from weights
     left join members
         on members.index_code = weights.index_code
@@ -89,7 +97,11 @@ combined as (
         weight,
         is_new,
         source_run_id,
-        raw_loaded_at
+        raw_loaded_at,
+        index_member_source_run_id,
+        index_weight_source_run_id,
+        index_member_raw_loaded_at,
+        index_weight_raw_loaded_at
     from membership_weights
     union all
     select
@@ -104,7 +116,11 @@ combined as (
         weight,
         is_new,
         source_run_id,
-        raw_loaded_at
+        raw_loaded_at,
+        index_member_source_run_id,
+        index_weight_source_run_id,
+        index_member_raw_loaded_at,
+        index_weight_raw_loaded_at
     from unmatched_weights
 )
 
@@ -122,7 +138,13 @@ select
     index_basic.category as index_category,
     combined.is_new,
     combined.source_run_id,
-    combined.raw_loaded_at
+    combined.raw_loaded_at,
+    index_basic.source_run_id as index_basic_source_run_id,
+    combined.index_member_source_run_id,
+    combined.index_weight_source_run_id,
+    index_basic.raw_loaded_at as index_basic_raw_loaded_at,
+    combined.index_member_raw_loaded_at,
+    combined.index_weight_raw_loaded_at
 from combined
 left join {{ ref('stg_index_basic') }} as index_basic
     on combined.index_code = index_basic.ts_code

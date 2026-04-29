@@ -12,20 +12,25 @@ import pytest
 from pyiceberg.catalog.memory import InMemoryCatalog
 
 from data_platform.ddl.iceberg_tables import (
-    CANONICAL_MART_TABLE_SPECS,
-    CANONICAL_STOCK_BASIC_SPEC,
+    CANONICAL_LINEAGE_TABLE_SPECS,
+    CANONICAL_V2_TABLE_SPECS,
     TableSpec,
 )
-from data_platform.serving import canonical_writer
+from data_platform.serving import canonical_writer, reader as reader_module
+from data_platform.serving.canonical_datasets import (
+    CANONICAL_DATASET_TABLE_MAPPINGS_V2,
+    USE_CANONICAL_V2_ENV_VAR,
+)
 from data_platform.serving.canonical_writer import (
-    CANONICAL_MART_LOAD_SPECS,
     CANONICAL_MART_SNAPSHOT_SET_FILE,
-    CANONICAL_STOCK_BASIC_IDENTIFIER,
-    FORBIDDEN_PAYLOAD_FIELDS,
     CanonicalLoadSpec,
-    load_canonical_marts,
-    load_canonical_stock_basic,
-    load_canonical_table,
+    load_canonical_v2_marts,
+)
+from data_platform.serving.reader import (
+    CanonicalTableNotFound,
+    canonical_snapshot_id_for_dataset,
+    get_canonical_stock_basic,
+    read_canonical_dataset,
 )
 
 
@@ -37,302 +42,483 @@ class FakeSettings:
     duckdb_path: Path
 
 
-def test_load_canonical_stock_basic_overwrites_idempotently(tmp_path: Path) -> None:
-    catalog = create_stock_basic_catalog(tmp_path)
-    duckdb_path = tmp_path / "staging.duckdb"
-    rows = stock_basic_rows()
-    write_staging_stock_basic(duckdb_path, rows)
-
-    first = load_canonical_stock_basic(catalog, duckdb_path)  # type: ignore[arg-type]
-    second = load_canonical_stock_basic(catalog, duckdb_path)  # type: ignore[arg-type]
-
-    assert first.table == CANONICAL_STOCK_BASIC_IDENTIFIER
-    assert first.row_count == len(rows)
-    assert second.row_count == len(rows)
-    assert second.snapshot_id != first.snapshot_id
-
-    table = catalog.load_table(CANONICAL_STOCK_BASIC_IDENTIFIER)
-    current_snapshot = table.current_snapshot()
-    assert current_snapshot is not None
-    assert current_snapshot.snapshot_id == second.snapshot_id
-
-    current_rows = table.scan().to_arrow()
-    old_rows = table.scan(snapshot_id=first.snapshot_id).to_arrow()
-    assert current_rows.num_rows == len(rows)
-    assert old_rows.num_rows == len(rows)
-    assert current_rows.schema.names == CANONICAL_STOCK_BASIC_SPEC.schema.names
-
-
-def test_load_canonical_stock_basic_does_not_propagate_queue_fields(
-    tmp_path: Path,
-) -> None:
-    catalog = create_stock_basic_catalog(tmp_path)
-    duckdb_path = tmp_path / "staging.duckdb"
-    write_staging_stock_basic(duckdb_path, stock_basic_rows(), include_queue_fields=True)
-
-    load_canonical_stock_basic(catalog, duckdb_path)  # type: ignore[arg-type]
-
-    payload = catalog.load_table(CANONICAL_STOCK_BASIC_IDENTIFIER).scan().to_arrow()
-    assert not FORBIDDEN_PAYLOAD_FIELDS.intersection(
-        field_name.lower() for field_name in payload.schema.names
-    )
-
-
-@pytest.mark.parametrize(
-    "target_schema, expected_error",
-    [
-        (
-            pa.schema(
-                [
-                    field
-                    for field in CANONICAL_STOCK_BASIC_SPEC.schema
-                    if field.name != "market"
-                ]
-            ),
-            "extra payload fields: market",
-        ),
-        (
-            CANONICAL_STOCK_BASIC_SPEC.schema.append(pa.field("extra", pa.string())),
-            "missing payload fields: extra",
-        ),
-    ],
-)
-def test_load_canonical_stock_basic_rejects_target_payload_field_mismatch(
-    tmp_path: Path,
-    target_schema: pa.Schema,
-    expected_error: str,
-) -> None:
-    catalog = create_stock_basic_catalog(tmp_path, schema=target_schema)
-    duckdb_path = tmp_path / "staging.duckdb"
-    write_staging_stock_basic(duckdb_path, stock_basic_rows())
-
-    with pytest.raises(ValueError, match=expected_error):
-        load_canonical_stock_basic(catalog, duckdb_path)  # type: ignore[arg-type]
-
-    assert catalog.load_table(CANONICAL_STOCK_BASIC_IDENTIFIER).current_snapshot() is None
-
-
-def test_load_canonical_stock_basic_rejects_empty_staging_before_overwrite(
-    tmp_path: Path,
-) -> None:
-    catalog = create_stock_basic_catalog(tmp_path)
-    duckdb_path = tmp_path / "staging.duckdb"
-    rows = stock_basic_rows()
-    write_staging_stock_basic(duckdb_path, rows)
-    first = load_canonical_stock_basic(catalog, duckdb_path)  # type: ignore[arg-type]
-    write_staging_stock_basic(duckdb_path, [])
-
-    with pytest.raises(ValueError, match="zero rows"):
-        load_canonical_stock_basic(catalog, duckdb_path)  # type: ignore[arg-type]
-
-    table = catalog.load_table(CANONICAL_STOCK_BASIC_IDENTIFIER)
-    current_snapshot = table.current_snapshot()
-    assert current_snapshot is not None
-    assert current_snapshot.snapshot_id == first.snapshot_id
-    assert table.scan().to_arrow().num_rows == len(rows)
-
-
-def test_load_canonical_stock_basic_allows_empty_staging_with_explicit_flag(
-    tmp_path: Path,
-) -> None:
-    catalog = create_stock_basic_catalog(tmp_path)
-    duckdb_path = tmp_path / "staging.duckdb"
-    rows = stock_basic_rows()
-    write_staging_stock_basic(duckdb_path, rows)
-    first = load_canonical_stock_basic(catalog, duckdb_path)  # type: ignore[arg-type]
-    write_staging_stock_basic(duckdb_path, [])
-
-    second = load_canonical_stock_basic(  # type: ignore[arg-type]
-        catalog,
-        duckdb_path,
-        allow_empty=True,
-    )
-
-    table = catalog.load_table(CANONICAL_STOCK_BASIC_IDENTIFIER)
-    assert second.row_count == 0
-    assert second.snapshot_id != first.snapshot_id
-    assert table.scan().to_arrow().num_rows == 0
-    assert table.scan(snapshot_id=first.snapshot_id).to_arrow().num_rows == len(rows)
-
-
 def test_canonical_load_spec_rejects_queue_fields() -> None:
-    with pytest.raises(ValueError, match="producer queue fields"):
+    with pytest.raises(ValueError, match="forbidden payload fields"):
         CanonicalLoadSpec(
-            identifier="canonical.bad",
+            identifier="canonical_v2.bad",
             duckdb_relation="bad_relation",
             required_columns=("submitted_at",),
         )
 
 
-def test_load_canonical_marts_writes_all_tables_in_fixed_order(tmp_path: Path) -> None:
-    catalog = create_catalog(tmp_path, CANONICAL_MART_TABLE_SPECS)
-    duckdb_path = tmp_path / "marts.duckdb"
-    write_mart_relations(duckdb_path)
+def test_canonical_load_spec_rejects_raw_lineage_fields_on_business_namespace() -> None:
+    """M1.12 step 4 — canonical_v2.* spec must reject raw-zone lineage payload."""
 
-    results = load_canonical_marts(catalog, duckdb_path)  # type: ignore[arg-type]
-    manifest_path = tmp_path / "warehouse" / "canonical" / CANONICAL_MART_SNAPSHOT_SET_FILE
-    manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
-
-    assert [result.table for result in results] == [
-        spec.identifier for spec in CANONICAL_MART_LOAD_SPECS
-    ]
-    assert [result.row_count for result in results] == [1] * len(CANONICAL_MART_LOAD_SPECS)
-    assert all(result.snapshot_id for result in results)
-
-    for load_spec, table_spec in zip(
-        CANONICAL_MART_LOAD_SPECS,
-        CANONICAL_MART_TABLE_SPECS,
-        strict=True,
-    ):
-        payload = catalog.load_table(load_spec.identifier).scan().to_arrow()
-        assert payload.num_rows == 1
-        assert payload.schema.names == table_spec.schema.names
-        assert "canonical_loaded_at" in payload.schema.names
-
-        table_name = load_spec.identifier.rsplit(".", maxsplit=1)[-1]
-        assert manifest["tables"][table_name]["identifier"] == load_spec.identifier
-        assert manifest["tables"][table_name]["snapshot_id"] == results[
-            CANONICAL_MART_LOAD_SPECS.index(load_spec)
-        ].snapshot_id
-        assert manifest["tables"][table_name]["metadata_location"].endswith(".metadata.json")
+    with pytest.raises(ValueError, match="forbidden payload fields"):
+        CanonicalLoadSpec(
+            identifier="canonical_v2.bad",
+            duckdb_relation="bad_relation",
+            required_columns=("source_run_id", "ts_code"),
+        )
 
 
-def test_load_canonical_marts_preflights_all_relations_before_overwrite(
+def test_canonical_lineage_load_spec_permits_raw_lineage_fields() -> None:
+    """M1.12 step 4 — canonical_lineage.* spec bypass permits source_run_id + raw_loaded_at."""
+
+    spec = CanonicalLoadSpec(
+        identifier="canonical_lineage.bad",
+        duckdb_relation="bad_relation",
+        required_columns=("ts_code", "source_run_id", "raw_loaded_at"),
+    )
+    assert spec.identifier == "canonical_lineage.bad"
+
+
+def test_canonical_lineage_load_spec_still_rejects_queue_fields() -> None:
+    """M1.12 step 4 — canonical_lineage.* spec still rejects ingest-queue boundary fields."""
+
+    with pytest.raises(ValueError, match="forbidden payload fields"):
+        CanonicalLoadSpec(
+            identifier="canonical_lineage.bad",
+            duckdb_relation="bad_relation",
+            required_columns=("submitted_at", "raw_loaded_at"),
+        )
+
+
+def test_load_canonical_v2_marts_writes_manifest_with_paired_snapshot_ids(
     tmp_path: Path,
 ) -> None:
-    catalog = create_catalog(tmp_path, CANONICAL_MART_TABLE_SPECS)
+    catalog = create_catalog(
+        tmp_path,
+        [*CANONICAL_V2_TABLE_SPECS, *CANONICAL_LINEAGE_TABLE_SPECS],
+    )
     duckdb_path = tmp_path / "marts.duckdb"
-    write_mart_relations(duckdb_path)
+    write_canonical_v2_mart_relations(duckdb_path)
+
+    results = load_canonical_v2_marts(catalog, duckdb_path)  # type: ignore[arg-type]
+    result_by_table = {result.table: result for result in results}
+    manifest_path = (
+        tmp_path / "warehouse" / "canonical_v2" / CANONICAL_MART_SNAPSHOT_SET_FILE
+    )
+    manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+
+    v2_result = result_by_table["canonical_v2.dim_security"]
+    lineage_result = result_by_table["canonical_lineage.lineage_dim_security"]
+    assert manifest["version"] == 2
+    assert manifest["canonical_v2_tables"]["dim_security"]["snapshot_id"] == (
+        v2_result.snapshot_id
+    )
+    assert manifest["canonical_v2_tables"]["dim_security"]["identifier"] == (
+        "canonical_v2.dim_security"
+    )
+    assert manifest["canonical_lineage_tables"]["lineage_dim_security"]["snapshot_id"] == (
+        lineage_result.snapshot_id
+    )
+    assert manifest["canonical_lineage_tables"]["lineage_dim_security"]["identifier"] == (
+        "canonical_lineage.lineage_dim_security"
+    )
+    v2_loaded_at = set(
+        catalog.load_table("canonical_v2.dim_security")
+        .scan()
+        .to_arrow()
+        .column("canonical_loaded_at")
+        .to_pylist()
+    )
+    lineage_loaded_at = set(
+        catalog.load_table("canonical_lineage.lineage_dim_security")
+        .scan()
+        .to_arrow()
+        .column("canonical_loaded_at")
+        .to_pylist()
+    )
+    assert len(v2_loaded_at) == 1
+    assert lineage_loaded_at == v2_loaded_at
+
+
+def test_load_canonical_v2_marts_pairs_forecast_event_by_update_flag(
+    tmp_path: Path,
+) -> None:
+    catalog = create_catalog(
+        tmp_path,
+        [*CANONICAL_V2_TABLE_SPECS, *CANONICAL_LINEAGE_TABLE_SPECS],
+    )
+    duckdb_path = tmp_path / "marts.duckdb"
+    write_canonical_v2_mart_relations(duckdb_path)
     connection = duckdb.connect(str(duckdb_path))
     try:
-        connection.execute("ALTER TABLE mart_fact_price_bar DROP COLUMN adj_factor")
+        connection.execute("DELETE FROM mart_fact_forecast_event_v2")
+        connection.execute("DELETE FROM mart_lineage_fact_forecast_event")
+        connection.execute(
+            """
+            INSERT INTO mart_fact_forecast_event_v2 VALUES
+                ('SEC_PLACEHOLDER', DATE '2026-04-15', DATE '2026-03-31',
+                 'forecast', -10, 10, 100, 200, 150, DATE '2026-04-15',
+                 'placeholder', 'placeholder', '0'),
+                ('SEC_PLACEHOLDER', DATE '2026-04-15', DATE '2026-03-31',
+                 'forecast', -20, 20, 90, 210, 150, DATE '2026-04-15',
+                 'placeholder', 'placeholder', '1')
+            """
+        )
+        connection.execute(
+            """
+            INSERT INTO mart_lineage_fact_forecast_event VALUES
+                ('SEC_PLACEHOLDER', DATE '2026-04-15', DATE '2026-03-31',
+                 '0', 'forecast', 'tushare', 'forecast', 'run-forecast-0',
+                 TIMESTAMP '2026-04-15 10:00:00'),
+                ('SEC_PLACEHOLDER', DATE '2026-04-15', DATE '2026-03-31',
+                 '1', 'forecast', 'tushare', 'forecast', 'run-forecast-1',
+                 TIMESTAMP '2026-04-15 10:00:00')
+            """
+        )
     finally:
         connection.close()
 
-    with pytest.raises(duckdb.Error, match="adj_factor"):
-        load_canonical_marts(catalog, duckdb_path)  # type: ignore[arg-type]
+    results = load_canonical_v2_marts(catalog, duckdb_path)  # type: ignore[arg-type]
+    result_by_table = {result.table: result for result in results}
 
-    for load_spec in CANONICAL_MART_LOAD_SPECS:
-        assert catalog.load_table(load_spec.identifier).current_snapshot() is None
-
-    manifest_path = tmp_path / "warehouse" / "canonical" / CANONICAL_MART_SNAPSHOT_SET_FILE
-    assert not manifest_path.exists()
-
-
-def test_load_canonical_table_rejects_missing_relation_column(tmp_path: Path) -> None:
-    catalog = create_stock_basic_catalog(tmp_path)
-    duckdb_path = tmp_path / "staging.duckdb"
-    write_staging_stock_basic(duckdb_path, stock_basic_rows())
-    bad_spec = CanonicalLoadSpec(
-        identifier=CANONICAL_STOCK_BASIC_IDENTIFIER,
-        duckdb_relation="stg_stock_basic",
-        required_columns=(
-            *canonical_writer.STOCK_BASIC_LOAD_SPEC.required_columns,
-            "missing_from_target",
-        ),
+    assert canonical_writer.CANONICAL_V2_PAIRING_KEY_COLUMNS[
+        "canonical_v2.fact_forecast_event"
+    ] == (
+        "security_id",
+        "announcement_date",
+        "report_period",
+        "update_flag",
+        "forecast_type",
+    )
+    assert result_by_table["canonical_v2.fact_forecast_event"].row_count == 2
+    assert (
+        result_by_table["canonical_lineage.lineage_fact_forecast_event"].row_count == 2
     )
 
-    with pytest.raises(duckdb.Error, match="missing_from_target"):
-        load_canonical_table(catalog, duckdb_path, bad_spec)  # type: ignore[arg-type]
 
-    assert catalog.load_table(CANONICAL_STOCK_BASIC_IDENTIFIER).current_snapshot() is None
-
-
-def test_load_canonical_table_rejects_public_single_mart_publish(tmp_path: Path) -> None:
-    catalog = create_catalog(tmp_path, [CANONICAL_MART_TABLE_SPECS[0]])
-    duckdb_path = tmp_path / "marts.duckdb"
-    write_mart_relations(duckdb_path)
-
-    with pytest.raises(ValueError, match="publish marts with load_canonical_marts"):
-        load_canonical_table(  # type: ignore[arg-type]
-            catalog,
-            duckdb_path,
-            CANONICAL_MART_LOAD_SPECS[0],
-        )
-
-    assert catalog.load_table("canonical.dim_security").current_snapshot() is None
-
-
-def test_overwrite_failure_does_not_refresh_or_report_snapshot(tmp_path: Path) -> None:
-    duckdb_path = tmp_path / "staging.duckdb"
-    rows = stock_basic_rows()
-    write_staging_stock_basic(duckdb_path, rows)
-
-    class FailingTable:
-        schema = CANONICAL_STOCK_BASIC_SPEC.schema
-
-        def __init__(self) -> None:
-            self.overwritten_rows: int | None = None
-            self.refresh_called = False
-
-        def overwrite(self, table_arrow: pa.Table) -> None:
-            self.overwritten_rows = table_arrow.num_rows
-            raise RuntimeError("overwrite failed")
-
-        def refresh(self) -> FailingTable:
-            self.refresh_called = True
-            return self
-
-    class FakeCatalog:
-        def __init__(self) -> None:
-            self.table = FailingTable()
-
-        def load_table(self, identifier: str) -> FailingTable:
-            assert identifier == CANONICAL_STOCK_BASIC_IDENTIFIER
-            return self.table
-
-    catalog = FakeCatalog()
-
-    with pytest.raises(RuntimeError, match="overwrite failed"):
-        load_canonical_stock_basic(catalog, duckdb_path)  # type: ignore[arg-type]
-
-    assert catalog.table.overwritten_rows == len(rows)
-    assert catalog.table.refresh_called is False
-
-
-def test_cli_writes_result_json(
+def test_load_canonical_v2_marts_rejects_missing_lineage_key_before_overwrite(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
-    capsys: pytest.CaptureFixture[str],
 ) -> None:
-    catalog = create_stock_basic_catalog(tmp_path)
-    duckdb_path = tmp_path / "staging.duckdb"
-    write_staging_stock_basic(duckdb_path, stock_basic_rows())
-    monkeypatch.setattr(canonical_writer, "load_catalog", lambda: catalog)
-    monkeypatch.setattr(canonical_writer, "get_settings", lambda: FakeSettings(duckdb_path))
+    catalog = create_catalog(
+        tmp_path,
+        [*CANONICAL_V2_TABLE_SPECS, *CANONICAL_LINEAGE_TABLE_SPECS],
+    )
+    duckdb_path = tmp_path / "marts.duckdb"
+    write_canonical_v2_mart_relations(
+        duckdb_path,
+        v2_security_ids=("SEC_A", "SEC_B"),
+        lineage_security_ids=("SEC_A", "SEC_C"),
+    )
 
-    exit_code = canonical_writer.main(["--table", "stock_basic"])
+    def fail_overwrite(*_args: object, **_kwargs: object) -> object:
+        pytest.fail("unsafe canonical_v2 publication must fail before overwrite")
 
-    captured = capsys.readouterr()
-    assert exit_code == 0
-    assert captured.err == ""
-    payload = json.loads(captured.out)
-    assert payload["table"] == CANONICAL_STOCK_BASIC_IDENTIFIER
-    assert payload["row_count"] == len(stock_basic_rows())
-    assert catalog.load_table(CANONICAL_STOCK_BASIC_IDENTIFIER).current_snapshot() is not None
+    monkeypatch.setattr(canonical_writer, "_overwrite_prepared_load", fail_overwrite)
+
+    with pytest.raises(ValueError, match="missing lineage key"):
+        load_canonical_v2_marts(catalog, duckdb_path)  # type: ignore[arg-type]
+
+    assert catalog.load_table("canonical_v2.dim_security").current_snapshot() is None
+    assert (
+        catalog.load_table("canonical_lineage.lineage_dim_security").current_snapshot()
+        is None
+    )
 
 
-def test_cli_writes_marts_result_json(
+def test_load_canonical_v2_marts_rejects_duplicate_lineage_key(
+    tmp_path: Path,
+) -> None:
+    catalog = create_catalog(
+        tmp_path,
+        [*CANONICAL_V2_TABLE_SPECS, *CANONICAL_LINEAGE_TABLE_SPECS],
+    )
+    duckdb_path = tmp_path / "marts.duckdb"
+    write_canonical_v2_mart_relations(
+        duckdb_path,
+        v2_security_ids=("SEC_A", "SEC_B"),
+        lineage_security_ids=("SEC_A", "SEC_A"),
+    )
+
+    with pytest.raises(ValueError, match="duplicate canonical key"):
+        load_canonical_v2_marts(catalog, duckdb_path)  # type: ignore[arg-type]
+
+    assert catalog.load_table("canonical_v2.dim_security").current_snapshot() is None
+    assert (
+        catalog.load_table("canonical_lineage.lineage_dim_security").current_snapshot()
+        is None
+    )
+
+
+def test_load_canonical_v2_marts_rejects_row_count_mismatch(
+    tmp_path: Path,
+) -> None:
+    catalog = create_catalog(
+        tmp_path,
+        [*CANONICAL_V2_TABLE_SPECS, *CANONICAL_LINEAGE_TABLE_SPECS],
+    )
+    duckdb_path = tmp_path / "marts.duckdb"
+    write_canonical_v2_mart_relations(
+        duckdb_path,
+        v2_security_ids=("SEC_A", "SEC_B"),
+        lineage_security_ids=("SEC_A",),
+    )
+
+    with pytest.raises(ValueError, match="row_count mismatch"):
+        load_canonical_v2_marts(catalog, duckdb_path)  # type: ignore[arg-type]
+
+    assert catalog.load_table("canonical_v2.dim_security").current_snapshot() is None
+    assert (
+        catalog.load_table("canonical_lineage.lineage_dim_security").current_snapshot()
+        is None
+    )
+
+
+def test_load_canonical_v2_marts_rolls_back_snapshots_when_manifest_write_fails(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
-    capsys: pytest.CaptureFixture[str],
 ) -> None:
-    catalog = create_catalog(tmp_path, CANONICAL_MART_TABLE_SPECS)
+    catalog = create_catalog(
+        tmp_path,
+        [*CANONICAL_V2_TABLE_SPECS, *CANONICAL_LINEAGE_TABLE_SPECS],
+    )
     duckdb_path = tmp_path / "marts.duckdb"
-    write_mart_relations(duckdb_path)
-    monkeypatch.setattr(canonical_writer, "load_catalog", lambda: catalog)
-    monkeypatch.setattr(canonical_writer, "get_settings", lambda: FakeSettings(duckdb_path))
+    write_canonical_v2_mart_relations(duckdb_path)
+    first_results = load_canonical_v2_marts(catalog, duckdb_path)  # type: ignore[arg-type]
+    first_snapshot_by_table = {result.table: result.snapshot_id for result in first_results}
+    write_canonical_v2_mart_relations(
+        duckdb_path,
+        v2_security_ids=("SEC_C", "SEC_D"),
+        lineage_security_ids=("SEC_C", "SEC_D"),
+    )
 
-    exit_code = canonical_writer.main(["--table", "marts", "--json"])
+    def fail_manifest_write(*_args: object, **_kwargs: object) -> None:
+        raise RuntimeError("manifest write failed")
 
-    captured = capsys.readouterr()
-    assert exit_code == 0
-    assert captured.err == ""
-    payload = json.loads(captured.out)
-    assert [item["table"] for item in payload] == [
-        spec.identifier for spec in CANONICAL_MART_LOAD_SPECS
+    monkeypatch.setattr(
+        canonical_writer,
+        "_write_canonical_v2_snapshot_set_manifest",
+        fail_manifest_write,
+    )
+
+    with pytest.raises(RuntimeError, match="manifest write failed"):
+        load_canonical_v2_marts(catalog, duckdb_path)  # type: ignore[arg-type]
+
+    v2_snapshot = catalog.load_table("canonical_v2.dim_security").current_snapshot()
+    lineage_snapshot = catalog.load_table(
+        "canonical_lineage.lineage_dim_security"
+    ).current_snapshot()
+    assert v2_snapshot is not None
+    assert lineage_snapshot is not None
+    assert v2_snapshot.snapshot_id == first_snapshot_by_table["canonical_v2.dim_security"]
+    assert lineage_snapshot.snapshot_id == first_snapshot_by_table[
+        "canonical_lineage.lineage_dim_security"
     ]
-    assert [item["row_count"] for item in payload] == [1] * len(CANONICAL_MART_LOAD_SPECS)
+
+
+@dataclass(frozen=True, slots=True)
+class _ReaderFakeSettings:
+    duckdb_path: Path
+    iceberg_warehouse_path: Path
+
+
+def test_load_canonical_v2_marts_closed_loop_under_v2_flag_reads_pinned_snapshots(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """M1.10 closed-loop proof: write→read across all 9 v2 + 9 lineage marts.
+
+    Drives `load_canonical_v2_marts()` once over a fixture catalog populated
+    with all paired marts, then under `DP_CANONICAL_USE_V2=1` calls
+    `read_canonical_dataset()` for each of the 10 dataset_ids in
+    `CANONICAL_DATASET_TABLE_MAPPINGS_V2`. Every read must pin to the
+    writer-published snapshot via the combined `_mart_snapshot_set.json`
+    manifest. After the positive sweep, the manifest is deleted and the
+    same reader call must fail closed — confirming no unpublished-head
+    fallback for v2 mart tables.
+
+    This is the controlled fixture proof that closes the audit gap for
+    legacy retirement precondition 3 in `assembly/reports/stabilization/
+    m1-10-controlled-v2-proof-preflight-20260429.md`. It is NOT a
+    substitute for the Lite-compose controlled run, which remains gated
+    behind explicit user approval.
+    """
+
+    catalog = create_catalog(
+        tmp_path,
+        [*CANONICAL_V2_TABLE_SPECS, *CANONICAL_LINEAGE_TABLE_SPECS],
+    )
+    duckdb_path = tmp_path / "marts.duckdb"
+    write_canonical_v2_mart_relations(duckdb_path)
+
+    results = load_canonical_v2_marts(catalog, duckdb_path)  # type: ignore[arg-type]
+    result_by_table = {result.table: result for result in results}
+
+    expected_v2_identifiers = {
+        spec.identifier for spec in canonical_writer.CANONICAL_V2_MART_LOAD_SPECS
+    }
+    expected_lineage_identifiers = {
+        spec.identifier for spec in canonical_writer.CANONICAL_LINEAGE_MART_LOAD_SPECS
+    }
+    assert len(expected_v2_identifiers) == 9
+    assert len(expected_lineage_identifiers) == 9
+    assert expected_v2_identifiers <= result_by_table.keys()
+    assert expected_lineage_identifiers <= result_by_table.keys()
+    for identifier in (*expected_v2_identifiers, *expected_lineage_identifiers):
+        assert catalog.load_table(identifier).current_snapshot() is not None, identifier
+
+    manifest_path = (
+        tmp_path / "warehouse" / "canonical_v2" / CANONICAL_MART_SNAPSHOT_SET_FILE
+    )
+    assert manifest_path.exists()
+    manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+    assert manifest["version"] == 2
+    assert set(manifest["canonical_v2_tables"].keys()) == {
+        identifier.rsplit(".", maxsplit=1)[-1]
+        for identifier in expected_v2_identifiers
+    }
+    assert set(manifest["canonical_lineage_tables"].keys()) == {
+        identifier.rsplit(".", maxsplit=1)[-1]
+        for identifier in expected_lineage_identifiers
+    }
+
+    v2_canonical_names = {
+        identifier.rsplit(".", maxsplit=1)[-1]
+        for identifier in expected_v2_identifiers
+    }
+    lineage_canonical_names = {
+        identifier.rsplit(".", maxsplit=1)[-1].removeprefix("lineage_")
+        for identifier in expected_lineage_identifiers
+    }
+    assert v2_canonical_names == lineage_canonical_names
+
+    for v2_spec, lineage_spec in zip(
+        canonical_writer.CANONICAL_V2_MART_LOAD_SPECS,
+        canonical_writer.CANONICAL_LINEAGE_MART_LOAD_SPECS,
+        strict=True,
+    ):
+        v2_table = catalog.load_table(v2_spec.identifier).scan().to_arrow()
+        lineage_table = catalog.load_table(lineage_spec.identifier).scan().to_arrow()
+        v2_loaded_at = set(v2_table.column("canonical_loaded_at").to_pylist())
+        lineage_loaded_at = set(lineage_table.column("canonical_loaded_at").to_pylist())
+        assert v2_loaded_at == lineage_loaded_at, v2_spec.identifier
+
+        pairing_keys = canonical_writer.CANONICAL_V2_PAIRING_KEY_COLUMNS.get(
+            v2_spec.identifier
+        )
+        if pairing_keys is None:
+            continue
+        v2_pks = {
+            tuple(v2_table.column(key).to_pylist()[row] for key in pairing_keys)
+            for row in range(v2_table.num_rows)
+        }
+        lineage_pks = {
+            tuple(lineage_table.column(key).to_pylist()[row] for key in pairing_keys)
+            for row in range(lineage_table.num_rows)
+        }
+        assert v2_pks == lineage_pks, v2_spec.identifier
+
+    monkeypatch.setenv(USE_CANONICAL_V2_ENV_VAR, "1")
+    monkeypatch.setattr(
+        reader_module,
+        "get_settings",
+        lambda: _ReaderFakeSettings(
+            duckdb_path=tmp_path / "reader.duckdb",
+            iceberg_warehouse_path=tmp_path / "warehouse",
+        ),
+    )
+    reader_module._duckdb_connection.cache_clear()
+    try:
+        for mapping in CANONICAL_DATASET_TABLE_MAPPINGS_V2:
+            v2_result = result_by_table[mapping.table_identifier]
+            assert (
+                canonical_snapshot_id_for_dataset(mapping.dataset_id)
+                == v2_result.snapshot_id
+            ), mapping.dataset_id
+            payload = read_canonical_dataset(mapping.dataset_id)
+            assert payload.num_rows >= 1, mapping.dataset_id
+
+        stock_basic_table = get_canonical_stock_basic(active_only=True)
+        assert stock_basic_table.num_rows >= 1
+
+        manifest_path.unlink()
+        reader_module._duckdb_connection.cache_clear()
+        with pytest.raises(CanonicalTableNotFound):
+            read_canonical_dataset("price_bar")
+    finally:
+        reader_module._duckdb_connection.cache_clear()
+
+
+def test_overwrite_failure_does_not_refresh_or_report_snapshot(
+    tmp_path: Path,
+) -> None:
+    catalog = create_catalog(
+        tmp_path,
+        [*CANONICAL_V2_TABLE_SPECS, *CANONICAL_LINEAGE_TABLE_SPECS],
+    )
+    duckdb_path = tmp_path / "marts.duckdb"
+    write_canonical_v2_mart_relations(duckdb_path)
+
+    class FailingOverwrite(Exception):
+        pass
+
+    def failing_overwrite(*_args: object, **_kwargs: object) -> object:
+        raise FailingOverwrite("overwrite failed")
+
+    target_v2 = canonical_writer.CANONICAL_V2_MART_LOAD_SPECS[0].identifier
+    target_lineage = canonical_writer.CANONICAL_LINEAGE_MART_LOAD_SPECS[0].identifier
+    real_overwrite = canonical_writer._overwrite_prepared_load
+    refreshed_calls: list[str] = []
+    original_overwrite_calls: list[str] = []
+
+    def tracking_overwrite(prepared: object, *, started_at: float) -> object:
+        identifier = getattr(prepared, "spec").identifier
+        original_overwrite_calls.append(identifier)
+        if identifier == target_v2:
+            raise FailingOverwrite("overwrite failed")
+        return real_overwrite(prepared, started_at=started_at)
+
+    import unittest.mock as mock
+    with mock.patch.object(
+        canonical_writer,
+        "_overwrite_prepared_load",
+        tracking_overwrite,
+    ):
+        with pytest.raises(FailingOverwrite, match="overwrite failed"):
+            load_canonical_v2_marts(catalog, duckdb_path)  # type: ignore[arg-type]
+
+    assert original_overwrite_calls == [target_v2]
+    assert catalog.load_table(target_v2).current_snapshot() is None
+    assert catalog.load_table(target_lineage).current_snapshot() is None
+
+
+def test_cli_writes_v2_marts_result_json(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    catalog = create_catalog(
+        tmp_path,
+        [*CANONICAL_V2_TABLE_SPECS, *CANONICAL_LINEAGE_TABLE_SPECS],
+    )
+    duckdb_path = tmp_path / "marts.duckdb"
+    write_canonical_v2_mart_relations(duckdb_path)
+    monkeypatch.setattr(canonical_writer, "load_catalog", lambda: catalog)
+    monkeypatch.setattr(canonical_writer, "get_settings", lambda: FakeSettings(duckdb_path))
+
+    exit_code = canonical_writer.main(["--table", "v2_marts", "--json"])
+
+    captured = capsys.readouterr()
+    assert exit_code == 0
+    assert captured.err == ""
+    payload = json.loads(captured.out)
+    expected_count = len(canonical_writer.CANONICAL_V2_MART_LOAD_SPECS) + len(
+        canonical_writer.CANONICAL_LINEAGE_MART_LOAD_SPECS
+    )
+    assert len(payload) == expected_count
+    payload_tables = {item["table"] for item in payload}
+    expected_tables = {
+        spec.identifier
+        for spec in (
+            *canonical_writer.CANONICAL_V2_MART_LOAD_SPECS,
+            *canonical_writer.CANONICAL_LINEAGE_MART_LOAD_SPECS,
+        )
+    }
+    assert payload_tables == expected_tables
 
 
 def test_cli_reports_failure_as_json(
@@ -352,7 +538,7 @@ def test_cli_reports_failure_as_json(
     "argv, expected_detail",
     [
         ([], "the following arguments are required: --table"),
-        (["--table", "stock_basic", "--unknown"], "unrecognized arguments: --unknown"),
+        (["--table", "v2_marts", "--unknown"], "unrecognized arguments: --unknown"),
     ],
 )
 def test_cli_reports_argument_failures_as_json(
@@ -373,21 +559,9 @@ def test_cli_reports_argument_failures_as_json(
 def create_catalog(tmp_path: Path, specs: Sequence[TableSpec]) -> InMemoryCatalog:
     warehouse_path = tmp_path / "warehouse"
     catalog = InMemoryCatalog("test", warehouse=f"file://{warehouse_path}")
-    catalog.create_namespace_if_not_exists(("canonical",))
     for spec in specs:
+        catalog.create_namespace_if_not_exists((spec.namespace,))
         catalog.create_table(f"{spec.namespace}.{spec.name}", schema=spec.schema)
-    return catalog
-
-
-def create_stock_basic_catalog(
-    tmp_path: Path,
-    *,
-    schema: pa.Schema = CANONICAL_STOCK_BASIC_SPEC.schema,
-) -> InMemoryCatalog:
-    warehouse_path = tmp_path / "warehouse"
-    catalog = InMemoryCatalog("test", warehouse=f"file://{warehouse_path}")
-    catalog.create_namespace_if_not_exists(("canonical",))
-    catalog.create_table(CANONICAL_STOCK_BASIC_IDENTIFIER, schema=schema)
     return catalog
 
 
@@ -614,6 +788,508 @@ def write_mart_relations(duckdb_path: Path) -> None:
                 TIMESTAMP '2026-04-15 10:30:00' AS raw_loaded_at
             """
         )
+    finally:
+        connection.close()
+
+
+def _write_canonical_v2_mart_placeholder_relations(
+    duckdb_path: Path,
+) -> None:
+    """Create minimal valid relations for the canonical_v2 / canonical_lineage marts
+    introduced by the M1.3 batch (everything other than dim_security).
+
+    The existing dim_security-focused tests assume the other 7 paired marts
+    exist with internally consistent rows. Each table gets a single placeholder
+    row per canonical PK so the pairing validator succeeds for those marts and
+    the test assertion focuses on the dim_security pair behavior.
+    """
+
+    connection = duckdb.connect(str(duckdb_path))
+    try:
+        # canonical_v2.stock_basic + canonical_lineage.lineage_stock_basic
+        connection.execute(
+            """
+            CREATE OR REPLACE TABLE mart_stock_basic_v2 (
+                "security_id" VARCHAR,
+                "symbol" VARCHAR,
+                "display_name" VARCHAR,
+                "area" VARCHAR,
+                "industry" VARCHAR,
+                "market" VARCHAR,
+                "list_date" DATE,
+                "is_active" BOOLEAN
+            )
+            """
+        )
+        connection.execute(
+            "INSERT INTO mart_stock_basic_v2 VALUES "
+            "('SEC_PLACEHOLDER', '000900', 'Placeholder Co', 'Shenzhen', 'Bank', "
+            "'Main', DATE '2000-01-01', TRUE)"
+        )
+        connection.execute(
+            """
+            CREATE OR REPLACE TABLE mart_lineage_stock_basic (
+                "security_id" VARCHAR,
+                "source_provider" VARCHAR,
+                "source_interface_id" VARCHAR,
+                "source_run_id" VARCHAR,
+                "raw_loaded_at" TIMESTAMP
+            )
+            """
+        )
+        connection.execute(
+            "INSERT INTO mart_lineage_stock_basic VALUES "
+            "('SEC_PLACEHOLDER', 'tushare', 'stock_basic+stock_company+namechange', "
+            "'run-placeholder', TIMESTAMP '2026-04-15 10:00:00')"
+        )
+
+        # canonical_v2.dim_index + canonical_lineage.lineage_dim_index
+        connection.execute(
+            """
+            CREATE OR REPLACE TABLE mart_dim_index_v2 (
+                "index_id" VARCHAR,
+                "index_name" VARCHAR,
+                "index_market" VARCHAR,
+                "index_category" VARCHAR,
+                "first_effective_date" DATE,
+                "latest_effective_date" DATE
+            )
+            """
+        )
+        connection.execute(
+            "INSERT INTO mart_dim_index_v2 VALUES "
+            "('IDX_PLACEHOLDER', 'Placeholder Index', 'CN_A', 'BROAD', "
+            "DATE '2000-01-01', DATE '2026-04-15')"
+        )
+        connection.execute(
+            """
+            CREATE OR REPLACE TABLE mart_lineage_dim_index (
+                "index_id" VARCHAR,
+                "source_provider" VARCHAR,
+                "source_interface_id" VARCHAR,
+                "source_run_id" VARCHAR,
+                "raw_loaded_at" TIMESTAMP
+            )
+            """
+        )
+        connection.execute(
+            "INSERT INTO mart_lineage_dim_index VALUES "
+            "('IDX_PLACEHOLDER', 'tushare', "
+            "'index_basic+index_member+index_weight+index_classify', "
+            "'run-placeholder', TIMESTAMP '2026-04-15 10:00:00')"
+        )
+
+        # canonical_v2.fact_price_bar + canonical_lineage.lineage_fact_price_bar
+        connection.execute(
+            """
+            CREATE OR REPLACE TABLE mart_fact_price_bar_v2 (
+                "security_id" VARCHAR,
+                "trade_date" DATE,
+                "freq" VARCHAR,
+                "open" DECIMAL(38, 18),
+                "high" DECIMAL(38, 18),
+                "low" DECIMAL(38, 18),
+                "close" DECIMAL(38, 18),
+                "pre_close" DECIMAL(38, 18),
+                "change" DECIMAL(38, 18),
+                "pct_chg" DECIMAL(38, 18),
+                "vol" DECIMAL(38, 18),
+                "amount" DECIMAL(38, 18),
+                "adj_factor" DECIMAL(38, 18)
+            )
+            """
+        )
+        connection.execute(
+            "INSERT INTO mart_fact_price_bar_v2 VALUES "
+            "('SEC_PLACEHOLDER', DATE '2026-04-15', 'daily', "
+            "1, 2, 1, 1.5, 1, 0.5, 50, 100, 150, 1)"
+        )
+        connection.execute(
+            """
+            CREATE OR REPLACE TABLE mart_lineage_fact_price_bar (
+                "security_id" VARCHAR,
+                "trade_date" DATE,
+                "freq" VARCHAR,
+                "source_provider" VARCHAR,
+                "source_interface_id" VARCHAR,
+                "source_run_id" VARCHAR,
+                "raw_loaded_at" TIMESTAMP
+            )
+            """
+        )
+        connection.execute(
+            "INSERT INTO mart_lineage_fact_price_bar VALUES "
+            "('SEC_PLACEHOLDER', DATE '2026-04-15', 'daily', "
+            "'tushare', 'daily+adj_factor', 'run-placeholder', "
+            "TIMESTAMP '2026-04-15 10:00:00')"
+        )
+
+        # canonical_v2.fact_financial_indicator + lineage_fact_financial_indicator
+        connection.execute(
+            """
+            CREATE OR REPLACE TABLE mart_fact_financial_indicator_v2 (
+                "security_id" VARCHAR,
+                "end_date" DATE,
+                "ann_date" DATE,
+                "f_ann_date" DATE,
+                "report_type" VARCHAR,
+                "comp_type" VARCHAR,
+                "update_flag" VARCHAR,
+                "is_latest" BOOLEAN,
+                "basic_eps" DECIMAL(38, 18),
+                "diluted_eps" DECIMAL(38, 18),
+                "total_revenue" DECIMAL(38, 18),
+                "revenue" DECIMAL(38, 18),
+                "operate_profit" DECIMAL(38, 18),
+                "total_profit" DECIMAL(38, 18),
+                "n_income" DECIMAL(38, 18),
+                "n_income_attr_p" DECIMAL(38, 18),
+                "money_cap" DECIMAL(38, 18),
+                "total_cur_assets" DECIMAL(38, 18),
+                "total_assets" DECIMAL(38, 18),
+                "total_cur_liab" DECIMAL(38, 18),
+                "total_liab" DECIMAL(38, 18),
+                "total_hldr_eqy_exc_min_int" DECIMAL(38, 18),
+                "total_liab_hldr_eqy" DECIMAL(38, 18),
+                "net_profit" DECIMAL(38, 18),
+                "n_cashflow_act" DECIMAL(38, 18),
+                "n_cashflow_inv_act" DECIMAL(38, 18),
+                "n_cash_flows_fnc_act" DECIMAL(38, 18),
+                "n_incr_cash_cash_equ" DECIMAL(38, 18),
+                "free_cashflow" DECIMAL(38, 18),
+                "eps" DECIMAL(38, 18),
+                "dt_eps" DECIMAL(38, 18),
+                "grossprofit_margin" DECIMAL(38, 18),
+                "netprofit_margin" DECIMAL(38, 18),
+                "roe" DECIMAL(38, 18),
+                "roa" DECIMAL(38, 18),
+                "debt_to_assets" DECIMAL(38, 18),
+                "or_yoy" DECIMAL(38, 18),
+                "netprofit_yoy" DECIMAL(38, 18)
+            )
+            """
+        )
+        connection.execute(
+            "INSERT INTO mart_fact_financial_indicator_v2 VALUES "
+            "('SEC_PLACEHOLDER', DATE '2026-03-31', DATE '2026-04-30', "
+            "DATE '2026-04-30', '1', 'CN', 'O', TRUE, "
+            "1, 1, 1000, 1000, 100, 80, 60, 60, 500, 800, 1000, "
+            "300, 400, 600, 1000, 60, 100, -10, -5, 85, 80, "
+            "1, 1, 0.1, 0.06, 0.06, 0.06, 0.40, 0.05, 0.05)"
+        )
+        connection.execute(
+            """
+            CREATE OR REPLACE TABLE mart_lineage_fact_financial_indicator (
+                "security_id" VARCHAR,
+                "end_date" DATE,
+                "report_type" VARCHAR,
+                "source_provider" VARCHAR,
+                "source_interface_id" VARCHAR,
+                "source_run_id" VARCHAR,
+                "raw_loaded_at" TIMESTAMP
+            )
+            """
+        )
+        connection.execute(
+            "INSERT INTO mart_lineage_fact_financial_indicator VALUES "
+            "('SEC_PLACEHOLDER', DATE '2026-03-31', '1', "
+            "'tushare', 'fina_indicator+income+balancesheet+cashflow', "
+            "'run-placeholder', TIMESTAMP '2026-04-15 10:00:00')"
+        )
+
+        # canonical_v2.fact_market_daily_feature + lineage_fact_market_daily_feature
+        # Build column list dynamically — many decimal columns.
+        market_feature_columns = [
+            "security_id VARCHAR",
+            "trade_date DATE",
+            "close DECIMAL(38, 18)",
+            "turnover_rate DECIMAL(38, 18)",
+            "turnover_rate_f DECIMAL(38, 18)",
+            "volume_ratio DECIMAL(38, 18)",
+            "pe DECIMAL(38, 18)",
+            "pe_ttm DECIMAL(38, 18)",
+            "pb DECIMAL(38, 18)",
+            "ps DECIMAL(38, 18)",
+            "ps_ttm DECIMAL(38, 18)",
+            "dv_ratio DECIMAL(38, 18)",
+            "dv_ttm DECIMAL(38, 18)",
+            "total_share DECIMAL(38, 18)",
+            "float_share DECIMAL(38, 18)",
+            "free_share DECIMAL(38, 18)",
+            "total_mv DECIMAL(38, 18)",
+            "circ_mv DECIMAL(38, 18)",
+            "up_limit DECIMAL(38, 18)",
+            "down_limit DECIMAL(38, 18)",
+            "buy_sm_vol DECIMAL(38, 18)",
+            "buy_sm_amount DECIMAL(38, 18)",
+            "sell_sm_vol DECIMAL(38, 18)",
+            "sell_sm_amount DECIMAL(38, 18)",
+            "buy_md_vol DECIMAL(38, 18)",
+            "buy_md_amount DECIMAL(38, 18)",
+            "sell_md_vol DECIMAL(38, 18)",
+            "sell_md_amount DECIMAL(38, 18)",
+            "buy_lg_vol DECIMAL(38, 18)",
+            "buy_lg_amount DECIMAL(38, 18)",
+            "sell_lg_vol DECIMAL(38, 18)",
+            "sell_lg_amount DECIMAL(38, 18)",
+            "buy_elg_vol DECIMAL(38, 18)",
+            "buy_elg_amount DECIMAL(38, 18)",
+            "sell_elg_vol DECIMAL(38, 18)",
+            "sell_elg_amount DECIMAL(38, 18)",
+            "net_mf_vol DECIMAL(38, 18)",
+            "net_mf_amount DECIMAL(38, 18)",
+        ]
+        connection.execute(
+            "CREATE OR REPLACE TABLE mart_fact_market_daily_feature_v2 ("
+            + ", ".join(f'"{col.split()[0]}" {col.split(maxsplit=1)[1]}' for col in market_feature_columns)
+            + ")"
+        )
+        market_feature_value_count = len(market_feature_columns) - 2  # exclude security_id, trade_date
+        market_feature_values = ", ".join(["1"] * market_feature_value_count)
+        connection.execute(
+            "INSERT INTO mart_fact_market_daily_feature_v2 VALUES ("
+            f"'SEC_PLACEHOLDER', DATE '2026-04-15', {market_feature_values})"
+        )
+        connection.execute(
+            """
+            CREATE OR REPLACE TABLE mart_lineage_fact_market_daily_feature (
+                "security_id" VARCHAR,
+                "trade_date" DATE,
+                "source_provider" VARCHAR,
+                "source_interface_id" VARCHAR,
+                "source_run_id" VARCHAR,
+                "raw_loaded_at" TIMESTAMP
+            )
+            """
+        )
+        connection.execute(
+            "INSERT INTO mart_lineage_fact_market_daily_feature VALUES "
+            "('SEC_PLACEHOLDER', DATE '2026-04-15', 'tushare', "
+            "'daily_basic+stk_limit+moneyflow', 'run-placeholder', "
+            "TIMESTAMP '2026-04-15 10:00:00')"
+        )
+
+        # canonical_v2.fact_index_price_bar + lineage_fact_index_price_bar
+        connection.execute(
+            """
+            CREATE OR REPLACE TABLE mart_fact_index_price_bar_v2 (
+                "index_id" VARCHAR,
+                "trade_date" DATE,
+                "open" DECIMAL(38, 18),
+                "high" DECIMAL(38, 18),
+                "low" DECIMAL(38, 18),
+                "close" DECIMAL(38, 18),
+                "pre_close" DECIMAL(38, 18),
+                "change" DECIMAL(38, 18),
+                "pct_chg" DECIMAL(38, 18),
+                "vol" DECIMAL(38, 18),
+                "amount" DECIMAL(38, 18),
+                "exchange" VARCHAR,
+                "is_open" BOOLEAN,
+                "pretrade_date" DATE
+            )
+            """
+        )
+        connection.execute(
+            "INSERT INTO mart_fact_index_price_bar_v2 VALUES "
+            "('IDX_PLACEHOLDER', DATE '2026-04-15', 1000, 1010, 990, 1005, "
+            "1000, 5, 0.5, 100, 100000, 'SZSE', TRUE, DATE '2026-04-14')"
+        )
+        connection.execute(
+            """
+            CREATE OR REPLACE TABLE mart_lineage_fact_index_price_bar (
+                "index_id" VARCHAR,
+                "trade_date" DATE,
+                "source_provider" VARCHAR,
+                "source_interface_id" VARCHAR,
+                "source_run_id" VARCHAR,
+                "raw_loaded_at" TIMESTAMP
+            )
+            """
+        )
+        connection.execute(
+            "INSERT INTO mart_lineage_fact_index_price_bar VALUES "
+            "('IDX_PLACEHOLDER', DATE '2026-04-15', 'tushare', 'index_daily', "
+            "'run-placeholder', TIMESTAMP '2026-04-15 10:00:00')"
+        )
+
+        # canonical_v2.fact_forecast_event + lineage_fact_forecast_event
+        connection.execute(
+            """
+            CREATE OR REPLACE TABLE mart_fact_forecast_event_v2 (
+                "security_id" VARCHAR,
+                "announcement_date" DATE,
+                "report_period" DATE,
+                "forecast_type" VARCHAR,
+                "p_change_min" DECIMAL(38, 18),
+                "p_change_max" DECIMAL(38, 18),
+                "net_profit_min" DECIMAL(38, 18),
+                "net_profit_max" DECIMAL(38, 18),
+                "last_parent_net" DECIMAL(38, 18),
+                "first_ann_date" DATE,
+                "summary" VARCHAR,
+                "change_reason" VARCHAR,
+                "update_flag" VARCHAR
+            )
+            """
+        )
+        connection.execute(
+            "INSERT INTO mart_fact_forecast_event_v2 VALUES "
+            "('SEC_PLACEHOLDER', DATE '2026-04-15', DATE '2026-03-31', "
+            "'forecast', -10, 10, 100, 200, 150, DATE '2026-04-15', "
+            "'placeholder', 'placeholder', 'O')"
+        )
+        connection.execute(
+            """
+            CREATE OR REPLACE TABLE mart_lineage_fact_forecast_event (
+                "security_id" VARCHAR,
+                "announcement_date" DATE,
+                "report_period" DATE,
+                "update_flag" VARCHAR,
+                "forecast_type" VARCHAR,
+                "source_provider" VARCHAR,
+                "source_interface_id" VARCHAR,
+                "source_run_id" VARCHAR,
+                "raw_loaded_at" TIMESTAMP
+            )
+            """
+        )
+        connection.execute(
+            "INSERT INTO mart_lineage_fact_forecast_event VALUES "
+            "('SEC_PLACEHOLDER', DATE '2026-04-15', DATE '2026-03-31', 'O', "
+            "'forecast', 'tushare', 'forecast', 'run-placeholder', "
+            "TIMESTAMP '2026-04-15 10:00:00')"
+        )
+
+        # canonical_v2.fact_event + lineage_fact_event. Both rows share the
+        # same canonical PK
+        # (event_type, entity_id, event_date, event_key) so the pairing
+        # validator passes.
+        connection.execute(
+            """
+            CREATE OR REPLACE TABLE mart_fact_event_v2 (
+                "event_type" VARCHAR,
+                "entity_id" VARCHAR,
+                "event_date" DATE,
+                "event_key" VARCHAR,
+                "title" VARCHAR,
+                "summary" VARCHAR,
+                "event_subtype" VARCHAR,
+                "related_date" DATE,
+                "reference_url" VARCHAR,
+                "rec_time" VARCHAR
+            )
+            """
+        )
+        connection.execute(
+            "INSERT INTO mart_fact_event_v2 VALUES "
+            "('dividend', 'ENTITY_PLACEHOLDER', DATE '2026-04-15', "
+            "'ek-placeholder', 'Dividend', 'cash_div=1.00', 'paid', "
+            "DATE '2026-03-31', NULL, NULL)"
+        )
+        connection.execute(
+            """
+            CREATE OR REPLACE TABLE mart_lineage_fact_event (
+                "event_type" VARCHAR,
+                "entity_id" VARCHAR,
+                "event_date" DATE,
+                "event_key" VARCHAR,
+                "source_provider" VARCHAR,
+                "source_interface_id" VARCHAR,
+                "source_run_id" VARCHAR,
+                "raw_loaded_at" TIMESTAMP
+            )
+            """
+        )
+        connection.execute(
+            "INSERT INTO mart_lineage_fact_event VALUES "
+            "('dividend', 'ENTITY_PLACEHOLDER', DATE '2026-04-15', "
+            "'ek-placeholder', 'tushare', 'dividend', 'run-placeholder', "
+            "TIMESTAMP '2026-04-15 10:00:00')"
+        )
+    finally:
+        connection.close()
+
+
+def write_canonical_v2_mart_relations(
+    duckdb_path: Path,
+    *,
+    v2_security_ids: Sequence[str] = ("SEC_A", "SEC_B"),
+    lineage_security_ids: Sequence[str] = ("SEC_A", "SEC_B"),
+) -> None:
+    _write_canonical_v2_mart_placeholder_relations(duckdb_path)
+    connection = duckdb.connect(str(duckdb_path))
+    try:
+        connection.execute(
+            """
+            CREATE OR REPLACE TABLE mart_dim_security_v2 (
+                "security_id" VARCHAR,
+                "symbol" VARCHAR,
+                "display_name" VARCHAR,
+                "market" VARCHAR,
+                "industry" VARCHAR,
+                "list_date" DATE,
+                "is_active" BOOLEAN,
+                "area" VARCHAR,
+                "fullname" VARCHAR,
+                "exchange" VARCHAR,
+                "curr_type" VARCHAR,
+                "list_status" VARCHAR,
+                "delist_date" DATE,
+                "setup_date" DATE,
+                "province" VARCHAR,
+                "city" VARCHAR,
+                "reg_capital" DECIMAL(38, 18),
+                "employees" DECIMAL(38, 18),
+                "main_business" VARCHAR,
+                "latest_namechange_name" VARCHAR,
+                "latest_namechange_start_date" DATE,
+                "latest_namechange_end_date" DATE,
+                "latest_namechange_ann_date" DATE,
+                "latest_namechange_reason" VARCHAR
+            )
+            """
+        )
+        for index, security_id in enumerate(v2_security_ids, start=1):
+            connection.execute(
+                """
+                INSERT INTO mart_dim_security_v2 VALUES (
+                    ?, ?, ?, 'Main', 'Bank', DATE '1991-04-03', TRUE, 'Shenzhen',
+                    ?, 'SZSE', 'CNY', 'L', NULL, DATE '1987-12-22', 'Guangdong',
+                    'Shenzhen', CAST(1000.000000000000000000 AS DECIMAL(38, 18)),
+                    CAST(100.000000000000000000 AS DECIMAL(38, 18)), 'Banking',
+                    ?, DATE '2020-01-01', NULL, DATE '2020-01-01', 'rename'
+                )
+                """,
+                [
+                    security_id,
+                    f"{index:06d}",
+                    f"Security {index}",
+                    f"Security {index} Co Ltd",
+                    f"Security {index}",
+                ],
+            )
+
+        connection.execute(
+            """
+            CREATE OR REPLACE TABLE mart_lineage_dim_security (
+                "security_id" VARCHAR,
+                "source_provider" VARCHAR,
+                "source_interface_id" VARCHAR,
+                "source_run_id" VARCHAR,
+                "raw_loaded_at" TIMESTAMP
+            )
+            """
+        )
+        for index, security_id in enumerate(lineage_security_ids, start=1):
+            connection.execute(
+                """
+                INSERT INTO mart_lineage_dim_security VALUES (
+                    ?, 'tushare', 'stock_basic', ?, TIMESTAMP '2026-04-15 10:30:00'
+                )
+                """,
+                [security_id, f"run-{index:03d}"],
+            )
     finally:
         connection.close()
 

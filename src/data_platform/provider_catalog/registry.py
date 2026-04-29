@@ -680,11 +680,18 @@ CANONICAL_DATASETS: Final[dict[str, CanonicalDataset]] = {
         _dataset(
             "financial_forecast_event",
             description="Earnings forecast and express financial events.",
-            primary_key=("security_id", "announcement_date", "report_period", "forecast_type"),
+            primary_key=(
+                "security_id",
+                "announcement_date",
+                "report_period",
+                "update_flag",
+                "forecast_type",
+            ),
             fields=(
                 _field("security_id", "canonical identifier", "Security id."),
                 _field("announcement_date", "date", "Announcement date."),
                 _field("report_period", "date", "Financial report period end."),
+                _field("update_flag", "text", "Forecast version/update discriminator."),
                 _field("forecast_type", "enum", "Forecast or express event type."),
                 _field("summary", "text", "Forecast summary."),
             ),
@@ -898,7 +905,103 @@ PROVIDER_MAPPINGS: Final[tuple[ProviderDatasetMapping, ...]] = (
             ("share_float", "promoted", ("ts_code", "ann_date", "float_date")),
             ("stk_holdernumber", "promoted", ("ts_code", "ann_date", "end_date")),
             ("disclosure_date", "promoted", ("ts_code", "ann_date", "end_date")),
-            ("block_trade", "promoted", ("ts_code", "trade_date")),
+            # Tushare exposes no immutable execution id for block_trade; use
+            # the full row-shape identity as the provider dedupe/natural key
+            # so multiple executions on the same (ts_code, trade_date) survive.
+            (
+                "block_trade",
+                "promoted",
+                ("ts_code", "trade_date", "buyer", "seller", "price", "vol", "amount"),
+            ),
+            # M1.13 expansion (precondition 9 closure) — 8 candidate
+            # event_timeline sources promoted with empirically-verified
+            # identity_fields per
+            # `event-timeline-m1-11-candidate-schema-checkin-20260429.md`.
+            # The wide identities mirror the block_trade/anns pattern:
+            # the same partition key (ts_code + ann_date / trade_date /
+            # end_date / surv_date) can repeat with semantically distinct
+            # rows, so identity widens to the full disambiguating column
+            # set so dbt unique_combination_of_columns enforces uniqueness
+            # without suppressing real-world multiplicity.
+            (
+                "pledge_stat",
+                "promoted",
+                (
+                    "ts_code",
+                    "end_date",
+                    "pledge_count",
+                    "unrest_pledge",
+                    "rest_pledge",
+                    "total_share",
+                    "pledge_ratio",
+                ),
+            ),
+            (
+                "pledge_detail",
+                "promoted",
+                (
+                    "ts_code",
+                    "ann_date",
+                    "holder_name",
+                    "pledgor",
+                    "start_date",
+                    "end_date",
+                    "pledge_amount",
+                    "is_release",
+                ),
+            ),
+            (
+                "repurchase",
+                "promoted",
+                (
+                    "ts_code",
+                    "ann_date",
+                    "end_date",
+                    "proc",
+                    "exp_date",
+                    "vol",
+                    "amount",
+                    "high_limit",
+                    "low_limit",
+                ),
+            ),
+            (
+                "stk_holdertrade",
+                "promoted",
+                (
+                    "ts_code",
+                    "ann_date",
+                    "holder_name",
+                    "holder_type",
+                    "in_de",
+                    "change_vol",
+                    "change_ratio",
+                    "after_share",
+                    "after_ratio",
+                    "avg_price",
+                    "total_share",
+                ),
+            ),
+            (
+                "stk_surv",
+                "promoted",
+                ("ts_code", "surv_date", "rece_org", "rece_mode"),
+            ),
+            (
+                "limit_list_ths",
+                "promoted",
+                ("trade_date", "ts_code", "status"),
+            ),
+            (
+                "limit_list_d",
+                "promoted",
+                ("trade_date", "ts_code", "limit"),
+            ),
+            (
+                "hm_detail",
+                "promoted",
+                ("trade_date", "ts_code", "hm_name"),
+            ),
         )
     ),
     *(
@@ -979,30 +1082,12 @@ PROMOTION_CANDIDATE_MAPPINGS: Final[tuple[ProviderDatasetMapping, ...]] = (
         update_policy="daily refresh",
         coverage="CN_A margin securities",
     ),
-    *(
-        _mapping(
-            doc_api,
-            "event_timeline",
-            status="candidate",
-            field_mapping=(("ts_code", "entity_id"),),
-            source_primary_key=source_primary_key,
-            unit_policy="event text/date/amount fields",
-            date_policy="event or announcement date",
-            adjustment_policy="not applicable",
-            update_policy="event-time with late corrections",
-            coverage="CN_A",
-        )
-        for doc_api, source_primary_key in (
-            ("pledge_stat", ("ts_code", "end_date")),
-            ("pledge_detail", ("ts_code", "ann_date")),
-            ("repurchase", ("ts_code", "ann_date")),
-            ("stk_holdertrade", ("ts_code", "ann_date")),
-            ("limit_list_ths", ("trade_date", "ts_code")),
-            ("limit_list_d", ("trade_date", "ts_code")),
-            ("hm_detail", ("trade_date", "ts_code")),
-            ("stk_surv", ("ts_code", "ann_date")),
-        )
-    ),
+    # M1.13 (precondition 9 closure) — the 8 event_timeline candidates
+    # (pledge_stat, pledge_detail, repurchase, stk_holdertrade, stk_surv,
+    # limit_list_ths, limit_list_d, hm_detail) were promoted to
+    # PROVIDER_MAPPINGS with empirically-verified identity_fields per the
+    # `event-timeline-m1-11-candidate-schema-checkin-20260429.md` evidence
+    # file. They no longer appear here.
     _mapping(
         "express",
         "financial_forecast_event",
@@ -1064,6 +1149,16 @@ _PARTITION_KEY_BY_RAW_DATASET: Final[dict[str, tuple[str, ...]]] = {
     "block_trade": ("trade_date",),
     "moneyflow": ("trade_date",),
     "forecast": ("ann_date",),
+    # M1.13 expansion (precondition 9 closure) — partition keys per
+    # M1.11 evidence file's "event_date source" column.
+    "pledge_stat": ("end_date",),
+    "pledge_detail": ("ann_date",),
+    "repurchase": ("ann_date",),
+    "stk_holdertrade": ("ann_date",),
+    "stk_surv": ("surv_date",),
+    "limit_list_ths": ("trade_date",),
+    "limit_list_d": ("trade_date",),
+    "hm_detail": ("trade_date",),
 }
 
 _CANONICAL_TABLE_BY_DATASET: Final[dict[str, str]] = {

@@ -57,7 +57,13 @@ select
     latest_namechange.ann_date as latest_namechange_ann_date,
     latest_namechange.change_reason as latest_namechange_reason,
     stock_basic.source_run_id,
-    stock_basic.raw_loaded_at
+    stock_basic.raw_loaded_at,
+    stock_basic.source_run_id as stock_basic_source_run_id,
+    stock_company.source_run_id as stock_company_source_run_id,
+    latest_namechange.source_run_id as namechange_source_run_id,
+    stock_basic.raw_loaded_at as stock_basic_raw_loaded_at,
+    stock_company.raw_loaded_at as stock_company_raw_loaded_at,
+    latest_namechange.raw_loaded_at as namechange_raw_loaded_at
 from {{ ref('stg_stock_basic') }} as stock_basic
 left join {{ ref('stg_stock_company') }} as stock_company
     on stock_basic.ts_code = stock_company.ts_code

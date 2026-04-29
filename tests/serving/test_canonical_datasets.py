@@ -5,6 +5,7 @@ import pytest
 from data_platform.provider_catalog import CANONICAL_DATASETS
 from data_platform.serving.canonical_datasets import (
     CANONICAL_DATASET_TABLE_MAPPINGS,
+    USE_CANONICAL_V2_ENV_VAR,
     UnsupportedCanonicalDataset,
     canonical_datasets_for_table,
     canonical_table_for_dataset,
@@ -12,7 +13,13 @@ from data_platform.serving.canonical_datasets import (
 )
 
 
-def test_canonical_dataset_ids_map_explicitly_to_iceberg_tables() -> None:
+def test_canonical_dataset_ids_map_explicitly_to_iceberg_tables(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Legacy-mode mapping pin. The v2-flag-on equivalent is parametrized in
+    `tests/serving/test_canonical_datasets_v2_cutover.py`."""
+
+    monkeypatch.delenv(USE_CANONICAL_V2_ENV_VAR, raising=False)
     assert canonical_table_identifier_for_dataset("security_master") == "canonical.dim_security"
     assert canonical_table_for_dataset("price_bar") == "fact_price_bar"
     assert canonical_table_for_dataset("market_daily_feature") == "fact_market_daily_feature"

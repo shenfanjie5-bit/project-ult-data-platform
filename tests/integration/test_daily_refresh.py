@@ -16,7 +16,11 @@ import pytest
 
 from data_platform import daily_refresh
 from data_platform.config import reset_settings_cache
-from data_platform.serving.canonical_writer import CANONICAL_MART_LOAD_SPECS, WriteResult
+from data_platform.serving.canonical_writer import (
+    CANONICAL_LINEAGE_MART_LOAD_SPECS,
+    CANONICAL_V2_MART_LOAD_SPECS,
+    WriteResult,
+)
 
 
 PROJECT_ROOT = Path(__file__).resolve().parents[2]
@@ -96,7 +100,10 @@ def test_mock_daily_refresh_is_repeatable_and_writes_report(
     write_results = canonical_step["metadata"]["write_results"]
     assert [item["row_count"] for item in write_results] == [
         1
-    ] * (1 + len(CANONICAL_MART_LOAD_SPECS))
+    ] * (
+        len(CANONICAL_V2_MART_LOAD_SPECS)
+        + len(CANONICAL_LINEAGE_MART_LOAD_SPECS)
+    )
     assert canonical_step["metadata"]["skipped_writes"] == []
 
     raw_health_step = _step(report, "raw_health")
@@ -128,6 +135,45 @@ def test_daily_refresh_reports_missing_dp_pg_dsn(
     report = json.loads(report_path.read_text(encoding="utf-8"))
     assert report["ok"] is False
     assert "DP_PG_DSN is required" in report["steps"][0]["metadata"]["error"]
+
+
+def test_daily_refresh_full_dbt_selectors_include_v2_and_lineage() -> None:
+    assets = daily_refresh.TUSHARE_ASSETS
+
+    assert daily_refresh._dbt_selectors(assets, assets) == (
+        "staging",
+        "intermediate",
+        "marts_v2",
+        "marts_lineage",
+    )
+
+
+def test_daily_refresh_partial_dbt_selectors_keep_legacy_staging_path() -> None:
+    selected_assets = [daily_refresh.TUSHARE_ASSETS[0]]
+
+    assert daily_refresh._dbt_selectors(
+        selected_assets,
+        daily_refresh.TUSHARE_ASSETS,
+    ) == (f"stg_{selected_assets[0].dataset}",)
+
+
+def test_mock_adapter_values_cover_dbt_cast_fields() -> None:
+    assets_by_dataset = {asset.dataset: asset for asset in daily_refresh.TUSHARE_ASSETS}
+
+    forecast = daily_refresh._mock_table(assets_by_dataset["forecast"], PARTITION_DATE)
+    stk_limit = daily_refresh._mock_table(assets_by_dataset["stk_limit"], PARTITION_DATE)
+    moneyflow = daily_refresh._mock_table(assets_by_dataset["moneyflow"], PARTITION_DATE)
+    trade_cal = daily_refresh._mock_table(assets_by_dataset["trade_cal"], PARTITION_DATE)
+
+    assert forecast.column("first_ann_date").to_pylist() == ["20260415"]
+    assert forecast.column("p_change_min").to_pylist() == ["1.123456789012345678"]
+    assert forecast.column("p_change_max").to_pylist() == ["1.123456789012345678"]
+    assert stk_limit.column("up_limit").to_pylist() == ["1.123456789012345678"]
+    assert stk_limit.column("down_limit").to_pylist() == ["1.123456789012345678"]
+    assert moneyflow.column("buy_sm_vol").to_pylist() == ["1.123456789012345678"]
+    assert moneyflow.column("net_mf_amount").to_pylist() == ["1.123456789012345678"]
+    assert trade_cal.column("exchange").to_pylist() == ["SSE"]
+    assert trade_cal.column("is_open").to_pylist() == ["1"]
 
 
 def test_daily_refresh_script_reports_missing_dp_pg_dsn(tmp_path: Path) -> None:
@@ -383,7 +429,10 @@ def test_mock_daily_refresh_real_pipeline_repeatable_when_pg_available(
         for item in _result_step(second, "canonical").metadata["write_results"]
     ]
     assert first_rows == second_rows
-    assert len(second_rows) == 1 + len(CANONICAL_MART_LOAD_SPECS)
+    assert len(second_rows) == (
+        len(CANONICAL_V2_MART_LOAD_SPECS)
+        + len(CANONICAL_LINEAGE_MART_LOAD_SPECS)
+    )
     assert all(row_count > 0 for row_count in second_rows)
 
 
@@ -438,15 +487,7 @@ def _install_fast_success_stubs(monkeypatch: pytest.MonkeyPatch) -> None:
             "duckdb_path": settings.duckdb_path,
         }
 
-    def fake_load_stock_basic(_catalog: object, _duckdb_path: Path) -> WriteResult:
-        return WriteResult(
-            table="canonical.stock_basic",
-            snapshot_id=next(snapshots),
-            row_count=1,
-            duration_ms=0,
-        )
-
-    def fake_load_marts(_catalog: object, _duckdb_path: Path) -> list[WriteResult]:
+    def fake_load_v2_marts(_catalog: object, _duckdb_path: Path) -> list[WriteResult]:
         return [
             WriteResult(
                 table=spec.identifier,
@@ -454,7 +495,10 @@ def _install_fast_success_stubs(monkeypatch: pytest.MonkeyPatch) -> None:
                 row_count=1,
                 duration_ms=0,
             )
-            for spec in CANONICAL_MART_LOAD_SPECS
+            for spec in (
+                *CANONICAL_V2_MART_LOAD_SPECS,
+                *CANONICAL_LINEAGE_MART_LOAD_SPECS,
+            )
         ]
 
     monkeypatch.setattr(daily_refresh, "MigrationRunner", FakeMigrationRunner)
@@ -462,8 +506,7 @@ def _install_fast_success_stubs(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(daily_refresh, "build_resources", fake_build_resources)
     monkeypatch.setattr(daily_refresh, "ensure_namespaces", lambda *_args: None)
     monkeypatch.setattr(daily_refresh, "ensure_tables", lambda *_args: [])
-    monkeypatch.setattr(daily_refresh, "load_canonical_stock_basic", fake_load_stock_basic)
-    monkeypatch.setattr(daily_refresh, "load_canonical_marts", fake_load_marts)
+    monkeypatch.setattr(daily_refresh, "load_canonical_v2_marts", fake_load_v2_marts)
 
 
 def _step(report: dict[str, Any], name: str) -> dict[str, Any]:

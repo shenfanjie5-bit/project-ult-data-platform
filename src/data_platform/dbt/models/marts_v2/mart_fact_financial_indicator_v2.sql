@@ -1,7 +1,12 @@
 {{ config(materialized="table") }}
 
+-- Provider-neutral canonical_v2 fact_financial_indicator mart. Renames the
+-- provider-shaped security identifier to the canonical security_id per the
+-- provider catalog field_mapping; drops raw-zone lineage columns (they live
+-- on mart_lineage_fact_financial_indicator.sql).
+
 select
-    ts_code,
+    ts_code as security_id,
     end_date,
     ann_date,
     f_ann_date,
@@ -39,8 +44,6 @@ select
     cast(roa as decimal(38, 18)) as roa,
     cast(debt_to_assets as decimal(38, 18)) as debt_to_assets,
     cast(or_yoy as decimal(38, 18)) as or_yoy,
-    cast(netprofit_yoy as decimal(38, 18)) as netprofit_yoy,
-    source_run_id,
-    raw_loaded_at
+    cast(netprofit_yoy as decimal(38, 18)) as netprofit_yoy
 from {{ ref('int_financial_reports_latest') }}
 where is_latest

@@ -1,7 +1,13 @@
 {{ config(materialized="table") }}
 
+-- Provider-neutral canonical_v2 fact_market_daily_feature mart. Renames the
+-- provider-shaped security identifier to the canonical security_id per the
+-- provider catalog field_mapping; drops raw-zone lineage columns (they live
+-- on mart_lineage_fact_market_daily_feature.sql). Partition decision on
+-- trade_date is deferred to M2.1 per M1-B section 4.
+
 select
-    ts_code,
+    ts_code as security_id,
     trade_date,
     cast(nullif(trim(cast(close as varchar)), '') as decimal(38, 18)) as close,
     cast(nullif(trim(cast(turnover_rate as varchar)), '') as decimal(38, 18))
@@ -63,7 +69,5 @@ select
     cast(nullif(trim(cast(net_mf_vol as varchar)), '') as decimal(38, 18))
         as net_mf_vol,
     cast(nullif(trim(cast(net_mf_amount as varchar)), '') as decimal(38, 18))
-        as net_mf_amount,
-    source_run_id,
-    raw_loaded_at
+        as net_mf_amount
 from {{ ref('int_market_daily_features') }}

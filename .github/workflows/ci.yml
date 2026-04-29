@@ -108,3 +108,24 @@ jobs:
         run: pip install -e ".[dev,shared-fixtures]"
       - name: regression (must really consume audit_eval_fixtures)
         run: make regression
+
+  canonical-v2-default-on:
+    runs-on: ubuntu-latest
+    env:
+      DP_CANONICAL_USE_V2: "1"
+      PYTHONDONTWRITEBYTECODE: "1"
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Install (offline-first dev only)
+        run: pip install -e ".[dev]"
+      - name: canonical-v2 default-on lane
+        run: |
+          python -m pytest -p no:cacheprovider \
+            tests/serving \
+            tests/cycle/test_current_cycle_inputs.py \
+            tests/cycle/test_current_cycle_inputs_lineage_absent.py \
+            tests/test_assets.py \
+            -q

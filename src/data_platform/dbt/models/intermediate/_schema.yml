@@ -208,16 +208,79 @@ models:
           - not_null
 
   - name: int_event_timeline
-    description: Event metadata timeline for announcements, suspensions, dividends, float changes, holders, and disclosure dates.
+    description: |-
+      Event metadata timeline for announcements, suspensions, dividends, float
+      changes, holders, disclosure dates, name changes, block trades, and (as
+      of M1.13) the 8 candidate event_timeline sources promoted in the
+      precondition 9 closure round (pledge_stat, pledge_detail, repurchase,
+      stk_holdertrade, stk_surv, limit_list_ths, limit_list_d, hm_detail).
+      Each row carries `source_interface_id` (per-branch constant) so
+      canonical_lineage.lineage_fact_event can attribute lineage per-source
+      rather than via a composite string. M1.6 added event_type='name_change';
+      M1.8 adds event_type='block_trade'. The uniqueness contract here was
+      intentionally widened in M1.8 to include `source_interface_id` and
+      `summary` so intra-day multi-row event sources (block_trade) can flow
+      through. This weakens the intermediate duplicate guard: the narrower
+      M1.6 key `(event_type, ts_code, event_date, title, related_date,
+      reference_url)` would have caught some duplicates that the new key
+      lets through. Canonical row identity is therefore enforced downstream
+      by the mart-level `event_key` md5, the v2/lineage canonical-PK parity
+      tests in `mart_fact_event_v2` / `mart_lineage_fact_event`, and the
+      writer-side canonical-PK validation in `canonical_writer`. M1.13
+      promoted the 8 remaining candidate sources, taking event_timeline
+      coverage to 16 source interfaces (full coverage). See
+      `event-timeline-m1-11-candidate-schema-checkin-20260429.md` for the
+      M1.11 sign-off table and
+      `event-timeline-m1-13-candidate-promotion-proof-20260429.md` for the
+      M1.13 promotion proof.
     tests:
       - unique_combination_of_columns:
-          combination_of_columns: ["event_type", "ts_code", "event_date", "title", "related_date", "reference_url"]
+          combination_of_columns: ["event_type", "source_interface_id", "ts_code", "event_date", "title", "related_date", "reference_url", "summary"]
     columns:
       - name: event_type
         tests:
           - not_null
           - accepted_values:
-              values: ["announcement", "suspend", "dividend", "share_float", "holder_number", "disclosure_date"]
+              values:
+                - "announcement"
+                - "suspend"
+                - "dividend"
+                - "share_float"
+                - "holder_number"
+                - "disclosure_date"
+                - "name_change"
+                - "block_trade"
+                # M1.13 expansion (precondition 9 closure).
+                - "pledge_summary"
+                - "pledge_event"
+                - "share_repurchase"
+                - "shareholder_trade"
+                - "institutional_survey"
+                - "price_limit_status"
+                - "price_limit_event"
+                - "hot_money_trade"
+      - name: source_interface_id
+        tests:
+          - not_null
+          - accepted_values:
+              values:
+                - "anns"
+                - "suspend_d"
+                - "dividend"
+                - "share_float"
+                - "stk_holdernumber"
+                - "disclosure_date"
+                - "namechange"
+                - "block_trade"
+                # M1.13 expansion (precondition 9 closure).
+                - "pledge_stat"
+                - "pledge_detail"
+                - "repurchase"
+                - "stk_holdertrade"
+                - "stk_surv"
+                - "limit_list_ths"
+                - "limit_list_d"
+                - "hm_detail"
       - name: ts_code
         tests:
           - relationships:

@@ -350,7 +350,15 @@ select
         balancesheet.raw_loaded_at,
         cashflow.raw_loaded_at,
         fina_indicator.raw_loaded_at
-    ) as raw_loaded_at
+    ) as raw_loaded_at,
+    income.source_run_id as income_source_run_id,
+    balancesheet.source_run_id as balancesheet_source_run_id,
+    cashflow.source_run_id as cashflow_source_run_id,
+    fina_indicator.source_run_id as fina_indicator_source_run_id,
+    income.raw_loaded_at as income_raw_loaded_at,
+    balancesheet.raw_loaded_at as balancesheet_raw_loaded_at,
+    cashflow.raw_loaded_at as cashflow_raw_loaded_at,
+    fina_indicator.raw_loaded_at as fina_indicator_raw_loaded_at
 from report_groups
 left join latest_report_versions
     on report_groups.ts_code = latest_report_versions.ts_code

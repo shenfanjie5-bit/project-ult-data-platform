@@ -10,15 +10,11 @@ from pyiceberg.catalog.memory import InMemoryCatalog
 
 from data_platform.ddl import iceberg_tables
 from data_platform.ddl.iceberg_tables import (
-    CANONICAL_DIM_INDEX_SPEC,
-    CANONICAL_DIM_SECURITY_SPEC,
     CANONICAL_ENTITY_SPEC,
-    CANONICAL_FACT_EVENT_SPEC,
-    CANONICAL_FACT_FINANCIAL_INDICATOR_SPEC,
-    CANONICAL_FACT_PRICE_BAR_SPEC,
-    CANONICAL_MART_TABLE_SPECS,
-    CANONICAL_STOCK_BASIC_SPEC,
-    DECIMAL_TYPE,
+    CANONICAL_LINEAGE_DIM_SECURITY_SPEC,
+    CANONICAL_LINEAGE_TABLE_SPECS,
+    CANONICAL_V2_DIM_SECURITY_SPEC,
+    CANONICAL_V2_TABLE_SPECS,
     DEFAULT_TABLE_SPECS,
     ENTITY_ALIAS_SPEC,
     TableSpec,
@@ -70,23 +66,6 @@ class FakeCatalog:
         self.tables.pop(identifier, None)
 
 
-def test_canonical_stock_basic_schema_matches_contract() -> None:
-    assert CANONICAL_STOCK_BASIC_SPEC.namespace == "canonical"
-    assert CANONICAL_STOCK_BASIC_SPEC.name == "stock_basic"
-    assert [(field.name, field.type) for field in CANONICAL_STOCK_BASIC_SPEC.schema] == [
-        ("ts_code", pa.string()),
-        ("symbol", pa.string()),
-        ("name", pa.string()),
-        ("area", pa.string()),
-        ("industry", pa.string()),
-        ("market", pa.string()),
-        ("list_date", pa.date32()),
-        ("is_active", pa.bool_()),
-        ("source_run_id", pa.string()),
-        ("canonical_loaded_at", pa.timestamp("us")),
-    ]
-
-
 def test_entity_storage_point_schemas_are_minimal() -> None:
     assert CANONICAL_ENTITY_SPEC.namespace == "canonical"
     assert CANONICAL_ENTITY_SPEC.name == "canonical_entity"
@@ -102,13 +81,36 @@ def test_entity_storage_point_schemas_are_minimal() -> None:
     ]
 
 
-def test_canonical_mart_storage_point_schemas_match_contract() -> None:
-    assert CANONICAL_DIM_SECURITY_SPEC.namespace == "canonical"
-    assert CANONICAL_DIM_SECURITY_SPEC.name == "dim_security"
-    assert CANONICAL_DIM_SECURITY_SPEC.schema.names == [
-        "ts_code",
+def test_table_specs_reject_raw_namespace_and_queue_fields() -> None:
+    with pytest.raises(ValueError, match="raw namespace"):
+        TableSpec(namespace="raw", name="bad", schema=pa.schema([("id", pa.string())]))
+
+    with pytest.raises(ValueError, match="forbidden schema fields"):
+        TableSpec(
+            namespace="canonical",
+            name="bad",
+            schema=pa.schema([("submitted_at", pa.timestamp("us"))]),
+        )
+
+
+def test_default_table_specs_do_not_include_queue_fields() -> None:
+    forbidden_fields = {"submitted_at", "ingest_seq"}
+
+    for spec in DEFAULT_TABLE_SPECS:
+        assert not forbidden_fields.intersection(
+            field_name.lower() for field_name in spec.schema.names
+        )
+
+
+def test_default_table_specs_include_canonical_v2_and_lineage_storage_points() -> None:
+    identifiers = {f"{spec.namespace}.{spec.name}" for spec in DEFAULT_TABLE_SPECS}
+
+    assert "canonical_v2.dim_security" in identifiers
+    assert "canonical_lineage.lineage_dim_security" in identifiers
+    assert CANONICAL_V2_DIM_SECURITY_SPEC.schema.names == [
+        "security_id",
         "symbol",
-        "name",
+        "display_name",
         "market",
         "industry",
         "list_date",
@@ -130,72 +132,16 @@ def test_canonical_mart_storage_point_schemas_match_contract() -> None:
         "latest_namechange_end_date",
         "latest_namechange_ann_date",
         "latest_namechange_reason",
+        "canonical_loaded_at",
+    ]
+    assert CANONICAL_LINEAGE_DIM_SECURITY_SPEC.schema.names == [
+        "security_id",
+        "source_provider",
+        "source_interface_id",
         "source_run_id",
         "raw_loaded_at",
         "canonical_loaded_at",
     ]
-    assert CANONICAL_DIM_SECURITY_SPEC.schema.field("reg_capital").type == DECIMAL_TYPE
-    assert CANONICAL_DIM_SECURITY_SPEC.schema.field("raw_loaded_at").type == pa.timestamp("us")
-
-    assert CANONICAL_DIM_INDEX_SPEC.namespace == "canonical"
-    assert CANONICAL_DIM_INDEX_SPEC.name == "dim_index"
-    assert CANONICAL_DIM_INDEX_SPEC.schema.names == [
-        "index_code",
-        "index_name",
-        "index_market",
-        "index_category",
-        "first_effective_date",
-        "latest_effective_date",
-        "source_run_id",
-        "raw_loaded_at",
-        "canonical_loaded_at",
-    ]
-
-    assert CANONICAL_FACT_PRICE_BAR_SPEC.name == "fact_price_bar"
-    assert CANONICAL_FACT_PRICE_BAR_SPEC.schema.field("trade_date").type == pa.date32()
-    assert CANONICAL_FACT_PRICE_BAR_SPEC.schema.field("open").type == DECIMAL_TYPE
-    assert CANONICAL_FACT_PRICE_BAR_SPEC.schema.field("adj_factor").type == DECIMAL_TYPE
-
-    assert CANONICAL_FACT_FINANCIAL_INDICATOR_SPEC.name == "fact_financial_indicator"
-    assert CANONICAL_FACT_FINANCIAL_INDICATOR_SPEC.schema.field("end_date").type == pa.date32()
-    assert CANONICAL_FACT_FINANCIAL_INDICATOR_SPEC.schema.field("roe").type == DECIMAL_TYPE
-
-    assert CANONICAL_FACT_EVENT_SPEC.name == "fact_event"
-    assert CANONICAL_FACT_EVENT_SPEC.schema.names == [
-        "event_type",
-        "ts_code",
-        "event_date",
-        "title",
-        "summary",
-        "event_subtype",
-        "related_date",
-        "reference_url",
-        "rec_time",
-        "source_run_id",
-        "raw_loaded_at",
-        "canonical_loaded_at",
-    ]
-
-
-def test_table_specs_reject_raw_namespace_and_queue_fields() -> None:
-    with pytest.raises(ValueError, match="raw namespace"):
-        TableSpec(namespace="raw", name="bad", schema=pa.schema([("id", pa.string())]))
-
-    with pytest.raises(ValueError, match="producer queue fields"):
-        TableSpec(
-            namespace="canonical",
-            name="bad",
-            schema=pa.schema([("submitted_at", pa.timestamp("us"))]),
-        )
-
-
-def test_default_table_specs_do_not_include_queue_fields() -> None:
-    forbidden_fields = {"submitted_at", "ingest_seq"}
-
-    for spec in DEFAULT_TABLE_SPECS:
-        assert not forbidden_fields.intersection(
-            field_name.lower() for field_name in spec.schema.names
-        )
 
 
 def test_register_table_creates_namespace_and_table() -> None:
@@ -231,24 +177,36 @@ def test_ensure_tables_is_idempotent() -> None:
     assert first_tables == second_tables
     assert sorted(catalog.tables) == [
         "canonical.canonical_entity",
-        "canonical.dim_index",
-        "canonical.dim_security",
         "canonical.entity_alias",
-        "canonical.fact_event",
-        "canonical.fact_financial_indicator",
-        "canonical.fact_forecast_event",
-        "canonical.fact_index_price_bar",
-        "canonical.fact_market_daily_feature",
-        "canonical.fact_price_bar",
-        "canonical.stock_basic",
+        "canonical_lineage.lineage_dim_index",
+        "canonical_lineage.lineage_dim_security",
+        "canonical_lineage.lineage_fact_event",
+        "canonical_lineage.lineage_fact_financial_indicator",
+        "canonical_lineage.lineage_fact_forecast_event",
+        "canonical_lineage.lineage_fact_index_price_bar",
+        "canonical_lineage.lineage_fact_market_daily_feature",
+        "canonical_lineage.lineage_fact_price_bar",
+        "canonical_lineage.lineage_stock_basic",
+        "canonical_v2.dim_index",
+        "canonical_v2.dim_security",
+        "canonical_v2.fact_event",
+        "canonical_v2.fact_financial_indicator",
+        "canonical_v2.fact_forecast_event",
+        "canonical_v2.fact_index_price_bar",
+        "canonical_v2.fact_market_daily_feature",
+        "canonical_v2.fact_price_bar",
+        "canonical_v2.stock_basic",
     ]
     assert [identifier for identifier, _ in catalog.create_calls] == [
-        "canonical.stock_basic",
         "canonical.canonical_entity",
         "canonical.entity_alias",
         *[
             f"{spec.namespace}.{spec.name}"
-            for spec in CANONICAL_MART_TABLE_SPECS
+            for spec in CANONICAL_V2_TABLE_SPECS
+        ],
+        *[
+            f"{spec.namespace}.{spec.name}"
+            for spec in CANONICAL_LINEAGE_TABLE_SPECS
         ],
     ]
 
@@ -294,11 +252,11 @@ def test_ensure_tables_rejects_existing_table_schema_drift() -> None:
 def test_ensure_tables_accepts_real_pyiceberg_string_schema(tmp_path: Path) -> None:
     catalog = InMemoryCatalog("test", warehouse=str(tmp_path / "warehouse"))
 
-    tables = ensure_tables(catalog, [CANONICAL_STOCK_BASIC_SPEC])
+    tables = ensure_tables(catalog, [CANONICAL_ENTITY_SPEC])
 
     assert len(tables) == 1
-    assert catalog.load_table("canonical.stock_basic").schema().as_arrow().names == (
-        CANONICAL_STOCK_BASIC_SPEC.schema.names
+    assert catalog.load_table("canonical.canonical_entity").schema().as_arrow().names == (
+        CANONICAL_ENTITY_SPEC.schema.names
     )
 
 
@@ -324,8 +282,10 @@ def test_cli_ensure_uses_project_catalog_and_default_specs(
 
     assert iceberg_tables.main(["--ensure"]) == 0
 
+    from data_platform.serving.catalog import DEFAULT_NAMESPACES
+
     assert namespace_calls == [
-        (fake_catalog, ("canonical", "formal", "analytical")),
+        (fake_catalog, tuple(DEFAULT_NAMESPACES)),
     ]
     assert table_calls == [(fake_catalog, DEFAULT_TABLE_SPECS)]
-    assert "canonical.stock_basic" in capsys.readouterr().out
+    assert "canonical.canonical_entity" in capsys.readouterr().out

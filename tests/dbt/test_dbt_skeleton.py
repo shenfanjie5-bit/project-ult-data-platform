@@ -12,6 +12,8 @@ PROJECT_ROOT = Path(__file__).resolve().parents[2]
 DBT_PROJECT_DIR = PROJECT_ROOT / "src" / "data_platform" / "dbt"
 STAGING_DIR = DBT_PROJECT_DIR / "models" / "staging"
 INTERMEDIATE_DIR = DBT_PROJECT_DIR / "models" / "intermediate"
+MARTS_V2_DIR = DBT_PROJECT_DIR / "models" / "marts_v2"
+MARTS_LINEAGE_DIR = DBT_PROJECT_DIR / "models" / "marts_lineage"
 INTERMEDIATE_MODEL_NAMES = [
     "int_event_timeline",
     "int_financial_reports_latest",
@@ -22,15 +24,34 @@ INTERMEDIATE_MODEL_NAMES = [
     "int_price_bars_adjusted",
     "int_security_master",
 ]
-MART_MODEL_NAMES = [
-    "mart_dim_index",
-    "mart_dim_security",
-    "mart_fact_event",
-    "mart_fact_forecast_event",
-    "mart_fact_financial_indicator",
-    "mart_fact_index_price_bar",
-    "mart_fact_market_daily_feature",
-    "mart_fact_price_bar",
+# Provider-neutral canonical_v2 + canonical_lineage marts. Lock-step list with
+# `data_platform.ddl.iceberg_tables.CANONICAL_V2_TABLE_SPECS` and
+# `CANONICAL_LINEAGE_TABLE_SPECS`. After M1.13, canonical_v2.fact_event covers
+# 16 source interfaces (M1-G2 safe subset + namechange + block_trade + 8 M1.13
+# candidates: pledge_stat, pledge_detail, repurchase, stk_holdertrade, stk_surv,
+# limit_list_ths, limit_list_d, hm_detail). Legacy `dbt/models/marts/` was
+# retired in M1.14.
+MART_V2_MODEL_NAMES = [
+    "mart_dim_security_v2",
+    "mart_stock_basic_v2",
+    "mart_dim_index_v2",
+    "mart_fact_price_bar_v2",
+    "mart_fact_financial_indicator_v2",
+    "mart_fact_market_daily_feature_v2",
+    "mart_fact_index_price_bar_v2",
+    "mart_fact_forecast_event_v2",
+    "mart_fact_event_v2",
+]
+MART_LINEAGE_MODEL_NAMES = [
+    "mart_lineage_dim_security",
+    "mart_lineage_stock_basic",
+    "mart_lineage_dim_index",
+    "mart_lineage_fact_price_bar",
+    "mart_lineage_fact_financial_indicator",
+    "mart_lineage_fact_market_daily_feature",
+    "mart_lineage_fact_index_price_bar",
+    "mart_lineage_fact_forecast_event",
+    "mart_lineage_fact_event",
 ]
 
 
@@ -46,16 +67,14 @@ def test_dbt_skeleton_files_are_present() -> None:
         STAGING_DIR / "_schema.yml",
         INTERMEDIATE_DIR / "_schema.yml",
         DBT_PROJECT_DIR / "models" / "intermediate" / ".gitkeep",
-        DBT_PROJECT_DIR / "models" / "marts" / ".gitkeep",
-        DBT_PROJECT_DIR / "models" / "marts" / "_schema.yml",
+        MARTS_V2_DIR / "_schema.yml",
+        MARTS_LINEAGE_DIR / "_schema.yml",
         DBT_PROJECT_DIR / "seeds" / ".gitkeep",
         PROJECT_ROOT / "scripts" / "dbt.sh",
         *[STAGING_DIR / f"stg_{asset.dataset}.sql" for asset in TUSHARE_ASSETS],
         *[INTERMEDIATE_DIR / f"{model_name}.sql" for model_name in INTERMEDIATE_MODEL_NAMES],
-        *[
-            DBT_PROJECT_DIR / "models" / "marts" / f"{model_name}.sql"
-            for model_name in MART_MODEL_NAMES
-        ],
+        *[MARTS_V2_DIR / f"{model_name}.sql" for model_name in MART_V2_MODEL_NAMES],
+        *[MARTS_LINEAGE_DIR / f"{model_name}.sql" for model_name in MART_LINEAGE_MODEL_NAMES],
     ]
 
     missing_paths = [path for path in required_paths if not path.exists()]
@@ -70,7 +89,11 @@ def test_dbt_skeleton_files_are_present() -> None:
         [
             *(f"models/staging/stg_{asset.dataset}.sql" for asset in TUSHARE_ASSETS),
             *(f"models/intermediate/{model_name}.sql" for model_name in INTERMEDIATE_MODEL_NAMES),
-            *(f"models/marts/{model_name}.sql" for model_name in MART_MODEL_NAMES),
+            *(f"models/marts_v2/{model_name}.sql" for model_name in MART_V2_MODEL_NAMES),
+            *(
+                f"models/marts_lineage/{model_name}.sql"
+                for model_name in MART_LINEAGE_MODEL_NAMES
+            ),
         ]
     )
 

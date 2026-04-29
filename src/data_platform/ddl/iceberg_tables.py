@@ -20,8 +20,36 @@ from data_platform.serving.catalog import (
 )
 
 
-FORBIDDEN_SCHEMA_FIELDS: Final[frozenset[str]] = frozenset({"submitted_at", "ingest_seq"})
+FORBIDDEN_SCHEMA_FIELDS: Final[frozenset[str]] = frozenset(
+    {"submitted_at", "ingest_seq", "source_run_id", "raw_loaded_at"}
+)
+"""Columns that must never appear on canonical Iceberg specs.
+
+Includes both Layer-B ingest-queue fields and raw-zone lineage fields.
+The `canonical_lineage.*` namespace legitimately carries the lineage
+block, so the bypass at `_forbidden_schema_fields_for` strips those from
+the forbidden set when the spec lives in `canonical_lineage`.
+"""
+
+_CANONICAL_LINEAGE_NAMESPACE: Final[str] = "canonical_lineage"
+_CANONICAL_LINEAGE_ALLOWED_FIELDS: Final[frozenset[str]] = frozenset(
+    {"source_run_id", "raw_loaded_at"}
+)
+
+
+def _forbidden_schema_fields_for(namespace: str) -> frozenset[str]:
+    """Return the forbidden-schema-fields set for one Iceberg namespace.
+
+    Canonical_lineage.* legitimately carries `source_run_id` /
+    `raw_loaded_at`; the ingest-queue boundary still applies there.
+    """
+
+    if namespace == _CANONICAL_LINEAGE_NAMESPACE:
+        return FORBIDDEN_SCHEMA_FIELDS - _CANONICAL_LINEAGE_ALLOWED_FIELDS
+    return FORBIDDEN_SCHEMA_FIELDS
 CANONICAL_NAMESPACE: Final[str] = "canonical"
+CANONICAL_V2_NAMESPACE: Final[str] = "canonical_v2"
+CANONICAL_LINEAGE_NAMESPACE: Final[str] = "canonical_lineage"
 TIMESTAMP_TYPE: Final[pa.TimestampType] = pa.timestamp("us")
 DECIMAL_TYPE: Final[pa.Decimal128Type] = pa.decimal128(38, 18)
 
@@ -50,12 +78,12 @@ class TableSpec:
             raise ValueError(msg)
 
         forbidden_fields = sorted(
-            FORBIDDEN_SCHEMA_FIELDS.intersection(
+            _forbidden_schema_fields_for(namespace).intersection(
                 field_name.lower() for field_name in self.schema.names
             )
         )
         if forbidden_fields:
-            msg = "Iceberg table schema must not include producer queue fields: "
+            msg = "Iceberg table schema must not include forbidden schema fields: "
             raise ValueError(msg + ", ".join(forbidden_fields))
 
         object.__setattr__(self, "namespace", namespace)
@@ -65,25 +93,6 @@ class TableSpec:
         if self.properties is not None:
             object.__setattr__(self, "properties", dict(self.properties))
 
-
-CANONICAL_STOCK_BASIC_SPEC: Final[TableSpec] = TableSpec(
-    namespace=CANONICAL_NAMESPACE,
-    name="stock_basic",
-    schema=pa.schema(
-        [
-            pa.field("ts_code", pa.string()),
-            pa.field("symbol", pa.string()),
-            pa.field("name", pa.string()),
-            pa.field("area", pa.string()),
-            pa.field("industry", pa.string()),
-            pa.field("market", pa.string()),
-            pa.field("list_date", pa.date32()),
-            pa.field("is_active", pa.bool_()),
-            pa.field("source_run_id", pa.string()),
-            pa.field("canonical_loaded_at", TIMESTAMP_TYPE),
-        ]
-    ),
-)
 
 CANONICAL_ENTITY_SPEC: Final[TableSpec] = TableSpec(
     namespace=CANONICAL_NAMESPACE,
@@ -109,14 +118,32 @@ ENTITY_ALIAS_SPEC: Final[TableSpec] = TableSpec(
     ),
 )
 
-CANONICAL_DIM_SECURITY_SPEC: Final[TableSpec] = TableSpec(
-    namespace=CANONICAL_NAMESPACE,
+# ---------------------------------------------------------------------------
+# Canonical V2 namespace.
+#
+# Provider-neutral by construction: canonical identifiers
+# (security_id / index_id / entity_id) instead of provider-shaped names;
+# raw-zone lineage columns (source_run_id / raw_loaded_at) move to
+# canonical_lineage. Per M1-A design
+# (`assembly/reports/stabilization/canonical-v2-lineage-separation-design-20260428.md`)
+# and M1-B spike (`p1-iceberg-write-chain-spike-proof-20260428.md`).
+#
+# Coverage: 9 mart tables (dim_security, stock_basic, dim_index,
+# fact_price_bar, fact_financial_indicator, fact_market_daily_feature,
+# fact_index_price_bar, fact_forecast_event, fact_event). fact_event currently
+# covers 8 source interfaces after M1.8 block_trade promotion. Legacy
+# `canonical.*` namespace remains active until retirement readiness
+# pre-conditions close (see m1-legacy-canonical-retirement-readiness-20260428.md).
+# ---------------------------------------------------------------------------
+
+CANONICAL_V2_DIM_SECURITY_SPEC: Final[TableSpec] = TableSpec(
+    namespace=CANONICAL_V2_NAMESPACE,
     name="dim_security",
     schema=pa.schema(
         [
-            pa.field("ts_code", pa.string()),
+            pa.field("security_id", pa.string()),
             pa.field("symbol", pa.string()),
-            pa.field("name", pa.string()),
+            pa.field("display_name", pa.string()),
             pa.field("market", pa.string()),
             pa.field("industry", pa.string()),
             pa.field("list_date", pa.date32()),
@@ -138,37 +165,51 @@ CANONICAL_DIM_SECURITY_SPEC: Final[TableSpec] = TableSpec(
             pa.field("latest_namechange_end_date", pa.date32()),
             pa.field("latest_namechange_ann_date", pa.date32()),
             pa.field("latest_namechange_reason", pa.string()),
-            pa.field("source_run_id", pa.string()),
-            pa.field("raw_loaded_at", TIMESTAMP_TYPE),
             pa.field("canonical_loaded_at", TIMESTAMP_TYPE),
         ]
     ),
 )
 
-CANONICAL_DIM_INDEX_SPEC: Final[TableSpec] = TableSpec(
-    namespace=CANONICAL_NAMESPACE,
+CANONICAL_V2_STOCK_BASIC_SPEC: Final[TableSpec] = TableSpec(
+    namespace=CANONICAL_V2_NAMESPACE,
+    name="stock_basic",
+    schema=pa.schema(
+        [
+            pa.field("security_id", pa.string()),
+            pa.field("symbol", pa.string()),
+            pa.field("display_name", pa.string()),
+            pa.field("area", pa.string()),
+            pa.field("industry", pa.string()),
+            pa.field("market", pa.string()),
+            pa.field("list_date", pa.date32()),
+            pa.field("is_active", pa.bool_()),
+            pa.field("canonical_loaded_at", TIMESTAMP_TYPE),
+        ]
+    ),
+)
+
+CANONICAL_V2_DIM_INDEX_SPEC: Final[TableSpec] = TableSpec(
+    namespace=CANONICAL_V2_NAMESPACE,
     name="dim_index",
     schema=pa.schema(
         [
-            pa.field("index_code", pa.string()),
+            pa.field("index_id", pa.string()),
             pa.field("index_name", pa.string()),
             pa.field("index_market", pa.string()),
             pa.field("index_category", pa.string()),
             pa.field("first_effective_date", pa.date32()),
             pa.field("latest_effective_date", pa.date32()),
-            pa.field("source_run_id", pa.string()),
-            pa.field("raw_loaded_at", TIMESTAMP_TYPE),
             pa.field("canonical_loaded_at", TIMESTAMP_TYPE),
         ]
     ),
 )
 
-CANONICAL_FACT_PRICE_BAR_SPEC: Final[TableSpec] = TableSpec(
-    namespace=CANONICAL_NAMESPACE,
+CANONICAL_V2_FACT_PRICE_BAR_SPEC: Final[TableSpec] = TableSpec(
+    namespace=CANONICAL_V2_NAMESPACE,
     name="fact_price_bar",
     schema=pa.schema(
         [
-            pa.field("ts_code", pa.string()),
+            pa.field("security_id", pa.string()),
             pa.field("trade_date", pa.date32()),
             pa.field("freq", pa.string()),
             pa.field("open", DECIMAL_TYPE),
@@ -181,19 +222,21 @@ CANONICAL_FACT_PRICE_BAR_SPEC: Final[TableSpec] = TableSpec(
             pa.field("vol", DECIMAL_TYPE),
             pa.field("amount", DECIMAL_TYPE),
             pa.field("adj_factor", DECIMAL_TYPE),
-            pa.field("source_run_id", pa.string()),
-            pa.field("raw_loaded_at", TIMESTAMP_TYPE),
             pa.field("canonical_loaded_at", TIMESTAMP_TYPE),
         ]
     ),
+    # NOTE: partition_by=["trade_date"] is deferred to M2.1 per M1-B §4.3
+    # (FakeCatalog/PyIceberg pyarrow_to_schema needs field-id metadata that
+    # the in-process test schemas do not carry; production wiring through a
+    # real catalog will add partition spec via CTAS or table-evolve later).
 )
 
-CANONICAL_FACT_FINANCIAL_INDICATOR_SPEC: Final[TableSpec] = TableSpec(
-    namespace=CANONICAL_NAMESPACE,
+CANONICAL_V2_FACT_FINANCIAL_INDICATOR_SPEC: Final[TableSpec] = TableSpec(
+    namespace=CANONICAL_V2_NAMESPACE,
     name="fact_financial_indicator",
     schema=pa.schema(
         [
-            pa.field("ts_code", pa.string()),
+            pa.field("security_id", pa.string()),
             pa.field("end_date", pa.date32()),
             pa.field("ann_date", pa.date32()),
             pa.field("f_ann_date", pa.date32()),
@@ -231,40 +274,23 @@ CANONICAL_FACT_FINANCIAL_INDICATOR_SPEC: Final[TableSpec] = TableSpec(
             pa.field("debt_to_assets", DECIMAL_TYPE),
             pa.field("or_yoy", DECIMAL_TYPE),
             pa.field("netprofit_yoy", DECIMAL_TYPE),
-            pa.field("source_run_id", pa.string()),
-            pa.field("raw_loaded_at", TIMESTAMP_TYPE),
             pa.field("canonical_loaded_at", TIMESTAMP_TYPE),
         ]
     ),
 )
 
-CANONICAL_FACT_EVENT_SPEC: Final[TableSpec] = TableSpec(
-    namespace=CANONICAL_NAMESPACE,
-    name="fact_event",
-    schema=pa.schema(
-        [
-            pa.field("event_type", pa.string()),
-            pa.field("ts_code", pa.string()),
-            pa.field("event_date", pa.date32()),
-            pa.field("title", pa.string()),
-            pa.field("summary", pa.string()),
-            pa.field("event_subtype", pa.string()),
-            pa.field("related_date", pa.date32()),
-            pa.field("reference_url", pa.string()),
-            pa.field("rec_time", pa.string()),
-            pa.field("source_run_id", pa.string()),
-            pa.field("raw_loaded_at", TIMESTAMP_TYPE),
-            pa.field("canonical_loaded_at", TIMESTAMP_TYPE),
-        ]
-    ),
-)
+# NOTE: canonical_v2.fact_event is defined later (after fact_forecast_event).
+# It currently covers 8 source interfaces in int_event_timeline.sql (anns,
+# suspend_d, dividend, share_float, stk_holdernumber, disclosure_date,
+# namechange, block_trade). The 8 candidate Tushare sources remain
+# BLOCKED_NO_STAGING.
 
-CANONICAL_FACT_MARKET_DAILY_FEATURE_SPEC: Final[TableSpec] = TableSpec(
-    namespace=CANONICAL_NAMESPACE,
+CANONICAL_V2_FACT_MARKET_DAILY_FEATURE_SPEC: Final[TableSpec] = TableSpec(
+    namespace=CANONICAL_V2_NAMESPACE,
     name="fact_market_daily_feature",
     schema=pa.schema(
         [
-            pa.field("ts_code", pa.string()),
+            pa.field("security_id", pa.string()),
             pa.field("trade_date", pa.date32()),
             pa.field("close", DECIMAL_TYPE),
             pa.field("turnover_rate", DECIMAL_TYPE),
@@ -302,19 +328,21 @@ CANONICAL_FACT_MARKET_DAILY_FEATURE_SPEC: Final[TableSpec] = TableSpec(
             pa.field("sell_elg_amount", DECIMAL_TYPE),
             pa.field("net_mf_vol", DECIMAL_TYPE),
             pa.field("net_mf_amount", DECIMAL_TYPE),
-            pa.field("source_run_id", pa.string()),
-            pa.field("raw_loaded_at", TIMESTAMP_TYPE),
             pa.field("canonical_loaded_at", TIMESTAMP_TYPE),
         ]
     ),
+    # NOTE: partition_by=["trade_date"] is deferred to M2.1 per M1-B §4.3
+    # (FakeCatalog/PyIceberg pyarrow_to_schema needs field-id metadata that
+    # the in-process test schemas do not carry; production wiring through a
+    # real catalog will add partition spec via CTAS or table-evolve later).
 )
 
-CANONICAL_FACT_INDEX_PRICE_BAR_SPEC: Final[TableSpec] = TableSpec(
-    namespace=CANONICAL_NAMESPACE,
+CANONICAL_V2_FACT_INDEX_PRICE_BAR_SPEC: Final[TableSpec] = TableSpec(
+    namespace=CANONICAL_V2_NAMESPACE,
     name="fact_index_price_bar",
     schema=pa.schema(
         [
-            pa.field("index_code", pa.string()),
+            pa.field("index_id", pa.string()),
             pa.field("trade_date", pa.date32()),
             pa.field("open", DECIMAL_TYPE),
             pa.field("high", DECIMAL_TYPE),
@@ -328,21 +356,23 @@ CANONICAL_FACT_INDEX_PRICE_BAR_SPEC: Final[TableSpec] = TableSpec(
             pa.field("exchange", pa.string()),
             pa.field("is_open", pa.bool_()),
             pa.field("pretrade_date", pa.date32()),
-            pa.field("source_run_id", pa.string()),
-            pa.field("raw_loaded_at", TIMESTAMP_TYPE),
             pa.field("canonical_loaded_at", TIMESTAMP_TYPE),
         ]
     ),
+    # NOTE: partition_by=["trade_date"] is deferred to M2.1 per M1-B §4.3
+    # (FakeCatalog/PyIceberg pyarrow_to_schema needs field-id metadata that
+    # the in-process test schemas do not carry; production wiring through a
+    # real catalog will add partition spec via CTAS or table-evolve later).
 )
 
-CANONICAL_FACT_FORECAST_EVENT_SPEC: Final[TableSpec] = TableSpec(
-    namespace=CANONICAL_NAMESPACE,
+CANONICAL_V2_FACT_FORECAST_EVENT_SPEC: Final[TableSpec] = TableSpec(
+    namespace=CANONICAL_V2_NAMESPACE,
     name="fact_forecast_event",
     schema=pa.schema(
         [
-            pa.field("ts_code", pa.string()),
-            pa.field("ann_date", pa.date32()),
-            pa.field("end_date", pa.date32()),
+            pa.field("security_id", pa.string()),
+            pa.field("announcement_date", pa.date32()),
+            pa.field("report_period", pa.date32()),
             pa.field("forecast_type", pa.string()),
             pa.field("p_change_min", DECIMAL_TYPE),
             pa.field("p_change_max", DECIMAL_TYPE),
@@ -353,6 +383,63 @@ CANONICAL_FACT_FORECAST_EVENT_SPEC: Final[TableSpec] = TableSpec(
             pa.field("summary", pa.string()),
             pa.field("change_reason", pa.string()),
             pa.field("update_flag", pa.string()),
+            pa.field("canonical_loaded_at", TIMESTAMP_TYPE),
+        ]
+    ),
+)
+
+# Provider-neutral event fact. Covers 8 sources currently in
+# int_event_timeline.sql: anns ('announcement'), suspend_d ('suspend'),
+# dividend, share_float, stk_holdernumber ('holder_number'), disclosure_date,
+# namechange ('name_change'), and block_trade. The 8 candidate sources remain
+# BLOCKED_NO_STAGING.
+CANONICAL_V2_FACT_EVENT_SPEC: Final[TableSpec] = TableSpec(
+    namespace=CANONICAL_V2_NAMESPACE,
+    name="fact_event",
+    schema=pa.schema(
+        [
+            pa.field("event_type", pa.string()),
+            pa.field("entity_id", pa.string()),
+            pa.field("event_date", pa.date32()),
+            pa.field("event_key", pa.string()),
+            pa.field("title", pa.string()),
+            pa.field("summary", pa.string()),
+            pa.field("event_subtype", pa.string()),
+            pa.field("related_date", pa.date32()),
+            pa.field("reference_url", pa.string()),
+            pa.field("rec_time", pa.string()),
+            pa.field("canonical_loaded_at", TIMESTAMP_TYPE),
+        ]
+    ),
+)
+
+CANONICAL_V2_TABLE_SPECS: Final[tuple[TableSpec, ...]] = (
+    CANONICAL_V2_DIM_SECURITY_SPEC,
+    CANONICAL_V2_STOCK_BASIC_SPEC,
+    CANONICAL_V2_DIM_INDEX_SPEC,
+    CANONICAL_V2_FACT_PRICE_BAR_SPEC,
+    CANONICAL_V2_FACT_FINANCIAL_INDICATOR_SPEC,
+    CANONICAL_V2_FACT_MARKET_DAILY_FEATURE_SPEC,
+    CANONICAL_V2_FACT_INDEX_PRICE_BAR_SPEC,
+    CANONICAL_V2_FACT_FORECAST_EVENT_SPEC,
+    CANONICAL_V2_FACT_EVENT_SPEC,
+)
+
+# ---------------------------------------------------------------------------
+# Canonical lineage namespace.
+#
+# 1:1 sibling of canonical_v2 business rows on the canonical PK. Provider-
+# aware lineage lives here so canonical business rows stay provider-neutral.
+# ---------------------------------------------------------------------------
+
+CANONICAL_LINEAGE_DIM_SECURITY_SPEC: Final[TableSpec] = TableSpec(
+    namespace=CANONICAL_LINEAGE_NAMESPACE,
+    name="lineage_dim_security",
+    schema=pa.schema(
+        [
+            pa.field("security_id", pa.string()),
+            pa.field("source_provider", pa.string()),
+            pa.field("source_interface_id", pa.string()),
             pa.field("source_run_id", pa.string()),
             pa.field("raw_loaded_at", TIMESTAMP_TYPE),
             pa.field("canonical_loaded_at", TIMESTAMP_TYPE),
@@ -360,22 +447,171 @@ CANONICAL_FACT_FORECAST_EVENT_SPEC: Final[TableSpec] = TableSpec(
     ),
 )
 
-CANONICAL_MART_TABLE_SPECS: Final[tuple[TableSpec, ...]] = (
-    CANONICAL_DIM_SECURITY_SPEC,
-    CANONICAL_DIM_INDEX_SPEC,
-    CANONICAL_FACT_PRICE_BAR_SPEC,
-    CANONICAL_FACT_FINANCIAL_INDICATOR_SPEC,
-    CANONICAL_FACT_EVENT_SPEC,
-    CANONICAL_FACT_MARKET_DAILY_FEATURE_SPEC,
-    CANONICAL_FACT_INDEX_PRICE_BAR_SPEC,
-    CANONICAL_FACT_FORECAST_EVENT_SPEC,
+CANONICAL_LINEAGE_STOCK_BASIC_SPEC: Final[TableSpec] = TableSpec(
+    namespace=CANONICAL_LINEAGE_NAMESPACE,
+    name="lineage_stock_basic",
+    schema=pa.schema(
+        [
+            pa.field("security_id", pa.string()),
+            pa.field("source_provider", pa.string()),
+            pa.field("source_interface_id", pa.string()),
+            pa.field("source_run_id", pa.string()),
+            pa.field("raw_loaded_at", TIMESTAMP_TYPE),
+            pa.field("canonical_loaded_at", TIMESTAMP_TYPE),
+        ]
+    ),
+)
+
+CANONICAL_LINEAGE_DIM_INDEX_SPEC: Final[TableSpec] = TableSpec(
+    namespace=CANONICAL_LINEAGE_NAMESPACE,
+    name="lineage_dim_index",
+    schema=pa.schema(
+        [
+            pa.field("index_id", pa.string()),
+            pa.field("source_provider", pa.string()),
+            pa.field("source_interface_id", pa.string()),
+            pa.field("source_run_id", pa.string()),
+            pa.field("raw_loaded_at", TIMESTAMP_TYPE),
+            pa.field("canonical_loaded_at", TIMESTAMP_TYPE),
+        ]
+    ),
+)
+
+CANONICAL_LINEAGE_FACT_PRICE_BAR_SPEC: Final[TableSpec] = TableSpec(
+    namespace=CANONICAL_LINEAGE_NAMESPACE,
+    name="lineage_fact_price_bar",
+    schema=pa.schema(
+        [
+            pa.field("security_id", pa.string()),
+            pa.field("trade_date", pa.date32()),
+            pa.field("freq", pa.string()),
+            pa.field("source_provider", pa.string()),
+            pa.field("source_interface_id", pa.string()),
+            pa.field("source_run_id", pa.string()),
+            pa.field("raw_loaded_at", TIMESTAMP_TYPE),
+            pa.field("canonical_loaded_at", TIMESTAMP_TYPE),
+        ]
+    ),
+    # NOTE: partition_by=["trade_date"] is deferred to M2.1 per M1-B §4.3
+    # (FakeCatalog/PyIceberg pyarrow_to_schema needs field-id metadata that
+    # the in-process test schemas do not carry; production wiring through a
+    # real catalog will add partition spec via CTAS or table-evolve later).
+)
+
+CANONICAL_LINEAGE_FACT_FINANCIAL_INDICATOR_SPEC: Final[TableSpec] = TableSpec(
+    namespace=CANONICAL_LINEAGE_NAMESPACE,
+    name="lineage_fact_financial_indicator",
+    schema=pa.schema(
+        [
+            pa.field("security_id", pa.string()),
+            pa.field("end_date", pa.date32()),
+            pa.field("report_type", pa.string()),
+            pa.field("source_provider", pa.string()),
+            pa.field("source_interface_id", pa.string()),
+            pa.field("source_run_id", pa.string()),
+            pa.field("raw_loaded_at", TIMESTAMP_TYPE),
+            pa.field("canonical_loaded_at", TIMESTAMP_TYPE),
+        ]
+    ),
+)
+
+CANONICAL_LINEAGE_FACT_MARKET_DAILY_FEATURE_SPEC: Final[TableSpec] = TableSpec(
+    namespace=CANONICAL_LINEAGE_NAMESPACE,
+    name="lineage_fact_market_daily_feature",
+    schema=pa.schema(
+        [
+            pa.field("security_id", pa.string()),
+            pa.field("trade_date", pa.date32()),
+            pa.field("source_provider", pa.string()),
+            pa.field("source_interface_id", pa.string()),
+            pa.field("source_run_id", pa.string()),
+            pa.field("raw_loaded_at", TIMESTAMP_TYPE),
+            pa.field("canonical_loaded_at", TIMESTAMP_TYPE),
+        ]
+    ),
+    # NOTE: partition_by=["trade_date"] is deferred to M2.1 per M1-B §4.3
+    # (FakeCatalog/PyIceberg pyarrow_to_schema needs field-id metadata that
+    # the in-process test schemas do not carry; production wiring through a
+    # real catalog will add partition spec via CTAS or table-evolve later).
+)
+
+CANONICAL_LINEAGE_FACT_INDEX_PRICE_BAR_SPEC: Final[TableSpec] = TableSpec(
+    namespace=CANONICAL_LINEAGE_NAMESPACE,
+    name="lineage_fact_index_price_bar",
+    schema=pa.schema(
+        [
+            pa.field("index_id", pa.string()),
+            pa.field("trade_date", pa.date32()),
+            pa.field("source_provider", pa.string()),
+            pa.field("source_interface_id", pa.string()),
+            pa.field("source_run_id", pa.string()),
+            pa.field("raw_loaded_at", TIMESTAMP_TYPE),
+            pa.field("canonical_loaded_at", TIMESTAMP_TYPE),
+        ]
+    ),
+    # NOTE: partition_by=["trade_date"] is deferred to M2.1 per M1-B §4.3
+    # (FakeCatalog/PyIceberg pyarrow_to_schema needs field-id metadata that
+    # the in-process test schemas do not carry; production wiring through a
+    # real catalog will add partition spec via CTAS or table-evolve later).
+)
+
+CANONICAL_LINEAGE_FACT_FORECAST_EVENT_SPEC: Final[TableSpec] = TableSpec(
+    namespace=CANONICAL_LINEAGE_NAMESPACE,
+    name="lineage_fact_forecast_event",
+    schema=pa.schema(
+        [
+            pa.field("security_id", pa.string()),
+            pa.field("announcement_date", pa.date32()),
+            pa.field("report_period", pa.date32()),
+            pa.field("update_flag", pa.string()),
+            pa.field("forecast_type", pa.string()),
+            pa.field("source_provider", pa.string()),
+            pa.field("source_interface_id", pa.string()),
+            pa.field("source_run_id", pa.string()),
+            pa.field("raw_loaded_at", TIMESTAMP_TYPE),
+            pa.field("canonical_loaded_at", TIMESTAMP_TYPE),
+        ]
+    ),
+)
+
+# Lineage sibling for canonical_v2.fact_event. Each row
+# carries its true `source_interface_id` (per-row, not a composite string).
+# See event-timeline-canonical-v2-derivation-rules-20260428.md.
+CANONICAL_LINEAGE_FACT_EVENT_SPEC: Final[TableSpec] = TableSpec(
+    namespace=CANONICAL_LINEAGE_NAMESPACE,
+    name="lineage_fact_event",
+    schema=pa.schema(
+        [
+            pa.field("event_type", pa.string()),
+            pa.field("entity_id", pa.string()),
+            pa.field("event_date", pa.date32()),
+            pa.field("event_key", pa.string()),
+            pa.field("source_provider", pa.string()),
+            pa.field("source_interface_id", pa.string()),
+            pa.field("source_run_id", pa.string()),
+            pa.field("raw_loaded_at", TIMESTAMP_TYPE),
+            pa.field("canonical_loaded_at", TIMESTAMP_TYPE),
+        ]
+    ),
+)
+
+CANONICAL_LINEAGE_TABLE_SPECS: Final[tuple[TableSpec, ...]] = (
+    CANONICAL_LINEAGE_DIM_SECURITY_SPEC,
+    CANONICAL_LINEAGE_STOCK_BASIC_SPEC,
+    CANONICAL_LINEAGE_DIM_INDEX_SPEC,
+    CANONICAL_LINEAGE_FACT_PRICE_BAR_SPEC,
+    CANONICAL_LINEAGE_FACT_FINANCIAL_INDICATOR_SPEC,
+    CANONICAL_LINEAGE_FACT_MARKET_DAILY_FEATURE_SPEC,
+    CANONICAL_LINEAGE_FACT_INDEX_PRICE_BAR_SPEC,
+    CANONICAL_LINEAGE_FACT_FORECAST_EVENT_SPEC,
+    CANONICAL_LINEAGE_FACT_EVENT_SPEC,
 )
 
 DEFAULT_TABLE_SPECS: Final[tuple[TableSpec, ...]] = (
-    CANONICAL_STOCK_BASIC_SPEC,
     CANONICAL_ENTITY_SPEC,
     ENTITY_ALIAS_SPEC,
-    *CANONICAL_MART_TABLE_SPECS,
+    *CANONICAL_V2_TABLE_SPECS,
+    *CANONICAL_LINEAGE_TABLE_SPECS,
 )
 
 
@@ -543,7 +779,28 @@ def _identity_partition_spec(schema: pa.Schema, partition_by: Sequence[str]) -> 
 
 __all__ = [
     "CANONICAL_ENTITY_SPEC",
-    "CANONICAL_STOCK_BASIC_SPEC",
+    "CANONICAL_LINEAGE_DIM_INDEX_SPEC",
+    "CANONICAL_LINEAGE_DIM_SECURITY_SPEC",
+    "CANONICAL_LINEAGE_FACT_EVENT_SPEC",
+    "CANONICAL_LINEAGE_FACT_FINANCIAL_INDICATOR_SPEC",
+    "CANONICAL_LINEAGE_FACT_FORECAST_EVENT_SPEC",
+    "CANONICAL_LINEAGE_FACT_INDEX_PRICE_BAR_SPEC",
+    "CANONICAL_LINEAGE_FACT_MARKET_DAILY_FEATURE_SPEC",
+    "CANONICAL_LINEAGE_FACT_PRICE_BAR_SPEC",
+    "CANONICAL_LINEAGE_NAMESPACE",
+    "CANONICAL_LINEAGE_STOCK_BASIC_SPEC",
+    "CANONICAL_LINEAGE_TABLE_SPECS",
+    "CANONICAL_V2_DIM_INDEX_SPEC",
+    "CANONICAL_V2_DIM_SECURITY_SPEC",
+    "CANONICAL_V2_FACT_EVENT_SPEC",
+    "CANONICAL_V2_FACT_FINANCIAL_INDICATOR_SPEC",
+    "CANONICAL_V2_FACT_FORECAST_EVENT_SPEC",
+    "CANONICAL_V2_FACT_INDEX_PRICE_BAR_SPEC",
+    "CANONICAL_V2_FACT_MARKET_DAILY_FEATURE_SPEC",
+    "CANONICAL_V2_FACT_PRICE_BAR_SPEC",
+    "CANONICAL_V2_NAMESPACE",
+    "CANONICAL_V2_STOCK_BASIC_SPEC",
+    "CANONICAL_V2_TABLE_SPECS",
     "DEFAULT_TABLE_SPECS",
     "ENTITY_ALIAS_SPEC",
     "TableSpec",

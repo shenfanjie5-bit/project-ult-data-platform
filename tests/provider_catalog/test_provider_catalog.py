@@ -158,7 +158,7 @@ def test_tushare_interface_registry_keeps_inventory_out_of_production_fetch() ->
     assert {entry.source_interface_id for entry in TUSHARE_INTERFACE_REGISTRY.values()} == set(
         TUSHARE_INTERFACE_REGISTRY
     )
-    assert len(production_entries) == len(TUSHARE_ASSETS) == 28
+    assert len(production_entries) == len(TUSHARE_ASSETS) == 36
     assert {entry.raw_dataset for entry in production_entries} == typed_raw_datasets
     assert all(entry.enabled for entry in production_entries)
     assert all(entry.fetch_support == "typed" for entry in production_entries)
@@ -184,6 +184,20 @@ def test_tushare_interface_registry_distinguishes_stock_and_futures_trade_cal() 
     assert futures_entry.promotion_status == "inventory_only"
     assert futures_entry.production_selectable is False
     assert futures_entry.fetch_support == "inventory_only"
+
+
+def test_block_trade_uses_full_row_shape_identity_contract() -> None:
+    """block_trade has no immutable execution id; identity is provider row shape."""
+
+    expected_key = ("ts_code", "trade_date", "buyer", "seller", "price", "vol", "amount")
+    mapping = mapping_for_source_interface_id("tushare", "block_trade")
+    assert mapping is not None
+    assert mapping.source_primary_key == expected_key
+
+    registry_entry = TUSHARE_INTERFACE_REGISTRY["block_trade"]
+    assert registry_entry.natural_key == expected_key
+    assert registry_entry.incremental_key == ("trade_date",)
+    assert registry_entry.raw_dataset == "block_trade"
 
 
 def test_catalog_summary_supports_dual_provider_readiness_evidence() -> None:

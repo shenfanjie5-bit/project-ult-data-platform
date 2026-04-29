@@ -33,8 +33,7 @@ from data_platform.ddl.runner import MigrationRunner
 from data_platform.raw import RawArtifact, RawWriter, check_raw_zone
 from data_platform.serving.canonical_writer import (
     WriteResult,
-    load_canonical_marts,
-    load_canonical_stock_basic,
+    load_canonical_v2_marts,
 )
 from data_platform.serving.catalog import DEFAULT_NAMESPACES, ensure_namespaces
 
@@ -45,7 +44,7 @@ DBT_SCRIPT = PROJECT_ROOT / "scripts" / "dbt.sh"
 DBT_EXECUTABLE_ENV = "DP_DBT_EXECUTABLE"
 DBT_BIN_ENV = "DBT_BIN"
 DATE_FORMAT = "%Y%m%d"
-DEFAULT_DBT_SELECTORS = ("staging", "intermediate", "marts")
+DEFAULT_DBT_SELECTORS = ("staging", "intermediate", "marts_v2", "marts_lineage")
 TRUTHY_VALUES = frozenset({"1", "true", "yes", "on"})
 DEFAULT_REFRESH_LOCK_STALE_AFTER = timedelta(hours=6)
 REFRESH_LOCK_STALE_SECONDS_ENV = "DP_DAILY_REFRESH_LOCK_STALE_SECONDS"
@@ -56,11 +55,14 @@ DATE_FIELD_NAMES = frozenset(
         "base_date",
         "cal_date",
         "delist_date",
+        "div_listdate",
         "end_date",
         "ex_date",
         "exp_date",
         "f_ann_date",
         "float_date",
+        "first_ann_date",
+        "imp_ann_date",
         "in_date",
         "list_date",
         "modify_date",
@@ -69,42 +71,99 @@ DATE_FIELD_NAMES = frozenset(
         "pre_date",
         "pretrade_date",
         "record_date",
+        # M1.13 expansion (precondition 9 closure) — release_date
+        # (pledge_detail) and surv_date (stk_surv) require YYYYMMDD
+        # mock values so the staging cast strptime succeeds.
+        "release_date",
         "setup_date",
         "start_date",
+        "surv_date",
         "trade_date",
     }
 )
 STRING_NUMERIC_FIELD_NAMES = frozenset(
     {
         "adj_factor",
+        "after_ratio",
+        "after_share",
         "amount",
+        "avg_price",
         "base_point",
+        "buy_amount",
+        "buy_elg_amount",
+        "buy_elg_vol",
+        "buy_lg_amount",
+        "buy_lg_vol",
+        "buy_md_amount",
+        "buy_md_vol",
+        "buy_sm_amount",
+        "buy_sm_vol",
         "cash_div",
         "change",
+        "change_ratio",
+        "change_vol",
         "circ_mv",
         "close",
+        "down_limit",
         "dv_ratio",
         "dv_ttm",
         "employees",
+        "fd_amount",
+        "float_mv",
         "float_share",
+        "free_float",
         "free_share",
+        "h_total_ratio",
         "high",
+        "high_limit",
         "holder_num",
+        "holding_amount",
+        "last_parent_net",
+        "limit_amount",
+        "limit_order",
+        "limit_up_suc_rate",
         "low",
+        "low_limit",
+        "net_amount",
+        "net_mf_amount",
+        "net_mf_vol",
+        "net_profit_max",
+        "net_profit_min",
         "open",
+        "p_change_max",
+        "p_change_min",
+        "p_total_ratio",
         "pb",
         "pct_chg",
         "pe",
         "pe_ttm",
+        "pledge_count",
+        "pledge_amount",
+        "pledge_ratio",
+        "pledged_amount",
         "pre_close",
+        "price",
         "ps",
         "ps_ttm",
         "reg_capital",
+        "rest_pledge",
+        "sell_amount",
+        "sell_elg_amount",
+        "sell_elg_vol",
+        "sell_lg_amount",
+        "sell_lg_vol",
+        "sell_md_amount",
+        "sell_md_vol",
+        "sell_sm_amount",
+        "sell_sm_vol",
         "stk_div",
         "total_mv",
         "total_share",
+        "turnover_ratio",
         "turnover_rate",
         "turnover_rate_f",
+        "unrest_pledge",
+        "up_limit",
         "vol",
         "volume_ratio",
         "weight",
@@ -516,25 +575,15 @@ def _run_canonical_step(
     write_results: list[WriteResult] = []
     skipped_writes: list[str] = []
 
-    if "stock_basic" in selected_datasets:
-        write_results.append(
-            load_canonical_stock_basic(
-                catalog,
-                Path(resources["duckdb_path"]),
-            )
-        )
-    else:
-        skipped_writes.append("canonical.stock_basic")
-
     if selected_datasets == all_datasets:
         write_results.extend(
-            load_canonical_marts(
+            load_canonical_v2_marts(
                 catalog,
                 Path(resources["duckdb_path"]),
             )
         )
     else:
-        skipped_writes.append("canonical.canonical_marts")
+        skipped_writes.append("canonical_v2.canonical_marts")
 
     return {
         "applied_migrations": migrations,
@@ -878,6 +927,8 @@ def _mock_value(dataset: str, field: pa.Field, partition_date: date) -> Any:
         return "000300.SH"
     if field.name == "con_code":
         return "000001.SZ"
+    if field.name == "exchange":
+        return "SSE"
     if field.name == "symbol":
         return "000001"
     if field.name == "list_status":

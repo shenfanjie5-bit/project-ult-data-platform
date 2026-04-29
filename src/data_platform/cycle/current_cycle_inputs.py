@@ -12,6 +12,7 @@ import pyarrow as pa  # type: ignore[import-untyped]
 from data_platform.cycle.models import _cycle_date_from_id
 from data_platform.serving import reader as canonical_reader
 from data_platform.serving.canonical_datasets import (
+    canonical_alias_column_for_dataset,
     canonical_table_for_dataset,
     canonical_table_identifier_for_dataset,
 )
@@ -83,10 +84,12 @@ def current_cycle_inputs(
                 snapshot_spec=snapshot_spec,
             )
         )
+        security_alias_column = canonical_alias_column_for_dataset(SECURITY_MASTER_DATASET)
+        price_alias_column = canonical_alias_column_for_dataset(PRICE_BAR_DATASET)
         security_rows = _records(
             _read_dataset(
                 SECURITY_MASTER_DATASET,
-                columns=["ts_code", "market", "industry"],
+                columns=[security_alias_column, "market", "industry"],
                 snapshot_spec=snapshot_spec,
             )
         )
@@ -94,7 +97,7 @@ def current_cycle_inputs(
             _read_dataset(
                 PRICE_BAR_DATASET,
                 columns=[
-                    "ts_code",
+                    price_alias_column,
                     "trade_date",
                     "freq",
                     "close",
@@ -115,8 +118,14 @@ def current_cycle_inputs(
         ) from exc
 
     resolver = _EntityResolver(canonical_entities, entity_aliases, cycle_id=cycle_id)
-    security_by_alias = _security_rows_by_alias(security_rows)
-    price_by_alias = _price_rows_by_alias(price_rows, trade_date=trade_date)
+    security_by_alias = _security_rows_by_alias(
+        security_rows, alias_column=security_alias_column
+    )
+    price_by_alias = _price_rows_by_alias(
+        price_rows,
+        trade_date=trade_date,
+        alias_column=price_alias_column,
+    )
 
     rows: list[CurrentCycleInputRow] = []
     missing_rows: list[dict[str, object]] = []
@@ -386,10 +395,12 @@ def _records(table: pa.Table) -> list[dict[str, object]]:
 
 def _security_rows_by_alias(
     rows: Sequence[Mapping[str, object]],
+    *,
+    alias_column: str = "ts_code",
 ) -> dict[str, Mapping[str, object]]:
     result: dict[str, Mapping[str, object]] = {}
     for row in rows:
-        alias = str(row.get("ts_code", "")).strip()
+        alias = str(row.get(alias_column, "")).strip()
         if alias:
             result[alias] = row
     return result
@@ -399,10 +410,11 @@ def _price_rows_by_alias(
     rows: Sequence[Mapping[str, object]],
     *,
     trade_date: date,
+    alias_column: str = "ts_code",
 ) -> dict[str, Mapping[str, object]]:
     result: dict[str, Mapping[str, object]] = {}
     for row in rows:
-        alias = str(row.get("ts_code", "")).strip()
+        alias = str(row.get(alias_column, "")).strip()
         if not alias:
             continue
         if _date_value(row.get("trade_date")) != trade_date:

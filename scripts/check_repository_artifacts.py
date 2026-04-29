@@ -37,8 +37,10 @@ REQUIRED_REPOSITORY_FILES: tuple[str, ...] = (
     "src/data_platform/dbt/models/staging/stg_stock_basic.sql",
     "src/data_platform/dbt/models/intermediate/_schema.yml",
     "src/data_platform/dbt/models/intermediate/int_price_bars_adjusted.sql",
-    "src/data_platform/dbt/models/marts/_schema.yml",
-    "src/data_platform/dbt/models/marts/mart_fact_price_bar.sql",
+    "src/data_platform/dbt/models/marts_v2/_schema.yml",
+    "src/data_platform/dbt/models/marts_v2/mart_fact_price_bar_v2.sql",
+    "src/data_platform/dbt/models/marts_lineage/_schema.yml",
+    "src/data_platform/dbt/models/marts_lineage/mart_lineage_fact_price_bar.sql",
     "src/data_platform/dbt/tests/assert_raw_manifest_fresh.sql",
     # Operator scripts and CI guard.
     "scripts/canonical_backfill.py",
