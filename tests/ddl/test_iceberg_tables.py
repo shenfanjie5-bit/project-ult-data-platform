@@ -85,7 +85,7 @@ def test_table_specs_reject_raw_namespace_and_queue_fields() -> None:
     with pytest.raises(ValueError, match="raw namespace"):
         TableSpec(namespace="raw", name="bad", schema=pa.schema([("id", pa.string())]))
 
-    with pytest.raises(ValueError, match="producer queue fields"):
+    with pytest.raises(ValueError, match="forbidden schema fields"):
         TableSpec(
             namespace="canonical",
             name="bad",
@@ -252,11 +252,11 @@ def test_ensure_tables_rejects_existing_table_schema_drift() -> None:
 def test_ensure_tables_accepts_real_pyiceberg_string_schema(tmp_path: Path) -> None:
     catalog = InMemoryCatalog("test", warehouse=str(tmp_path / "warehouse"))
 
-    tables = ensure_tables(catalog, [CANONICAL_STOCK_BASIC_SPEC])
+    tables = ensure_tables(catalog, [CANONICAL_ENTITY_SPEC])
 
     assert len(tables) == 1
-    assert catalog.load_table("canonical.stock_basic").schema().as_arrow().names == (
-        CANONICAL_STOCK_BASIC_SPEC.schema.names
+    assert catalog.load_table("canonical.canonical_entity").schema().as_arrow().names == (
+        CANONICAL_ENTITY_SPEC.schema.names
     )
 
 
@@ -288,4 +288,4 @@ def test_cli_ensure_uses_project_catalog_and_default_specs(
         (fake_catalog, tuple(DEFAULT_NAMESPACES)),
     ]
     assert table_calls == [(fake_catalog, DEFAULT_TABLE_SPECS)]
-    assert "canonical.stock_basic" in capsys.readouterr().out
+    assert "canonical.canonical_entity" in capsys.readouterr().out
