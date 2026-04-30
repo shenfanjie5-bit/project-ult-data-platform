@@ -51,10 +51,10 @@ CANONICAL_NAMESPACE: Final[str] = "canonical"
 CANONICAL_V2_NAMESPACE: Final[str] = "canonical_v2"
 CANONICAL_LINEAGE_NAMESPACE: Final[str] = "canonical_lineage"
 TIMESTAMP_TYPE: Final[pa.TimestampType] = pa.timestamp("us")
-# Graph promotion timestamps are explicitly UTC-tagged so PyArrow rejects
-# tz-naive datetimes at write time (M2.6 follow-up #1 review-fold P1-B).
-# Production fixtures + integration tests already pass ``tzinfo=UTC``; the
-# unit-test fixtures are updated correspondingly.
+# Graph promotion timestamps are explicitly UTC-tagged, and the
+# ``IcebergCanonicalGraphWriter`` validates tz-aware UTC datetimes before
+# Arrow construction (M2.6 follow-up #1 review-fold P1-B/r3). This comment
+# deliberately does not rely on PyArrow to reject tz-naive datetimes.
 #
 # This is intentionally local to the graph-promotion specs. ``TIMESTAMP_TYPE``
 # (tz-naive) remains in use by ``canonical_entity`` / ``entity_alias`` /
@@ -136,9 +136,10 @@ ENTITY_ALIAS_SPEC: Final[TableSpec] = TableSpec(
 # ``GraphNodeRecord`` / ``GraphEdgeRecord`` / ``GraphAssertionRecord``
 # Pydantic models (graph-engine ``models.py:56-112``). The
 # ``IcebergCanonicalGraphWriter`` (``cycle/graph_phase1_adapters.py``)
-# converts those records to PyArrow batches and appends to these three
-# tables. Properties / evidence dicts serialise to JSON strings to fit
-# the Iceberg/PyArrow schema (no native struct on top of arbitrary keys).
+# converts those records to PyArrow batches and performs cycle-scoped
+# overwrites on these three tables. Properties / evidence dicts serialise
+# to JSON strings to fit the Iceberg/PyArrow schema (no native struct on
+# top of arbitrary keys).
 #
 # All three tables carry ``cycle_id`` (the Phase 1 promotion's cycle)
 # for traceability + partition-friendly queries; this is **not** the

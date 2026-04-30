@@ -9,9 +9,9 @@ boundaries (per ``GraphPhase1Service.__init__`` constructor):
   Iceberg tables via DuckDB to resolve graph node ids to canonical entity ids
   and to existence-check declared anchors.
 * ``CanonicalWriter`` — persists the ``PromotionPlan`` produced by Phase 1
-  back into Layer A canonical storage. **This adapter is a stub for M2.3a-2;**
-  the actual persistence path for graph promotion records is not yet defined
-  in data-platform's canonical Iceberg schema (see M2.6 follow-up TODO).
+  back into Layer A canonical Iceberg storage via cycle-scoped overwrites of
+  ``canonical.graph_node`` / ``canonical.graph_edge`` /
+  ``canonical.graph_assertion``.
 
 Module ownership rationale (per CLAUDE.md):
 
@@ -271,8 +271,9 @@ class IcebergCanonicalGraphWriter:
     to the plan's ``cycle_id`` on **all three** ``canonical.graph_*``
     tables — even when a record slice is empty. An empty slice is
     materialised as a zero-row Arrow batch carrying the canonical
-    ``TableSpec.schema``; pyiceberg's ``overwrite(filter=...)`` then
-    deletes any prior rows for that ``cycle_id`` and commits a no-op
+    ``TableSpec.schema``; pyiceberg's
+    ``overwrite(..., overwrite_filter=EqualTo("cycle_id", cycle_id))``
+    then deletes any prior rows for that ``cycle_id`` and commits a no-op
     snapshot. This closes the codex#1 ghost-row gap: a retry whose
     plan legitimately produces empty edges/assertions (e.g. a cycle of
     isolated-node promotions) now clears the prior cycle's stale

@@ -1,8 +1,7 @@
 """Live Iceberg integration test for ``IcebergCanonicalGraphWriter``.
 
-Provisions an isolated PostgreSQL-backed Iceberg SQL catalog + a
-filesystem warehouse path under ``tmp_path`` (no compose-PG dependency
-since the SQL catalog can use SQLite for ephemeral testing). Registers
+Provisions an isolated SQLite-backed Iceberg SQL catalog + a filesystem
+warehouse path under ``tmp_path`` (no compose-PG dependency). Registers
 the three ``canonical.graph_*`` Iceberg tables, exercises the full
 ``IcebergCanonicalGraphWriter.write_canonical_records()`` chain against a
 real ``PromotionPlan``, then reads the rows back via DuckDB to verify the
@@ -298,6 +297,79 @@ def test_iceberg_writer_clears_prior_cycle_rows_when_retry_slice_is_empty(
             assert rows.column("cycle_id").to_pylist() == ["CYCLE_KEEP"], identifier
 
 
+def test_iceberg_writer_mixed_retry_clears_empty_slices_and_preserves_other_cycle(
+    tmp_path: Path,
+) -> None:
+    """A retry may legitimately produce nodes but no edges/assertions.
+
+    The writer must replace the node slice for that cycle, clear the now-empty
+    edge/assertion slices for that cycle, and preserve rows for other cycles.
+    """
+
+    pytest.importorskip("pyiceberg.catalog.sql")
+
+    from data_platform.cycle.graph_phase1_adapters import (
+        IcebergCanonicalGraphWriter,
+    )
+
+    first_cycle = _FakePromotionPlan(
+        cycle_id="CYCLE_MIXED",
+        selection_ref="cycle_candidate_selection:CYCLE_MIXED",
+        delta_ids=["d-1"],
+        node_records=[_node(node_id="live-node-old")],
+        edge_records=[_edge(edge_id="live-edge-old")],
+        assertion_records=[_assertion(assertion_id="live-assert-old")],
+        created_at=_now(),
+    )
+    retry_cycle = _FakePromotionPlan(
+        cycle_id="CYCLE_MIXED",
+        selection_ref="cycle_candidate_selection:CYCLE_MIXED",
+        delta_ids=["d-1"],
+        node_records=[_node(node_id="live-node-new")],
+        edge_records=[],
+        assertion_records=[],
+        created_at=_now(),
+    )
+    other_cycle = _FakePromotionPlan(
+        cycle_id="CYCLE_KEEP",
+        selection_ref="cycle_candidate_selection:CYCLE_KEEP",
+        delta_ids=["d-2"],
+        node_records=[_node(node_id="live-node-keep")],
+        edge_records=[_edge(edge_id="live-edge-keep")],
+        assertion_records=[_assertion(assertion_id="live-assert-keep")],
+        created_at=_now(),
+    )
+
+    with _live_iceberg(tmp_path) as catalog:
+        writer = IcebergCanonicalGraphWriter(catalog=catalog)
+        writer.write_canonical_records(first_cycle)
+        writer.write_canonical_records(other_cycle)
+        writer.write_canonical_records(retry_cycle)
+
+        node_rows = catalog.load_table("canonical.graph_node").scan().to_arrow()
+        assert sorted(node_rows.column("node_id").to_pylist()) == [
+            "live-node-keep",
+            "live-node-new",
+        ]
+        assert sorted(node_rows.column("cycle_id").to_pylist()) == [
+            "CYCLE_KEEP",
+            "CYCLE_MIXED",
+        ]
+
+        for identifier, id_column, expected_id in (
+            ("canonical.graph_edge", "edge_id", "live-edge-keep"),
+            (
+                "canonical.graph_assertion",
+                "assertion_id",
+                "live-assert-keep",
+            ),
+        ):
+            rows = catalog.load_table(identifier).scan().to_arrow()
+            assert rows.num_rows == 1, identifier
+            assert rows.column(id_column).to_pylist() == [expected_id], identifier
+            assert rows.column("cycle_id").to_pylist() == ["CYCLE_KEEP"], identifier
+
+
 def test_iceberg_writer_is_idempotent_across_two_runs_of_same_cycle(
     tmp_path: Path,
 ) -> None:
@@ -334,9 +406,9 @@ def test_iceberg_writer_is_idempotent_across_two_runs_of_same_cycle(
             ("canonical.graph_assertion", "assertion_id", "live-assert-1"),
         ):
             rows = catalog.load_table(identifier).scan().to_arrow()
-            # Each table holds exactly one row regardless of retry count;
-            # the cycle-scoped overwrite cleared the prior write before
-            # appending the new one.
+            # Each table holds exactly one replacement row regardless of
+            # retry count because the cycle-scoped overwrite clears the
+            # prior slice before writing the current one.
             assert rows.num_rows == 1, identifier
             assert rows.column(expected_id_col).to_pylist() == [
                 expected_id

@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from contextlib import contextmanager
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from typing import Any
 
 import pyarrow as pa  # type: ignore[import-untyped]
@@ -377,6 +377,33 @@ class _FakeCatalog:
         return self.tables[identifier]
 
 
+def test_fake_iceberg_table_overwrite_signature_is_strict() -> None:
+    table = _FakeIcebergTable("canonical.graph_node")
+    payload = object()
+    overwrite_filter = object()
+
+    with pytest.raises(TypeError):
+        table.overwrite(payload)
+    with pytest.raises(TypeError):
+        table.overwrite(
+            payload,
+            overwrite_filter=overwrite_filter,
+            unsupported_kwarg=True,  # type: ignore[call-arg]
+        )
+
+    assert table.overwritten == []
+
+    table.overwrite(
+        payload,
+        overwrite_filter=overwrite_filter,
+        snapshot_properties={"cycle_id": "CYCLE_20260430"},
+    )
+
+    assert table.overwritten == [
+        (payload, overwrite_filter, {"cycle_id": "CYCLE_20260430"})
+    ]
+
+
 def _now() -> datetime:
     # tz-aware to match the canonical.graph_* schema's
     # GRAPH_TIMESTAMP_TYPE = pa.timestamp("us", tz="UTC")
@@ -595,10 +622,17 @@ def test_iceberg_writer_overwrites_all_three_tables_even_for_empty_slices() -> N
     assert len(catalog.tables["canonical.graph_edge"].overwritten) == 1
     assert len(catalog.tables["canonical.graph_assertion"].overwritten) == 1
 
+    from data_platform.ddl.iceberg_tables import (
+        CANONICAL_GRAPH_ASSERTION_SPEC,
+        CANONICAL_GRAPH_EDGE_SPEC,
+        CANONICAL_GRAPH_NODE_SPEC,
+    )
+
     # The empty-slice overwrites MUST carry zero-row Arrow batches with
     # the canonical schema, not None / not 1-row dummies.
     node_arrow = _overwrite_arrow(catalog.tables["canonical.graph_node"])
     assert node_arrow.num_rows == 0
+    assert node_arrow.schema == CANONICAL_GRAPH_NODE_SPEC.schema
     assert node_arrow.column_names == [
         "node_id",
         "canonical_entity_id",
@@ -610,6 +644,7 @@ def test_iceberg_writer_overwrites_all_three_tables_even_for_empty_slices() -> N
     ]
     edge_arrow = _overwrite_arrow(catalog.tables["canonical.graph_edge"])
     assert edge_arrow.num_rows == 0
+    assert edge_arrow.schema == CANONICAL_GRAPH_EDGE_SPEC.schema
     assert edge_arrow.column_names == [
         "edge_id",
         "source_node_id",
@@ -625,6 +660,7 @@ def test_iceberg_writer_overwrites_all_three_tables_even_for_empty_slices() -> N
         catalog.tables["canonical.graph_assertion"]
     )
     assert assertion_arrow.num_rows == 0
+    assert assertion_arrow.schema == CANONICAL_GRAPH_ASSERTION_SPEC.schema
     assert assertion_arrow.column_names == [
         "assertion_id",
         "source_node_id",
@@ -672,41 +708,60 @@ def test_fail_closed_canonical_graph_writer_raises_runtime_error() -> None:
         writer.write_canonical_records(_plan())
 
 
-def test_iceberg_writer_rejects_tz_naive_created_at_on_node() -> None:
-    """codex review #7: writer must fail-fast on tz-naive datetimes
-    rather than letting PyArrow silently coerce against the
-    ``GRAPH_TIMESTAMP_TYPE`` (UTC-tagged) column."""
+@pytest.mark.parametrize(
+    ("record_kind", "field_name"),
+    [
+        ("node", "created_at"),
+        ("node", "updated_at"),
+        ("edge", "created_at"),
+        ("edge", "updated_at"),
+        ("assertion", "created_at"),
+    ],
+)
+@pytest.mark.parametrize(
+    ("invalid_value", "match"),
+    [
+        (datetime(2026, 4, 30, 12, 0, 0), "tz-aware UTC"),
+        (
+            datetime(
+                2026,
+                4,
+                30,
+                20,
+                0,
+                0,
+                tzinfo=timezone(timedelta(hours=8)),
+            ),
+            "must be in UTC",
+        ),
+        ("2026-04-30T12:00:00Z", "must be a datetime"),
+    ],
+)
+def test_iceberg_writer_rejects_invalid_graph_timestamps_before_catalog_lookup(
+    record_kind: str,
+    field_name: str,
+    invalid_value: Any,
+    match: str,
+) -> None:
+    """All persisted graph timestamps are writer-validated before catalog IO."""
 
     catalog = _FakeCatalog()
     writer = IcebergCanonicalGraphWriter(catalog=catalog)
+    plan = _plan()
 
-    naive_node = _node_record()
-    naive_node.created_at = datetime(2026, 4, 30, 12, 0, 0)  # tz-naive
+    if record_kind == "node":
+        setattr(plan.node_records[0], field_name, invalid_value)
+    elif record_kind == "edge":
+        setattr(plan.edge_records[0], field_name, invalid_value)
+    elif record_kind == "assertion":
+        setattr(plan.assertion_records[0], field_name, invalid_value)
+    else:  # pragma: no cover - protects future parameter edits.
+        raise AssertionError(record_kind)
 
-    with pytest.raises(ValueError, match="tz-aware UTC"):
-        writer.write_canonical_records(_plan(nodes=[naive_node]))
+    with pytest.raises(ValueError, match=match):
+        writer.write_canonical_records(plan)
 
-    # Validation runs before the catalog is touched, so no overwrite
-    # should have occurred.
-    assert catalog.tables == {}
-
-
-def test_iceberg_writer_rejects_non_utc_offset_on_edge() -> None:
-    """codex review #7: writer must reject datetimes whose offset is
-    not zero (e.g. ``+08:00``)."""
-
-    from datetime import timedelta, timezone as _tz
-
-    catalog = _FakeCatalog()
-    writer = IcebergCanonicalGraphWriter(catalog=catalog)
-
-    plus_eight = _tz(timedelta(hours=8))
-    skewed_edge = _edge_record()
-    skewed_edge.updated_at = datetime(2026, 4, 30, 20, 0, 0, tzinfo=plus_eight)
-
-    with pytest.raises(ValueError, match="must be in UTC"):
-        writer.write_canonical_records(_plan(edges=[skewed_edge]))
-
+    assert catalog.lookups == []
     assert catalog.tables == {}
 
 
@@ -747,6 +802,42 @@ def test_iceberg_writer_empty_slice_overwrite_carries_zero_row_arrow_with_cycle_
         assert isinstance(overwrite_filter, EqualTo), identifier
         assert overwrite_filter.term.name == "cycle_id", identifier
         assert overwrite_filter.literal.value == "CYCLE_GHOST_TEST", identifier
+
+
+def test_iceberg_writer_mixed_retry_clears_empty_slices_and_rewrites_non_empty_slice(
+) -> None:
+    from data_platform.ddl.iceberg_tables import (
+        CANONICAL_GRAPH_ASSERTION_SPEC,
+        CANONICAL_GRAPH_EDGE_SPEC,
+    )
+
+    catalog = _FakeCatalog()
+    writer = IcebergCanonicalGraphWriter(catalog=catalog)
+
+    writer.write_canonical_records(_plan(cycle_id="CYCLE_MIXED"))
+    writer.write_canonical_records(
+        _plan(
+            cycle_id="CYCLE_MIXED",
+            nodes=[_node_record(node_id="n-retry")],
+            edges=[],
+            assertions=[],
+        )
+    )
+
+    node_retry = _overwrite_arrow(catalog.tables["canonical.graph_node"], idx=1)
+    assert node_retry.num_rows == 1
+    assert node_retry.column("node_id").to_pylist() == ["n-retry"]
+    assert node_retry.column("cycle_id").to_pylist() == ["CYCLE_MIXED"]
+
+    edge_retry = _overwrite_arrow(catalog.tables["canonical.graph_edge"], idx=1)
+    assert edge_retry.num_rows == 0
+    assert edge_retry.schema == CANONICAL_GRAPH_EDGE_SPEC.schema
+
+    assertion_retry = _overwrite_arrow(
+        catalog.tables["canonical.graph_assertion"], idx=1
+    )
+    assert assertion_retry.num_rows == 0
+    assert assertion_retry.schema == CANONICAL_GRAPH_ASSERTION_SPEC.schema
 
 
 def test_iceberg_writer_partial_write_exception_propagates_after_first_table(
