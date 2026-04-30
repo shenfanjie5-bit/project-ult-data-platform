@@ -25,10 +25,9 @@ from typing import Any
 import pytest
 
 # Shared fake dataclasses live in tests/_graph_promotion_fakes.py so unit
-# + integration tests use the same definitions (M2.6 follow-up #1
-# review-fold P2-4 — eliminates the unit/integration timestamp drift the
-# review caught).
-from _graph_promotion_fakes import (  # type: ignore[import-not-found]
+# + integration tests use the same definitions without adding all test helpers
+# as top-level modules on pytest's pythonpath.
+from tests._graph_promotion_fakes import (
     FakeAssertionRecord as _FakeAssertionRecord,
     FakeEdgeRecord as _FakeEdgeRecord,
     FakeNodeRecord as _FakeNodeRecord,
@@ -238,11 +237,11 @@ def test_iceberg_writer_clears_prior_cycle_rows_when_retry_slice_is_empty(
     """codex review #1 live-Iceberg regression: a retry whose slice is
     empty for a record type MUST clear that cycle's prior rows for that
     record type, not leave them in place. Run 1 writes node + edge +
-    assertion for ``CYCLE_X``. Run 2 retries the same cycle with empty
-    edges/assertions (e.g. a re-derived plan that produced only
-    isolated-node promotions). After Run 2: graph_node still has the
-    Run 2 node, graph_edge + graph_assertion have ZERO rows for
-    CYCLE_X (no ghost rows from Run 1)."""
+    assertion for ``CYCLE_GHOST``. Run 2 writes another cycle so each
+    table has rows that must survive. Run 3 retries ``CYCLE_GHOST``
+    with empty node/edge/assertion slices. After Run 3: only the other
+    cycle remains in all three tables, proving the zero-row overwrite is
+    scoped to ``cycle_id``."""
 
     pytest.importorskip("pyiceberg.catalog.sql")
 
@@ -263,44 +262,40 @@ def test_iceberg_writer_clears_prior_cycle_rows_when_retry_slice_is_empty(
         cycle_id="CYCLE_GHOST",
         selection_ref="cycle_candidate_selection:CYCLE_GHOST",
         delta_ids=["d-1"],
-        node_records=[_node(node_id="live-node-1")],
+        node_records=[],  # cycle now produces zero nodes
         edge_records=[],  # cycle now produces zero edges
         assertion_records=[],  # cycle now produces zero assertions
+        created_at=_now(),
+    )
+    other_cycle_plan = _FakePromotionPlan(
+        cycle_id="CYCLE_KEEP",
+        selection_ref="cycle_candidate_selection:CYCLE_KEEP",
+        delta_ids=["d-2"],
+        node_records=[_node(node_id="live-node-keep")],
+        edge_records=[_edge(edge_id="live-edge-keep")],
+        assertion_records=[_assertion(assertion_id="live-assert-keep")],
         created_at=_now(),
     )
 
     with _live_iceberg(tmp_path) as catalog:
         writer = IcebergCanonicalGraphWriter(catalog=catalog)
         writer.write_canonical_records(full_plan)
+        writer.write_canonical_records(other_cycle_plan)
         writer.write_canonical_records(empty_slice_plan)
 
-        # graph_node still has the (re-written) row for this cycle.
-        node_rows = (
-            catalog.load_table("canonical.graph_node").scan().to_arrow()
-        )
-        assert node_rows.num_rows == 1
-        assert node_rows.column("node_id").to_pylist() == ["live-node-1"]
-
-        # graph_edge / graph_assertion: ZERO rows. The empty-slice
-        # overwrite cleared the prior cycle's rows.
-        edge_rows = (
-            catalog.load_table("canonical.graph_edge").scan().to_arrow()
-        )
-        assert edge_rows.num_rows == 0, (
-            "ghost rows from Run 1 still in graph_edge — "
-            "empty-slice cycle-scoped overwrite did not clear "
-            "(codex review #1 regression)"
-        )
-        assertion_rows = (
-            catalog.load_table("canonical.graph_assertion")
-            .scan()
-            .to_arrow()
-        )
-        assert assertion_rows.num_rows == 0, (
-            "ghost rows from Run 1 still in graph_assertion — "
-            "empty-slice cycle-scoped overwrite did not clear "
-            "(codex review #1 regression)"
-        )
+        for identifier, id_column, preserved_id in (
+            ("canonical.graph_node", "node_id", "live-node-keep"),
+            ("canonical.graph_edge", "edge_id", "live-edge-keep"),
+            (
+                "canonical.graph_assertion",
+                "assertion_id",
+                "live-assert-keep",
+            ),
+        ):
+            rows = catalog.load_table(identifier).scan().to_arrow()
+            assert rows.num_rows == 1, identifier
+            assert rows.column(id_column).to_pylist() == [preserved_id], identifier
+            assert rows.column("cycle_id").to_pylist() == ["CYCLE_KEEP"], identifier
 
 
 def test_iceberg_writer_is_idempotent_across_two_runs_of_same_cycle(

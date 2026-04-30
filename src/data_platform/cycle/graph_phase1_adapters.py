@@ -251,9 +251,10 @@ class IcebergCanonicalGraphWriter:
 
     Replaces the M2.3a-2 ``StubCanonicalGraphWriter`` (which raised
     ``NotImplementedError``). For each ``PromotionPlan`` produced by
-    ``GraphPhase1Service``, this writer appends the contained
-    ``GraphNodeRecord`` / ``GraphEdgeRecord`` / ``GraphAssertionRecord``
-    Pydantic models to the three canonical Iceberg tables defined at
+    ``GraphPhase1Service``, this writer performs a cycle-scoped overwrite
+    of the contained ``GraphNodeRecord`` / ``GraphEdgeRecord`` /
+    ``GraphAssertionRecord`` Pydantic models into the three canonical
+    Iceberg tables defined at
     ``data_platform.ddl.iceberg_tables.CANONICAL_GRAPH_PROMOTION_TABLE_SPECS``:
 
     * ``canonical.graph_node`` — per-promotion node identity rows

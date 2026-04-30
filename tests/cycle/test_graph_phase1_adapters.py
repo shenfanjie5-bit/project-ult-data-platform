@@ -19,9 +19,10 @@ from data_platform.cycle.graph_phase1_adapters import (
     _FailClosedCanonicalGraphWriter,
 )
 
-# Shared fake dataclasses live one level up so the integration tests can
-# import the same definitions (M2.6 follow-up #1 review-fold P2-4).
-from _graph_promotion_fakes import (  # type: ignore[import-not-found]
+# Shared fake dataclasses live under tests/ so the unit + integration tests
+# import the same definitions without adding all test helpers as top-level
+# modules on pytest's pythonpath (M2.6f1 graph-writer review fix).
+from tests._graph_promotion_fakes import (
     FakeAssertionRecord as _FakeAssertionRecord,
     FakeEdgeRecord as _FakeEdgeRecord,
     FakeNodeRecord as _FakeNodeRecord,
@@ -575,14 +576,13 @@ def test_iceberg_writer_overwrites_all_three_tables_even_for_empty_slices() -> N
     with a zero-row Arrow batch — so the prior cycle's rows for that
     same ``cycle_id`` are cleared (codex review #1). Skipping the
     overwrite on empty would leave ghost rows on retry when a cycle
-    legitimately produces zero edges or zero assertions
-    (e.g. a cycle of isolated-node promotions)."""
+    legitimately produces zero nodes, edges, or assertions."""
 
     catalog = _FakeCatalog()
     writer = IcebergCanonicalGraphWriter(catalog=catalog)
 
-    plan_with_only_nodes = _plan(edges=[], assertions=[])
-    writer.write_canonical_records(plan_with_only_nodes)
+    plan_with_all_slices_empty = _plan(nodes=[], edges=[], assertions=[])
+    writer.write_canonical_records(plan_with_all_slices_empty)
 
     # All three tables loaded + overwritten exactly once, regardless
     # of whether their slice was empty.
@@ -597,6 +597,17 @@ def test_iceberg_writer_overwrites_all_three_tables_even_for_empty_slices() -> N
 
     # The empty-slice overwrites MUST carry zero-row Arrow batches with
     # the canonical schema, not None / not 1-row dummies.
+    node_arrow = _overwrite_arrow(catalog.tables["canonical.graph_node"])
+    assert node_arrow.num_rows == 0
+    assert node_arrow.column_names == [
+        "node_id",
+        "canonical_entity_id",
+        "label",
+        "properties_json",
+        "cycle_id",
+        "created_at",
+        "updated_at",
+    ]
     edge_arrow = _overwrite_arrow(catalog.tables["canonical.graph_edge"])
     assert edge_arrow.num_rows == 0
     assert edge_arrow.column_names == [
@@ -710,22 +721,32 @@ def test_iceberg_writer_empty_slice_overwrite_carries_zero_row_arrow_with_cycle_
     catalog = _FakeCatalog()
     writer = IcebergCanonicalGraphWriter(catalog=catalog)
 
-    # Plan with empty edges + assertions slice (e.g. cycle of isolated
-    # nodes). Node slice non-empty so we have a contrast point.
+    # Plan with empty node + edge + assertion slices. Every table still
+    # needs a cycle-scoped overwrite so stale rows from a prior retry are
+    # cleared for that cycle only.
     writer.write_canonical_records(
-        _plan(cycle_id="CYCLE_GHOST_TEST", edges=[], assertions=[])
+        _plan(
+            cycle_id="CYCLE_GHOST_TEST",
+            nodes=[],
+            edges=[],
+            assertions=[],
+        )
     )
 
-    edge_table = catalog.tables["canonical.graph_edge"]
-    arrow, overwrite_filter, _props = edge_table.overwritten[0]
-    # Zero rows: the overwrite is a pure cycle_id-scoped delete on the
-    # graph_edge table (no INSERT half).
-    assert arrow.num_rows == 0
-    # Filter MUST still scope to this cycle_id so other cycles' rows
-    # are not affected.
-    assert isinstance(overwrite_filter, EqualTo)
-    assert overwrite_filter.term.name == "cycle_id"
-    assert overwrite_filter.literal.value == "CYCLE_GHOST_TEST"
+    for identifier in (
+        "canonical.graph_node",
+        "canonical.graph_edge",
+        "canonical.graph_assertion",
+    ):
+        arrow, overwrite_filter, _props = catalog.tables[identifier].overwritten[0]
+        # Zero rows: the overwrite is a pure cycle_id-scoped delete on the
+        # table (no INSERT half).
+        assert arrow.num_rows == 0, identifier
+        # Filter MUST still scope to this cycle_id so other cycles' rows
+        # are not affected.
+        assert isinstance(overwrite_filter, EqualTo), identifier
+        assert overwrite_filter.term.name == "cycle_id", identifier
+        assert overwrite_filter.literal.value == "CYCLE_GHOST_TEST", identifier
 
 
 def test_iceberg_writer_partial_write_exception_propagates_after_first_table(
