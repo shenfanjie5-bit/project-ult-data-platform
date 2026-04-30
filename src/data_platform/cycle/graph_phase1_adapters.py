@@ -333,17 +333,25 @@ class IcebergCanonicalGraphWriter:
         partial writes after a failure.
         """
 
-        catalog = self._resolve_catalog()
         cycle_id = plan.cycle_id
 
-        # Always materialise three Arrow batches — empty slices become
-        # zero-row tables so the cycle-scoped overwrite still clears
-        # prior rows for ``cycle_id`` (codex review #1).
+        # Build all three Arrow batches FIRST (which also runs UTC
+        # validation on every record's timestamps via
+        # ``_require_utc_datetime``). Empty slices become zero-row
+        # tables so the cycle-scoped overwrite still clears prior rows
+        # for ``cycle_id`` (codex review #1).
+        #
+        # Validation runs before ``_resolve_catalog()`` so a malformed
+        # plan does NOT open a live catalog connection on its way to
+        # failing — important in production where catalog resolution
+        # may touch the SQL backend (review-fold-2 polish).
         node_arrow = self._node_records_to_arrow(plan.node_records, cycle_id)
         edge_arrow = self._edge_records_to_arrow(plan.edge_records, cycle_id)
         assertion_arrow = self._assertion_records_to_arrow(
             plan.assertion_records, cycle_id
         )
+
+        catalog = self._resolve_catalog()
 
         self._overwrite_cycle_slice(
             catalog, "canonical.graph_node", node_arrow, cycle_id
@@ -378,7 +386,7 @@ class IcebergCanonicalGraphWriter:
         coerce against the tz-tagged ``GRAPH_TIMESTAMP_TYPE`` column.
         """
 
-        from datetime import datetime, timezone
+        from datetime import datetime
 
         if not isinstance(value, datetime):
             msg = (

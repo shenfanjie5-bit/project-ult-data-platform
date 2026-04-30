@@ -16,7 +16,6 @@ file-based driver).
 
 from __future__ import annotations
 
-import os
 from collections.abc import Iterator
 from contextlib import contextmanager
 from datetime import datetime, timezone
