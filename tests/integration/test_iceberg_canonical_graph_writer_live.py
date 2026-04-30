@@ -167,12 +167,11 @@ def test_iceberg_canonical_graph_writer_round_trip_against_live_catalog(
 def test_iceberg_writer_writes_distinct_cycles_without_overwriting_each_other(
     tmp_path: Path,
 ) -> None:
-    """Cycle A writes 1 node; cycle B writes 1 different node. After both
-    writes, the canonical.graph_node table contains 2 rows. Cycle B's
-    overwrite-filter is scoped to ``cycle_id == 'CYCLE_20260501'`` so
-    cycle A's row is preserved (M2.6 follow-up #1 review-fold P1-A:
-    cycle-scoped overwrite, not append, but writes for *different*
-    cycles still accumulate)."""
+    """Cycle A writes 1 node + 1 edge + 1 assertion; cycle B writes one
+    of each with different IDs. After both writes, all three tables
+    contain 2 rows — one per cycle (codex review #6: seed all three
+    record types so the cross-cycle preservation contract is verified
+    on every table, not just graph_node)."""
 
     pytest.importorskip("pyiceberg.catalog.sql")
 
@@ -185,8 +184,8 @@ def test_iceberg_writer_writes_distinct_cycles_without_overwriting_each_other(
         selection_ref="cycle_candidate_selection:CYCLE_20260430",
         delta_ids=["d-1"],
         node_records=[_node(node_id="live-node-A")],
-        edge_records=[],
-        assertion_records=[],
+        edge_records=[_edge(edge_id="live-edge-A")],
+        assertion_records=[_assertion(assertion_id="live-assert-A")],
         created_at=_now(),
     )
     cycle_b_plan = _FakePromotionPlan(
@@ -194,8 +193,8 @@ def test_iceberg_writer_writes_distinct_cycles_without_overwriting_each_other(
         selection_ref="cycle_candidate_selection:CYCLE_20260501",
         delta_ids=["d-2"],
         node_records=[_node(node_id="live-node-B")],
-        edge_records=[],
-        assertion_records=[],
+        edge_records=[_edge(edge_id="live-edge-B")],
+        assertion_records=[_assertion(assertion_id="live-assert-B")],
         created_at=_now(),
     )
 
@@ -204,15 +203,105 @@ def test_iceberg_writer_writes_distinct_cycles_without_overwriting_each_other(
         writer.write_canonical_records(cycle_a_plan)
         writer.write_canonical_records(cycle_b_plan)
 
+        for identifier, id_column, expected_ids in (
+            (
+                "canonical.graph_node",
+                "node_id",
+                ["live-node-A", "live-node-B"],
+            ),
+            (
+                "canonical.graph_edge",
+                "edge_id",
+                ["live-edge-A", "live-edge-B"],
+            ),
+            (
+                "canonical.graph_assertion",
+                "assertion_id",
+                ["live-assert-A", "live-assert-B"],
+            ),
+        ):
+            rows = catalog.load_table(identifier).scan().to_arrow()
+            # Two rows total per table — one per cycle.
+            assert rows.num_rows == 2, identifier
+            assert (
+                sorted(rows.column(id_column).to_pylist()) == expected_ids
+            ), identifier
+            cycle_ids = sorted(set(rows.column("cycle_id").to_pylist()))
+            assert cycle_ids == [
+                "CYCLE_20260430",
+                "CYCLE_20260501",
+            ], identifier
+
+
+def test_iceberg_writer_clears_prior_cycle_rows_when_retry_slice_is_empty(
+    tmp_path: Path,
+) -> None:
+    """codex review #1 live-Iceberg regression: a retry whose slice is
+    empty for a record type MUST clear that cycle's prior rows for that
+    record type, not leave them in place. Run 1 writes node + edge +
+    assertion for ``CYCLE_X``. Run 2 retries the same cycle with empty
+    edges/assertions (e.g. a re-derived plan that produced only
+    isolated-node promotions). After Run 2: graph_node still has the
+    Run 2 node, graph_edge + graph_assertion have ZERO rows for
+    CYCLE_X (no ghost rows from Run 1)."""
+
+    pytest.importorskip("pyiceberg.catalog.sql")
+
+    from data_platform.cycle.graph_phase1_adapters import (
+        IcebergCanonicalGraphWriter,
+    )
+
+    full_plan = _FakePromotionPlan(
+        cycle_id="CYCLE_GHOST",
+        selection_ref="cycle_candidate_selection:CYCLE_GHOST",
+        delta_ids=["d-1"],
+        node_records=[_node(node_id="live-node-1")],
+        edge_records=[_edge(edge_id="live-edge-1")],
+        assertion_records=[_assertion(assertion_id="live-assert-1")],
+        created_at=_now(),
+    )
+    empty_slice_plan = _FakePromotionPlan(
+        cycle_id="CYCLE_GHOST",
+        selection_ref="cycle_candidate_selection:CYCLE_GHOST",
+        delta_ids=["d-1"],
+        node_records=[_node(node_id="live-node-1")],
+        edge_records=[],  # cycle now produces zero edges
+        assertion_records=[],  # cycle now produces zero assertions
+        created_at=_now(),
+    )
+
+    with _live_iceberg(tmp_path) as catalog:
+        writer = IcebergCanonicalGraphWriter(catalog=catalog)
+        writer.write_canonical_records(full_plan)
+        writer.write_canonical_records(empty_slice_plan)
+
+        # graph_node still has the (re-written) row for this cycle.
         node_rows = (
             catalog.load_table("canonical.graph_node").scan().to_arrow()
         )
-        # Two rows total — one per cycle.
-        assert node_rows.num_rows == 2
-        node_ids = sorted(node_rows.column("node_id").to_pylist())
-        assert node_ids == ["live-node-A", "live-node-B"]
-        cycle_ids = sorted(set(node_rows.column("cycle_id").to_pylist()))
-        assert cycle_ids == ["CYCLE_20260430", "CYCLE_20260501"]
+        assert node_rows.num_rows == 1
+        assert node_rows.column("node_id").to_pylist() == ["live-node-1"]
+
+        # graph_edge / graph_assertion: ZERO rows. The empty-slice
+        # overwrite cleared the prior cycle's rows.
+        edge_rows = (
+            catalog.load_table("canonical.graph_edge").scan().to_arrow()
+        )
+        assert edge_rows.num_rows == 0, (
+            "ghost rows from Run 1 still in graph_edge — "
+            "empty-slice cycle-scoped overwrite did not clear "
+            "(codex review #1 regression)"
+        )
+        assertion_rows = (
+            catalog.load_table("canonical.graph_assertion")
+            .scan()
+            .to_arrow()
+        )
+        assert assertion_rows.num_rows == 0, (
+            "ghost rows from Run 1 still in graph_assertion — "
+            "empty-slice cycle-scoped overwrite did not clear "
+            "(codex review #1 regression)"
+        )
 
 
 def test_iceberg_writer_is_idempotent_across_two_runs_of_same_cycle(

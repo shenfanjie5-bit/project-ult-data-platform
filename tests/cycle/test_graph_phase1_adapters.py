@@ -326,13 +326,21 @@ class _FakeIcebergTable:
     ``append``) calls for tests. ``IcebergCanonicalGraphWriter`` issues
     cycle-scoped ``overwrite`` since M2.6 follow-up #1 review-fold P1-A;
     legacy ``append`` is retained on the fake so any test path that still
-    constructs an append-only fake still works."""
+    constructs an append-only fake still works.
+
+    The ``overwrite`` signature mirrors the real pyiceberg signature
+    (``overwrite_filter`` / ``snapshot_properties`` / ``case_sensitive`` /
+    ``branch``) explicitly rather than swallowing future kwargs via
+    ``**``. A typo or new pyiceberg kwarg surfaces as a TypeError rather
+    than a silent no-op (codex review #9)."""
 
     def __init__(self, identifier: str) -> None:
         self.identifier = identifier
         self.appended: list[Any] = []
-        # Each entry: (arrow_table, overwrite_filter)
-        self.overwritten: list[tuple[Any, Any]] = []
+        # Each entry: (arrow_table, overwrite_filter, snapshot_properties).
+        # snapshot_properties is recorded so a future writer evolution that
+        # adds traceability properties is visible to test assertions.
+        self.overwritten: list[tuple[Any, Any, dict[str, str] | None]] = []
 
     def append(self, table_arrow: Any) -> None:
         self.appended.append(table_arrow)
@@ -341,10 +349,17 @@ class _FakeIcebergTable:
         self,
         table_arrow: Any,
         *,
-        overwrite_filter: Any = None,
-        **_: Any,
+        overwrite_filter: Any,
+        snapshot_properties: dict[str, str] | None = None,
+        case_sensitive: bool = True,
+        branch: str | None = "main",
     ) -> None:
-        self.overwritten.append((table_arrow, overwrite_filter))
+        # Record the call. Any unsupported kwarg the writer might pass
+        # surfaces as TypeError (no ``**`` swallow).
+        del case_sensitive, branch
+        self.overwritten.append(
+            (table_arrow, overwrite_filter, snapshot_properties)
+        )
 
 
 class _FakeCatalog:
@@ -429,11 +444,12 @@ def _overwrite_arrow(
     table: _FakeIcebergTable, idx: int = 0
 ) -> Any:
     """Helper: pull the arrow payload out of a recorded ``overwrite`` call
-    on the fake table (the fake records ``(arrow, overwrite_filter)``
-    pairs since the writer issues cycle-scoped overwrites for re-run
-    idempotency)."""
+    on the fake table (the fake records
+    ``(arrow, overwrite_filter, snapshot_properties)`` triples since
+    the writer issues cycle-scoped overwrites for re-run idempotency
+    and the fake is strict about pyiceberg's full kwarg surface)."""
 
-    arrow, _filter = table.overwritten[idx]
+    arrow, _filter, _props = table.overwritten[idx]
     return arrow
 
 
@@ -475,7 +491,9 @@ def test_iceberg_writer_overwrite_filter_pins_cycle_id() -> None:
         "canonical.graph_edge",
         "canonical.graph_assertion",
     ):
-        _arrow, overwrite_filter = catalog.tables[identifier].overwritten[0]
+        (_arrow, overwrite_filter, _props) = (
+            catalog.tables[identifier].overwritten[0]
+        )
         # Pinned via class + value so a regression to ALWAYS_TRUE or a
         # different column is caught here.
         assert isinstance(overwrite_filter, EqualTo)
@@ -552,11 +570,13 @@ def test_iceberg_writer_assertion_arrow_schema_and_values() -> None:
     assert written.column("confidence").to_pylist() == [0.95]
 
 
-def test_iceberg_writer_skips_table_when_record_list_empty() -> None:
-    """Empty record lists must NOT load_table or overwrite (no empty
-    Iceberg snapshot for an empty plan slice; a missing slice means
-    'producer did not emit that record type for this cycle', not
-    'producer cleared all rows for this cycle')."""
+def test_iceberg_writer_overwrites_all_three_tables_even_for_empty_slices() -> None:
+    """Empty record slices MUST still issue a cycle-scoped overwrite —
+    with a zero-row Arrow batch — so the prior cycle's rows for that
+    same ``cycle_id`` are cleared (codex review #1). Skipping the
+    overwrite on empty would leave ghost rows on retry when a cycle
+    legitimately produces zero edges or zero assertions
+    (e.g. a cycle of isolated-node promotions)."""
 
     catalog = _FakeCatalog()
     writer = IcebergCanonicalGraphWriter(catalog=catalog)
@@ -564,9 +584,46 @@ def test_iceberg_writer_skips_table_when_record_list_empty() -> None:
     plan_with_only_nodes = _plan(edges=[], assertions=[])
     writer.write_canonical_records(plan_with_only_nodes)
 
-    assert catalog.lookups == ["canonical.graph_node"]
-    assert "canonical.graph_edge" not in catalog.tables
-    assert "canonical.graph_assertion" not in catalog.tables
+    # All three tables loaded + overwritten exactly once, regardless
+    # of whether their slice was empty.
+    assert catalog.lookups == [
+        "canonical.graph_node",
+        "canonical.graph_edge",
+        "canonical.graph_assertion",
+    ]
+    assert len(catalog.tables["canonical.graph_node"].overwritten) == 1
+    assert len(catalog.tables["canonical.graph_edge"].overwritten) == 1
+    assert len(catalog.tables["canonical.graph_assertion"].overwritten) == 1
+
+    # The empty-slice overwrites MUST carry zero-row Arrow batches with
+    # the canonical schema, not None / not 1-row dummies.
+    edge_arrow = _overwrite_arrow(catalog.tables["canonical.graph_edge"])
+    assert edge_arrow.num_rows == 0
+    assert edge_arrow.column_names == [
+        "edge_id",
+        "source_node_id",
+        "target_node_id",
+        "relationship_type",
+        "properties_json",
+        "weight",
+        "cycle_id",
+        "created_at",
+        "updated_at",
+    ]
+    assertion_arrow = _overwrite_arrow(
+        catalog.tables["canonical.graph_assertion"]
+    )
+    assert assertion_arrow.num_rows == 0
+    assert assertion_arrow.column_names == [
+        "assertion_id",
+        "source_node_id",
+        "target_node_id",
+        "assertion_type",
+        "evidence_json",
+        "confidence",
+        "cycle_id",
+        "created_at",
+    ]
 
 
 def test_iceberg_writer_handles_assertion_with_null_target_node_id() -> None:
@@ -604,6 +661,73 @@ def test_fail_closed_canonical_graph_writer_raises_runtime_error() -> None:
         writer.write_canonical_records(_plan())
 
 
+def test_iceberg_writer_rejects_tz_naive_created_at_on_node() -> None:
+    """codex review #7: writer must fail-fast on tz-naive datetimes
+    rather than letting PyArrow silently coerce against the
+    ``GRAPH_TIMESTAMP_TYPE`` (UTC-tagged) column."""
+
+    catalog = _FakeCatalog()
+    writer = IcebergCanonicalGraphWriter(catalog=catalog)
+
+    naive_node = _node_record()
+    naive_node.created_at = datetime(2026, 4, 30, 12, 0, 0)  # tz-naive
+
+    with pytest.raises(ValueError, match="tz-aware UTC"):
+        writer.write_canonical_records(_plan(nodes=[naive_node]))
+
+    # Validation runs before the catalog is touched, so no overwrite
+    # should have occurred.
+    assert catalog.tables == {}
+
+
+def test_iceberg_writer_rejects_non_utc_offset_on_edge() -> None:
+    """codex review #7: writer must reject datetimes whose offset is
+    not zero (e.g. ``+08:00``)."""
+
+    from datetime import timedelta, timezone as _tz
+
+    catalog = _FakeCatalog()
+    writer = IcebergCanonicalGraphWriter(catalog=catalog)
+
+    plus_eight = _tz(timedelta(hours=8))
+    skewed_edge = _edge_record()
+    skewed_edge.updated_at = datetime(2026, 4, 30, 20, 0, 0, tzinfo=plus_eight)
+
+    with pytest.raises(ValueError, match="must be in UTC"):
+        writer.write_canonical_records(_plan(edges=[skewed_edge]))
+
+    assert catalog.tables == {}
+
+
+def test_iceberg_writer_empty_slice_overwrite_carries_zero_row_arrow_with_cycle_filter(
+) -> None:
+    """codex review #1: an empty slice MUST issue a cycle-scoped
+    overwrite with a zero-row Arrow batch — proving prior rows for
+    the same ``cycle_id`` are cleared on retry."""
+
+    from pyiceberg.expressions import EqualTo
+
+    catalog = _FakeCatalog()
+    writer = IcebergCanonicalGraphWriter(catalog=catalog)
+
+    # Plan with empty edges + assertions slice (e.g. cycle of isolated
+    # nodes). Node slice non-empty so we have a contrast point.
+    writer.write_canonical_records(
+        _plan(cycle_id="CYCLE_GHOST_TEST", edges=[], assertions=[])
+    )
+
+    edge_table = catalog.tables["canonical.graph_edge"]
+    arrow, overwrite_filter, _props = edge_table.overwritten[0]
+    # Zero rows: the overwrite is a pure cycle_id-scoped delete on the
+    # graph_edge table (no INSERT half).
+    assert arrow.num_rows == 0
+    # Filter MUST still scope to this cycle_id so other cycles' rows
+    # are not affected.
+    assert isinstance(overwrite_filter, EqualTo)
+    assert overwrite_filter.term.name == "cycle_id"
+    assert overwrite_filter.literal.value == "CYCLE_GHOST_TEST"
+
+
 def test_iceberg_writer_partial_write_exception_propagates_after_first_table(
 ) -> None:
     """Atomicity contract (M2.6 follow-up #1 review-fold P2-3): if the
@@ -614,7 +738,15 @@ def test_iceberg_writer_partial_write_exception_propagates_after_first_table(
     cleanly)."""
 
     class _FailOnEdgeIcebergTable(_FakeIcebergTable):
-        def overwrite(self, table_arrow: Any, **kwargs: Any) -> None:
+        def overwrite(
+            self,
+            table_arrow: Any,
+            *,
+            overwrite_filter: Any,
+            snapshot_properties: dict[str, str] | None = None,
+            case_sensitive: bool = True,
+            branch: str | None = "main",
+        ) -> None:
             raise RuntimeError("simulated catalog failure on graph_edge")
 
     class _PartialFailureCatalog:
@@ -651,5 +783,7 @@ def test_iceberg_writer_partial_write_exception_propagates_after_first_table(
     assert len(catalog.tables["canonical.graph_node"].overwritten) == 1
 
     # graph_assertion overwrite must NOT have been attempted (control
-    # flow halted on the graph_edge exception).
+    # flow halted on the graph_edge exception). The catalog never
+    # ``load_table``-ed the assertion table because the writer issues
+    # the three overwrites strictly in sequence.
     assert "canonical.graph_assertion" not in catalog.tables

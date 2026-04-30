@@ -265,14 +265,18 @@ class IcebergCanonicalGraphWriter:
     arbitrary-key struct type). Each record carries the ``cycle_id`` of
     the promotion that produced it for traceability.
 
-    **Re-run idempotency (M2.6 follow-up #1 review-fold P1-A):** each write
-    issues an Iceberg row-filter overwrite scoped to the plan's ``cycle_id``
-    rather than a blind append. A retried Phase 1 run for the same
-    ``cycle_id`` first deletes the rows with that ``cycle_id`` and then
-    writes the new rows, so duplicate node/edge/assertion rows cannot
-    accumulate across retries. Rows for *other* ``cycle_id`` values are
-    untouched (verified by ``test_iceberg_writer_appends_across_two_cycles``
-    + ``test_iceberg_writer_is_idempotent_across_two_runs_of_same_cycle``).
+    **Re-run idempotency (M2.6 follow-up #1 review-fold P1-A + codex
+    review #1):** each write issues an Iceberg row-filter overwrite scoped
+    to the plan's ``cycle_id`` on **all three** ``canonical.graph_*``
+    tables — even when a record slice is empty. An empty slice is
+    materialised as a zero-row Arrow batch carrying the canonical
+    ``TableSpec.schema``; pyiceberg's ``overwrite(filter=...)`` then
+    deletes any prior rows for that ``cycle_id`` and commits a no-op
+    snapshot. This closes the codex#1 ghost-row gap: a retry whose
+    plan legitimately produces empty edges/assertions (e.g. a cycle of
+    isolated-node promotions) now clears the prior cycle's stale
+    edges/assertions instead of leaving them in place. Rows for *other*
+    ``cycle_id`` values are untouched.
 
     **Atomicity:** the three table overwrites happen sequentially. A
     failure on the second table leaves the first table's overwrite
@@ -280,6 +284,13 @@ class IcebergCanonicalGraphWriter:
     cycle-scoped overwrite means a second run produces the correct final
     state regardless of how far the first run got. Iceberg snapshots at
     the table level let operators inspect partial writes via the catalog.
+
+    **Timestamp contract (codex review #7):** ``created_at`` /
+    ``updated_at`` on each record MUST be a tz-aware datetime with a
+    UTC offset. The writer validates each value before constructing
+    the Arrow batch and raises ``ValueError`` on a tz-naive datetime
+    or a non-UTC offset, rather than letting PyArrow silently coerce
+    against the tz-tagged ``GRAPH_TIMESTAMP_TYPE`` column.
     """
 
     def __init__(self, *, catalog: Any | None = None) -> None:
@@ -301,46 +312,48 @@ class IcebergCanonicalGraphWriter:
         """Cycle-scoped overwrite of the three canonical.graph_* tables.
 
         ``plan`` is a ``graph_engine.models.PromotionPlan``. For each
-        table, the writer issues
+        of the three tables (``graph_node``, ``graph_edge``,
+        ``graph_assertion``) the writer issues
         ``target.overwrite(arrow, overwrite_filter=EqualTo("cycle_id",
         plan.cycle_id))`` — atomically replacing the rows belonging to
         this ``cycle_id`` with the plan's records. This makes Phase 1
-        retries idempotent at the table level (P1-A review-fold).
+        retries idempotent at the table level.
+
+        **All three tables are overwritten on every call**, even when a
+        slice is empty (codex review #1). An empty slice is materialised
+        as a zero-row Arrow batch carrying the canonical
+        ``CANONICAL_GRAPH_*_SPEC.schema``. The cycle-scoped delete still
+        runs and removes any prior rows for ``cycle_id`` from that
+        table; this closes the ghost-row gap that the prior "skip on
+        empty slice" semantics opened (a retry with a smaller plan
+        would have left the previous run's rows for that same cycle).
 
         Order (node → edge → assertion) preserves referential intent in
         the Iceberg snapshot history if a downstream reader inspects
         partial writes after a failure.
-
-        Empty record slices skip the overwrite entirely; if Phase 1 ever
-        produces a plan with zero edges for a cycle, leftover edges from
-        a prior run for that same cycle will NOT be cleared. This is
-        deliberate: an empty slice means "the producer did not run", not
-        "the producer ran and produced nothing". Callers that need to
-        clear a cycle's slice explicitly should pass an empty arrow
-        table to ``target.overwrite`` directly.
         """
 
         catalog = self._resolve_catalog()
         cycle_id = plan.cycle_id
 
+        # Always materialise three Arrow batches — empty slices become
+        # zero-row tables so the cycle-scoped overwrite still clears
+        # prior rows for ``cycle_id`` (codex review #1).
         node_arrow = self._node_records_to_arrow(plan.node_records, cycle_id)
         edge_arrow = self._edge_records_to_arrow(plan.edge_records, cycle_id)
         assertion_arrow = self._assertion_records_to_arrow(
             plan.assertion_records, cycle_id
         )
 
-        if node_arrow is not None:
-            self._overwrite_cycle_slice(
-                catalog, "canonical.graph_node", node_arrow, cycle_id
-            )
-        if edge_arrow is not None:
-            self._overwrite_cycle_slice(
-                catalog, "canonical.graph_edge", edge_arrow, cycle_id
-            )
-        if assertion_arrow is not None:
-            self._overwrite_cycle_slice(
-                catalog, "canonical.graph_assertion", assertion_arrow, cycle_id
-            )
+        self._overwrite_cycle_slice(
+            catalog, "canonical.graph_node", node_arrow, cycle_id
+        )
+        self._overwrite_cycle_slice(
+            catalog, "canonical.graph_edge", edge_arrow, cycle_id
+        )
+        self._overwrite_cycle_slice(
+            catalog, "canonical.graph_assertion", assertion_arrow, cycle_id
+        )
 
     @staticmethod
     def _overwrite_cycle_slice(
@@ -357,9 +370,41 @@ class IcebergCanonicalGraphWriter:
         )
 
     @staticmethod
+    def _require_utc_datetime(value: Any, *, field: str, record_idx: int) -> Any:
+        """Validate a datetime value is tz-aware UTC (codex review #7).
+
+        Raises ``ValueError`` for tz-naive datetimes or non-UTC offsets so
+        the writer fails closed rather than letting PyArrow silently
+        coerce against the tz-tagged ``GRAPH_TIMESTAMP_TYPE`` column.
+        """
+
+        from datetime import datetime, timezone
+
+        if not isinstance(value, datetime):
+            msg = (
+                f"canonical graph record[{record_idx}].{field} must be a "
+                f"datetime; got {type(value).__name__}"
+            )
+            raise ValueError(msg)
+        if value.tzinfo is None:
+            msg = (
+                f"canonical graph record[{record_idx}].{field} must be "
+                f"tz-aware UTC (got tz-naive datetime); the canonical "
+                f"graph schema requires explicit UTC timestamps"
+            )
+            raise ValueError(msg)
+        offset = value.utcoffset()
+        if offset is None or offset.total_seconds() != 0:
+            msg = (
+                f"canonical graph record[{record_idx}].{field} must be in "
+                f"UTC (got offset {offset!r}); convert to UTC before "
+                f"writing"
+            )
+            raise ValueError(msg)
+        return value
+
+    @staticmethod
     def _node_records_to_arrow(records: list[Any], cycle_id: str) -> Any:
-        if not records:
-            return None
         import json
 
         import pyarrow as pa
@@ -369,6 +414,20 @@ class IcebergCanonicalGraphWriter:
         # the writer no longer needs a parallel update.
         from data_platform.ddl.iceberg_tables import CANONICAL_GRAPH_NODE_SPEC
 
+        # Validate tz-aware UTC for every datetime up-front so a partial
+        # write does not commit malformed rows (codex review #7).
+        for idx, record in enumerate(records):
+            IcebergCanonicalGraphWriter._require_utc_datetime(
+                record.created_at, field="created_at", record_idx=idx
+            )
+            IcebergCanonicalGraphWriter._require_utc_datetime(
+                record.updated_at, field="updated_at", record_idx=idx
+            )
+
+        # NOTE: an empty ``records`` list still produces a zero-row Arrow
+        # batch with the canonical schema so ``write_canonical_records``
+        # can issue a cycle-scoped overwrite that clears prior rows
+        # (codex review #1).
         return pa.table(
             {
                 "node_id": [r.node_id for r in records],
@@ -387,13 +446,19 @@ class IcebergCanonicalGraphWriter:
 
     @staticmethod
     def _edge_records_to_arrow(records: list[Any], cycle_id: str) -> Any:
-        if not records:
-            return None
         import json
 
         import pyarrow as pa
 
         from data_platform.ddl.iceberg_tables import CANONICAL_GRAPH_EDGE_SPEC
+
+        for idx, record in enumerate(records):
+            IcebergCanonicalGraphWriter._require_utc_datetime(
+                record.created_at, field="created_at", record_idx=idx
+            )
+            IcebergCanonicalGraphWriter._require_utc_datetime(
+                record.updated_at, field="updated_at", record_idx=idx
+            )
 
         return pa.table(
             {
@@ -415,8 +480,6 @@ class IcebergCanonicalGraphWriter:
 
     @staticmethod
     def _assertion_records_to_arrow(records: list[Any], cycle_id: str) -> Any:
-        if not records:
-            return None
         import json
 
         import pyarrow as pa
@@ -427,6 +490,11 @@ class IcebergCanonicalGraphWriter:
         from data_platform.ddl.iceberg_tables import (
             CANONICAL_GRAPH_ASSERTION_SPEC,
         )
+
+        for idx, record in enumerate(records):
+            IcebergCanonicalGraphWriter._require_utc_datetime(
+                record.created_at, field="created_at", record_idx=idx
+            )
 
         return pa.table(
             {
