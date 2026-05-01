@@ -1,5 +1,7 @@
 {{ config(severity="error") }}
 -- depends_on: {{ ref('stg_stock_basic') }}
+{% set data_storage_root_path = env_var("DP_DATA_STORAGE_ROOT_PATH", "./data_platform/data").rstrip("/") %}
+{% set raw_zone_path = env_var("DP_RAW_ZONE_PATH", data_storage_root_path ~ "/raw").rstrip("/") %}
 
 with raw_manifest_files as (
     select
@@ -9,7 +11,7 @@ with raw_manifest_files as (
         artifacts,
         filename as manifest_filename
     from read_json_auto(
-        '{{ env_var("DP_RAW_ZONE_PATH", "./data_platform/raw").rstrip("/") }}/tushare/*/**/_manifest.json',
+        '{{ raw_zone_path }}/tushare/*/**/_manifest.json',
         hive_partitioning=1,
         filename=1
     )
@@ -35,7 +37,7 @@ raw_artifacts as (
 raw_parquet_files as (
     select file as artifact_file
     from glob(
-        '{{ env_var("DP_RAW_ZONE_PATH", "./data_platform/raw").rstrip("/") }}/tushare/*/**/*.parquet'
+        '{{ raw_zone_path }}/tushare/*/**/*.parquet'
     )
 ),
 
@@ -59,7 +61,7 @@ validated as (
     left join raw_parquet_files
         on raw_parquet_files.artifact_file = raw_artifacts.artifact_path
         or raw_parquet_files.artifact_file = (
-            '{{ env_var("DP_RAW_ZONE_PATH", "./data_platform/raw").rstrip("/") }}/'
+            '{{ raw_zone_path }}/'
             || raw_artifacts.artifact_path
         )
 )

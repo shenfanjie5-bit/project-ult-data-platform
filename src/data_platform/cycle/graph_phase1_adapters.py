@@ -47,6 +47,7 @@ if TYPE_CHECKING:
 
 
 _EX3_PAYLOAD_TYPE = "Ex-3"
+_QUEUE_ENVELOPE_FIELDS = frozenset({"payload_type", "submitted_by"})
 
 # Identifiers we interpolate into SQL via f-strings must be validated as
 # safe identifiers (matching ``data_platform.serving.reader._IDENTIFIER_PATTERN``)
@@ -143,6 +144,7 @@ class PostgresCandidateDeltaReader:
             if isinstance(payload, str):
                 import json
                 payload = json.loads(payload)
+            payload = _candidate_graph_delta_payload(payload)
             deltas.append(CandidateGraphDelta.model_validate(payload))
         return deltas
 
@@ -151,6 +153,25 @@ class PostgresCandidateDeltaReader:
         """Construct from ``DP_PG_DSN`` (validated lazily on first read)."""
 
         return cls()
+
+
+def _candidate_graph_delta_payload(payload: Any) -> Any:
+    """Strip the queue envelope fields before contract validation.
+
+    ``submit_candidate()`` stores the producer envelope in ``candidate_queue``:
+    ``payload_type`` and ``submitted_by`` are required at the queue boundary,
+    but ``contracts.schemas.CandidateGraphDelta`` intentionally forbids those
+    Layer-B envelope fields. Other extra keys still reach Pydantic and fail
+    closed, so this only bridges the queue envelope to the Ex-3 contract.
+    """
+
+    if not isinstance(payload, dict):
+        return payload
+    return {
+        key: value
+        for key, value in payload.items()
+        if key not in _QUEUE_ENVELOPE_FIELDS
+    }
 
 
 class IcebergEntityAnchorReader:

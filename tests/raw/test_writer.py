@@ -340,6 +340,23 @@ def test_orphaned_artifact_without_manifest_allows_retry(
     assert [item.run_id for item in artifacts] == [run_id]
 
 
+def test_raw_writer_derives_raw_zone_from_data_storage_root(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    data_root = tmp_path / "downloaded-data"
+    monkeypatch.delenv("DP_RAW_ZONE_PATH", raising=False)
+    monkeypatch.setenv("DP_DATA_STORAGE_ROOT_PATH", str(data_root))
+    monkeypatch.setenv(
+        "DP_ICEBERG_WAREHOUSE_PATH",
+        str(tmp_path / "iceberg" / "warehouse"),
+    )
+
+    writer = RawWriter()
+
+    assert writer.raw_zone_path == data_root / "raw"
+
+
 def test_raw_zone_rejects_iceberg_warehouse_boundary(tmp_path: Path) -> None:
     warehouse_path = tmp_path / "iceberg" / "warehouse"
 

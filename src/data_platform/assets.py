@@ -164,7 +164,9 @@ def build_resources(settings: Settings | None = None) -> dict[str, Any]:
         "iceberg_catalog": load_catalog(settings=resolved_settings),
         "duckdb_path": resolved_settings.duckdb_path,
         "dbt_project_dir": DBT_PROJECT_DIR,
+        "data_storage_root_path": resolved_settings.data_storage_root_path,
         "raw_zone_path": resolved_settings.raw_zone_path,
+        "processed_data_path": resolved_settings.processed_data_path,
         "iceberg_warehouse_path": resolved_settings.iceberg_warehouse_path,
     }
 

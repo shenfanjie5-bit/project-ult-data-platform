@@ -313,6 +313,10 @@ def _default_raw_zone_path(raw_zone_path: str | Path | None) -> Path:
     if env_path:
         return Path(env_path).expanduser()
 
+    data_storage_root = os.environ.get("DP_DATA_STORAGE_ROOT_PATH")
+    if data_storage_root:
+        return Path(data_storage_root).expanduser() / "raw"
+
     from data_platform.config import get_settings
 
     return get_settings().raw_zone_path.expanduser()

@@ -401,7 +401,7 @@ def _load_settings() -> Settings:
 
 
 def _prepare_runtime_paths(settings: Settings) -> None:
-    settings.raw_zone_path.expanduser().mkdir(parents=True, exist_ok=True)
+    settings.ensure_data_storage_directories()
     settings.iceberg_warehouse_path.expanduser().mkdir(parents=True, exist_ok=True)
     settings.duckdb_path.expanduser().parent.mkdir(parents=True, exist_ok=True)
 
@@ -492,7 +492,9 @@ def _run_dbt_command(args: Sequence[str], settings: Settings) -> dict[str, Any]:
 
     env.update(
         {
+            "DP_DATA_STORAGE_ROOT_PATH": str(settings.data_storage_root_path),
             "DP_RAW_ZONE_PATH": str(settings.raw_zone_path),
+            "DP_PROCESSED_DATA_PATH": str(settings.processed_data_path),
             "DP_DUCKDB_PATH": str(settings.duckdb_path),
             DBT_EXECUTABLE_ENV: dbt_executable,
             "DP_ICEBERG_WAREHOUSE_PATH": str(settings.iceberg_warehouse_path),

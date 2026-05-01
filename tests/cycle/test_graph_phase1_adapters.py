@@ -107,6 +107,30 @@ def test_candidate_delta_reader_returns_typed_deltas() -> None:
     assert params == {"cycle_id": "CYCLE_20260429", "payload_type": "Ex-3"}
 
 
+def test_candidate_delta_reader_strips_queue_envelope_fields() -> None:
+    """The PG queue stores submit_candidate() envelopes.
+
+    ``payload_type`` / ``submitted_by`` are required by Layer B, but the
+    contracts-owned Ex-3 payload forbids them. The reader must strip only
+    those envelope fields before validating ``CandidateGraphDelta``.
+    """
+
+    payload = {
+        **_ex3_payload(delta_id="delta-envelope"),
+        "payload_type": "Ex-3",
+        "submitted_by": "test-subsystem",
+    }
+    reader = PostgresCandidateDeltaReader(engine=_FakeEngine([{"payload": payload}]))
+
+    deltas = reader.read_candidate_graph_deltas(
+        cycle_id="CYCLE_20260429",
+        selection_ref="cycle_candidate_selection:CYCLE_20260429",
+    )
+
+    assert len(deltas) == 1
+    assert deltas[0].delta_id == "delta-envelope"
+
+
 def test_candidate_delta_reader_sql_includes_validation_status_and_order_by() -> None:
     """Pin the WHERE / ORDER BY clauses so a regression that drops the
     validation_status filter or the ingest_seq ordering is caught here

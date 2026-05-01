@@ -195,6 +195,8 @@ def test_build_resources_returns_runtime_objects_from_settings(
     assert captured_settings == [settings]
     assert resources["duckdb_path"] == settings.duckdb_path
     assert resources["dbt_project_dir"] == assets_module.DBT_PROJECT_DIR
+    assert resources["data_storage_root_path"] == settings.data_storage_root_path
+    assert resources["processed_data_path"] == settings.processed_data_path
 
 
 def test_load_catalog_uses_injected_settings_for_uri_and_warehouse(
