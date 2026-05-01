@@ -39,12 +39,12 @@ contracts-schemas = [
     "project-ult-contracts @ git+https://github.com/shenfanjie5-bit/project-ult-contracts.git@v0.1.3",
 ]
 # Shared regression fixtures bundled with project-ult-audit-eval.
-# Pinned to v0.2.4 (project-wide canonical_entity_id format
-# reconciliation: every shared case now uses the runtime-aligned dot
-# form ENT_STOCK_<symbol>.<exchange>; real sha256 fixture hashes
-# inherited from v0.2.1+; iron rule #6).
+# Pinned to v0.2.5 (carries forward v0.2.4 dot-form canonical_entity_id
+# reconciliation and v0.2.1+ real sha256 fixture hashes; bumped 2026-05-01
+# stage 1 consistency lane to align with audit-eval producer release;
+# iron rule #6).
 shared-fixtures = [
-    "project-ult-audit-eval @ git+https://github.com/shenfanjie5-bit/project-ult-audit-eval.git@v0.2.4",
+    "project-ult-audit-eval @ git+https://github.com/shenfanjie5-bit/project-ult-audit-eval.git@v0.2.5",
 ]
 
 [tool.setuptools]

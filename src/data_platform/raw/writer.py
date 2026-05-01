@@ -417,6 +417,23 @@ def _artifact_to_dict(artifact: RawArtifact) -> dict[str, Any]:
     }
 
 
+def _parse_aware_written_at(value: object) -> datetime:
+    """Parse a manifest `written_at` ISO string and force tz-awareness.
+
+    Raw Zone manifests written by `_artifact_to_dict` always emit a
+    tz-aware `written_at` (RawArtifact.written_at carries tz). But older
+    manifests or manually-edited fixtures may carry a naive ISO string.
+    Comparing such a naive datetime to the tz-aware values produced by
+    `datetime.now(UTC)` raises TypeError — so we coerce naive → UTC the
+    same way `_parse_lock_acquired_at` does in daily_refresh.py.
+    """
+
+    parsed = datetime.fromisoformat(str(value))
+    if parsed.tzinfo is None:
+        return parsed.replace(tzinfo=UTC)
+    return parsed.astimezone(UTC)
+
+
 def _artifact_from_dict(
     value: dict[str, Any],
     *,
@@ -434,7 +451,7 @@ def _artifact_from_dict(
         run_id=str(value["run_id"]),
         path=path,
         row_count=int(value["row_count"]),
-        written_at=datetime.fromisoformat(str(value["written_at"])),
+        written_at=_parse_aware_written_at(value["written_at"]),
         metadata=_metadata_from_manifest_value(value),
     )
 

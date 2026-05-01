@@ -321,8 +321,15 @@ def select_current_cycle(
             },
         )
 
-    assert daily_artifact is not None
-    assert stock_basic_artifact is not None
+    if daily_artifact is None or stock_basic_artifact is None:
+        # Invariant: both artifacts must be non-None after the
+        # `missing_input_artifact_refs` guard above. Previously enforced via
+        # `assert ... is not None`; retained as explicit raise so the
+        # invariant survives `python -O` (which strips assert).
+        raise AssertionError(
+            "invariant: daily_artifact and stock_basic_artifact must be non-None "
+            "after the missing_input_artifact_refs guard"
+        )
     _assert_artifact_ref(daily_artifact)
     _assert_artifact_ref(stock_basic_artifact)
     for artifact in selected_trade_artifacts:
