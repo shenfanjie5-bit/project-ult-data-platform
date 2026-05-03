@@ -11,10 +11,6 @@ from pyiceberg.catalog.memory import InMemoryCatalog
 from data_platform.ddl import iceberg_tables
 from data_platform.ddl.iceberg_tables import (
     CANONICAL_ENTITY_SPEC,
-    CANONICAL_GRAPH_ASSERTION_SPEC,
-    CANONICAL_GRAPH_EDGE_SPEC,
-    CANONICAL_GRAPH_NODE_SPEC,
-    CANONICAL_GRAPH_PROMOTION_TABLE_SPECS,
     CANONICAL_LINEAGE_DIM_SECURITY_SPEC,
     CANONICAL_LINEAGE_FACT_HOLDING_POSITION_SPEC,
     CANONICAL_LINEAGE_TABLE_SPECS,
@@ -22,7 +18,6 @@ from data_platform.ddl.iceberg_tables import (
     CANONICAL_V2_TABLE_SPECS,
     DEFAULT_TABLE_SPECS,
     ENTITY_ALIAS_SPEC,
-    GRAPH_TIMESTAMP_TYPE,
     TIMESTAMP_TYPE,
     TableSpec,
     ensure_tables,
@@ -109,28 +104,7 @@ def test_default_table_specs_do_not_include_queue_fields() -> None:
         )
 
 
-def test_graph_promotion_specs_use_utc_timestamp_type_only_on_graph_tables() -> None:
-    assert (
-        CANONICAL_GRAPH_NODE_SPEC.schema.field("created_at").type
-        == GRAPH_TIMESTAMP_TYPE
-    )
-    assert (
-        CANONICAL_GRAPH_NODE_SPEC.schema.field("updated_at").type
-        == GRAPH_TIMESTAMP_TYPE
-    )
-    assert (
-        CANONICAL_GRAPH_EDGE_SPEC.schema.field("created_at").type
-        == GRAPH_TIMESTAMP_TYPE
-    )
-    assert (
-        CANONICAL_GRAPH_EDGE_SPEC.schema.field("updated_at").type
-        == GRAPH_TIMESTAMP_TYPE
-    )
-    assert (
-        CANONICAL_GRAPH_ASSERTION_SPEC.schema.field("created_at").type
-        == GRAPH_TIMESTAMP_TYPE
-    )
-
+def test_entity_storage_points_keep_existing_timestamp_type() -> None:
     assert (
         CANONICAL_ENTITY_SPEC.schema.field("created_at").type == TIMESTAMP_TYPE
     )
@@ -225,9 +199,6 @@ def test_ensure_tables_is_idempotent() -> None:
     assert sorted(catalog.tables) == [
         "canonical.canonical_entity",
         "canonical.entity_alias",
-        "canonical.graph_assertion",
-        "canonical.graph_edge",
-        "canonical.graph_node",
         "canonical_lineage.lineage_dim_index",
         "canonical_lineage.lineage_dim_security",
         "canonical_lineage.lineage_fact_event",
@@ -254,10 +225,6 @@ def test_ensure_tables_is_idempotent() -> None:
     assert [identifier for identifier, _ in catalog.create_calls] == [
         "canonical.canonical_entity",
         "canonical.entity_alias",
-        *[
-            f"{spec.namespace}.{spec.name}"
-            for spec in CANONICAL_GRAPH_PROMOTION_TABLE_SPECS
-        ],
         *[
             f"{spec.namespace}.{spec.name}"
             for spec in CANONICAL_V2_TABLE_SPECS

@@ -1,17 +1,13 @@
-"""data-platform adapters that satisfy graph-engine's Phase 1 Protocols.
+"""data-platform readers that satisfy graph-engine's Phase 1 Protocols.
 
-graph-engine Phase 1 promotion needs three data-platform-owned read/write
-boundaries (per ``GraphPhase1Service.__init__`` constructor):
+graph-engine Phase 1 promotion needs data-platform-owned read boundaries
+for queue and canonical entity lookup:
 
 * ``CandidateDeltaReader`` — reads frozen ``Ex3CandidateGraphDelta`` payloads
   from PostgreSQL ``candidate_queue`` joined to ``cycle_candidate_selection``.
 * ``EntityAnchorReader`` — looks up ``canonical_entity`` / ``entity_alias``
   Iceberg tables via DuckDB to resolve graph node ids to canonical entity ids
   and to existence-check declared anchors.
-* ``CanonicalWriter`` — persists the ``PromotionPlan`` produced by Phase 1
-  back into Layer A canonical Iceberg storage via cycle-scoped overwrites of
-  ``canonical.graph_node`` / ``canonical.graph_edge`` /
-  ``canonical.graph_assertion``.
 
 Module ownership rationale (per CLAUDE.md):
 
@@ -22,10 +18,12 @@ Module ownership rationale (per CLAUDE.md):
 * ``CandidateDeltaReader`` impl is data-platform-owned because the cycle
   control tables (`cycle_candidate_selection`, `candidate_queue`) are
   data-platform's responsibility (CLAUDE.md OWN list).
-* ``CanonicalWriter`` write-back is also data-platform's surface.
+* Graph promotion write-back and snapshot computation are intentionally absent
+  here; CLAUDE.md assigns those responsibilities to graph-engine.
 
-These adapters are imported by ``graph_engine.providers.phase1`` via the
-``build_graph_phase1_runtime_from_env()`` factory.
+These read adapters are imported by ``graph_engine.providers.phase1`` via the
+``build_graph_phase1_runtime_from_env()`` factory. A fail-closed legacy writer
+sentinel remains for old imports, but it performs no storage writes.
 """
 
 from __future__ import annotations
@@ -267,327 +265,34 @@ class IcebergEntityAnchorReader:
         return cls()
 
 
-class IcebergCanonicalGraphWriter:
-    """Real Phase 1 graph promotion canonical write-back (M2.6 follow-up #1).
+class _FailClosedCanonicalGraphWriter:
+    """Legacy writer sentinel that preserves imports without crossing the
+    graph ownership boundary.
 
-    Replaces the M2.3a-2 ``StubCanonicalGraphWriter`` (which raised
-    ``NotImplementedError``). For each ``PromotionPlan`` produced by
-    ``GraphPhase1Service``, this writer performs a cycle-scoped overwrite
-    of the contained ``GraphNodeRecord`` / ``GraphEdgeRecord`` /
-    ``GraphAssertionRecord`` Pydantic models into the three canonical
-    Iceberg tables defined at
-    ``data_platform.ddl.iceberg_tables.CANONICAL_GRAPH_PROMOTION_TABLE_SPECS``:
-
-    * ``canonical.graph_node`` — per-promotion node identity rows
-    * ``canonical.graph_edge`` — per-promotion edge rows
-    * ``canonical.graph_assertion`` — per-promotion assertion rows
-
-    Properties / evidence dicts are JSON-serialised into ``properties_json``
-    / ``evidence_json`` columns (Iceberg/PyArrow does not have a native
-    arbitrary-key struct type). Each record carries the ``cycle_id`` of
-    the promotion that produced it for traceability.
-
-    **Re-run idempotency (M2.6 follow-up #1 review-fold P1-A + codex
-    review #1):** each write issues an Iceberg row-filter overwrite scoped
-    to the plan's ``cycle_id`` on **all three** ``canonical.graph_*``
-    tables — even when a record slice is empty. An empty slice is
-    materialised as a zero-row Arrow batch carrying the canonical
-    ``TableSpec.schema``; pyiceberg's
-    ``overwrite(..., overwrite_filter=EqualTo("cycle_id", cycle_id))``
-    then deletes any prior rows for that ``cycle_id`` and commits a no-op
-    snapshot. This closes the codex#1 ghost-row gap: a retry whose
-    plan legitimately produces empty edges/assertions (e.g. a cycle of
-    isolated-node promotions) now clears the prior cycle's stale
-    edges/assertions instead of leaving them in place. Rows for *other*
-    ``cycle_id`` values are untouched.
-
-    **Atomicity:** the three table overwrites happen sequentially. A
-    failure on the second table leaves the first table's overwrite
-    committed. Re-running the same cycle is the recovery contract — the
-    cycle-scoped overwrite means a second run produces the correct final
-    state regardless of how far the first run got. Iceberg snapshots at
-    the table level let operators inspect partial writes via the catalog.
-
-    **Timestamp contract (codex review #7):** ``created_at`` /
-    ``updated_at`` on each record MUST be a tz-aware datetime with a
-    UTC offset. The writer validates each value before constructing
-    the Arrow batch and raises ``ValueError`` on a tz-naive datetime
-    or a non-UTC offset, rather than letting PyArrow silently coerce
-    against the tz-tagged ``GRAPH_TIMESTAMP_TYPE`` column.
+    data-platform owns queue and canonical entity reads for Phase 1. It does
+    not own graph promotion write-back or graph snapshot computation; those
+    writes live in graph-engine per the data-platform BAN list.
     """
 
-    def __init__(self, *, catalog: Any | None = None) -> None:
-        self._catalog = catalog
-        self._catalog_lock = Lock()
-
-    def _resolve_catalog(self) -> Any:
-        # Thread-safe lazy initialisation mirroring
-        # PostgresCandidateDeltaReader._resolve_engine.
-        if self._catalog is None:
-            with self._catalog_lock:
-                if self._catalog is None:
-                    from data_platform.serving.catalog import load_catalog
-
-                    self._catalog = load_catalog()
-        return self._catalog
-
-    def write_canonical_records(self, plan: Any) -> None:
-        """Cycle-scoped overwrite of the three canonical.graph_* tables.
-
-        ``plan`` is a ``graph_engine.models.PromotionPlan``. For each
-        of the three tables (``graph_node``, ``graph_edge``,
-        ``graph_assertion``) the writer issues
-        ``target.overwrite(arrow, overwrite_filter=EqualTo("cycle_id",
-        plan.cycle_id))`` — atomically replacing the rows belonging to
-        this ``cycle_id`` with the plan's records. This makes Phase 1
-        retries idempotent at the table level.
-
-        **All three tables are overwritten on every call**, even when a
-        slice is empty (codex review #1). An empty slice is materialised
-        as a zero-row Arrow batch carrying the canonical
-        ``CANONICAL_GRAPH_*_SPEC.schema``. The cycle-scoped delete still
-        runs and removes any prior rows for ``cycle_id`` from that
-        table; this closes the ghost-row gap that the prior "skip on
-        empty slice" semantics opened (a retry with a smaller plan
-        would have left the previous run's rows for that same cycle).
-
-        Order (node → edge → assertion) preserves referential intent in
-        the Iceberg snapshot history if a downstream reader inspects
-        partial writes after a failure.
-        """
-
-        cycle_id = plan.cycle_id
-
-        # Build all three Arrow batches FIRST (which also runs UTC
-        # validation on every record's timestamps via
-        # ``_require_utc_datetime``). Empty slices become zero-row
-        # tables so the cycle-scoped overwrite still clears prior rows
-        # for ``cycle_id`` (codex review #1).
-        #
-        # Validation runs before ``_resolve_catalog()`` so a malformed
-        # plan does NOT open a live catalog connection on its way to
-        # failing — important in production where catalog resolution
-        # may touch the SQL backend (review-fold-2 polish).
-        node_arrow = self._node_records_to_arrow(plan.node_records, cycle_id)
-        edge_arrow = self._edge_records_to_arrow(plan.edge_records, cycle_id)
-        assertion_arrow = self._assertion_records_to_arrow(
-            plan.assertion_records, cycle_id
-        )
-
-        catalog = self._resolve_catalog()
-
-        self._overwrite_cycle_slice(
-            catalog, "canonical.graph_node", node_arrow, cycle_id
-        )
-        self._overwrite_cycle_slice(
-            catalog, "canonical.graph_edge", edge_arrow, cycle_id
-        )
-        self._overwrite_cycle_slice(
-            catalog, "canonical.graph_assertion", assertion_arrow, cycle_id
-        )
-
-    @staticmethod
-    def _overwrite_cycle_slice(
-        catalog: Any, identifier: str, table_arrow: Any, cycle_id: str
-    ) -> None:
-        # Lazy import: ``pyiceberg.expressions`` is only needed when a
-        # real Iceberg target is wired up; tests pass a fake catalog
-        # whose ``_FakeIcebergTable.overwrite`` ignores the filter.
-        from pyiceberg.expressions import EqualTo
-
-        target_table = catalog.load_table(identifier)
-        target_table.overwrite(
-            table_arrow, overwrite_filter=EqualTo("cycle_id", cycle_id)
-        )
-
-    @staticmethod
-    def _require_utc_datetime(value: Any, *, field: str, record_idx: int) -> Any:
-        """Validate a datetime value is tz-aware UTC (codex review #7).
-
-        Raises ``ValueError`` for tz-naive datetimes or non-UTC offsets so
-        the writer fails closed rather than letting PyArrow silently
-        coerce against the tz-tagged ``GRAPH_TIMESTAMP_TYPE`` column.
-        """
-
-        from datetime import datetime
-
-        if not isinstance(value, datetime):
-            msg = (
-                f"canonical graph record[{record_idx}].{field} must be a "
-                f"datetime; got {type(value).__name__}"
-            )
-            raise ValueError(msg)
-        if value.tzinfo is None:
-            msg = (
-                f"canonical graph record[{record_idx}].{field} must be "
-                f"tz-aware UTC (got tz-naive datetime); the canonical "
-                f"graph schema requires explicit UTC timestamps"
-            )
-            raise ValueError(msg)
-        offset = value.utcoffset()
-        if offset is None or offset.total_seconds() != 0:
-            msg = (
-                f"canonical graph record[{record_idx}].{field} must be in "
-                f"UTC (got offset {offset!r}); convert to UTC before "
-                f"writing"
-            )
-            raise ValueError(msg)
-        return value
-
-    @staticmethod
-    def _node_records_to_arrow(records: list[Any], cycle_id: str) -> Any:
-        import json
-
-        import pyarrow as pa
-
-        # Single source of truth: derive schema from the canonical TableSpec
-        # (M2.6 follow-up #1 review-fold P1-C). If the spec evolves a column,
-        # the writer no longer needs a parallel update.
-        from data_platform.ddl.iceberg_tables import CANONICAL_GRAPH_NODE_SPEC
-
-        # Validate tz-aware UTC for every datetime up-front so a partial
-        # write does not commit malformed rows (codex review #7).
-        for idx, record in enumerate(records):
-            IcebergCanonicalGraphWriter._require_utc_datetime(
-                record.created_at, field="created_at", record_idx=idx
-            )
-            IcebergCanonicalGraphWriter._require_utc_datetime(
-                record.updated_at, field="updated_at", record_idx=idx
-            )
-
-        # NOTE: an empty ``records`` list still produces a zero-row Arrow
-        # batch with the canonical schema so ``write_canonical_records``
-        # can issue a cycle-scoped overwrite that clears prior rows
-        # (codex review #1).
-        return pa.table(
-            {
-                "node_id": [r.node_id for r in records],
-                "canonical_entity_id": [r.canonical_entity_id for r in records],
-                "label": [r.label for r in records],
-                "properties_json": [
-                    json.dumps(r.properties, sort_keys=True, default=str)
-                    for r in records
-                ],
-                "cycle_id": [cycle_id for _ in records],
-                "created_at": [r.created_at for r in records],
-                "updated_at": [r.updated_at for r in records],
-            },
-            schema=CANONICAL_GRAPH_NODE_SPEC.schema,
-        )
-
-    @staticmethod
-    def _edge_records_to_arrow(records: list[Any], cycle_id: str) -> Any:
-        import json
-
-        import pyarrow as pa
-
-        from data_platform.ddl.iceberg_tables import CANONICAL_GRAPH_EDGE_SPEC
-
-        for idx, record in enumerate(records):
-            IcebergCanonicalGraphWriter._require_utc_datetime(
-                record.created_at, field="created_at", record_idx=idx
-            )
-            IcebergCanonicalGraphWriter._require_utc_datetime(
-                record.updated_at, field="updated_at", record_idx=idx
-            )
-
-        return pa.table(
-            {
-                "edge_id": [r.edge_id for r in records],
-                "source_node_id": [r.source_node_id for r in records],
-                "target_node_id": [r.target_node_id for r in records],
-                "relationship_type": [r.relationship_type for r in records],
-                "properties_json": [
-                    json.dumps(r.properties, sort_keys=True, default=str)
-                    for r in records
-                ],
-                "weight": [float(r.weight) for r in records],
-                "cycle_id": [cycle_id for _ in records],
-                "created_at": [r.created_at for r in records],
-                "updated_at": [r.updated_at for r in records],
-            },
-            schema=CANONICAL_GRAPH_EDGE_SPEC.schema,
-        )
-
-    @staticmethod
-    def _assertion_records_to_arrow(records: list[Any], cycle_id: str) -> Any:
-        import json
-
-        import pyarrow as pa
-
-        # ``target_node_id`` is nullable per ``GraphAssertionRecord``
-        # (graph-engine models.py:108); the spec field defaults to
-        # nullable=True under PyArrow which round-trips ``None`` correctly.
-        from data_platform.ddl.iceberg_tables import (
-            CANONICAL_GRAPH_ASSERTION_SPEC,
-        )
-
-        for idx, record in enumerate(records):
-            IcebergCanonicalGraphWriter._require_utc_datetime(
-                record.created_at, field="created_at", record_idx=idx
-            )
-
-        return pa.table(
-            {
-                "assertion_id": [r.assertion_id for r in records],
-                "source_node_id": [r.source_node_id for r in records],
-                "target_node_id": [r.target_node_id for r in records],
-                "assertion_type": [r.assertion_type for r in records],
-                "evidence_json": [
-                    json.dumps(r.evidence, sort_keys=True, default=str)
-                    for r in records
-                ],
-                "confidence": [float(r.confidence) for r in records],
-                "cycle_id": [cycle_id for _ in records],
-                "created_at": [r.created_at for r in records],
-            },
-            schema=CANONICAL_GRAPH_ASSERTION_SPEC.schema,
-        )
+    def __init__(self, *args: Any, **kwargs: Any) -> None:
+        del args, kwargs
 
     @classmethod
-    def from_env(cls) -> IcebergCanonicalGraphWriter:
-        """Construct a lazy-initialising writer.
-
-        ``DP_PG_DSN`` (Iceberg SQL catalog backing) +
-        ``DP_ICEBERG_WAREHOUSE_PATH`` are consumed by ``load_catalog()``
-        on first ``write_canonical_records`` call. This delays catalog
-        connection so the writer is constructable in Definitions-load
-        environments without live Iceberg access.
-        """
-
+    def from_env(cls) -> _FailClosedCanonicalGraphWriter:
         return cls()
 
-
-# Backwards-compatibility alias: ``StubCanonicalGraphWriter`` is retained
-# so any existing imports do not break. The alias now points at the real
-# IcebergCanonicalGraphWriter; callers that genuinely want fail-closed
-# behaviour can construct ``_FailClosedCanonicalGraphWriter`` directly.
-StubCanonicalGraphWriter = IcebergCanonicalGraphWriter
-
-
-class _FailClosedCanonicalGraphWriter:
-    """Explicit fail-closed writer for environments where Iceberg is
-    unavailable. Mirrors the orchestrator's ``_FailClosedGraphStatusProvider``
-    pattern: callers wire this when they want
-    ``write_canonical_records`` to raise rather than attempt a real
-    Iceberg write."""
-
     def write_canonical_records(self, plan: Any) -> None:
+        del plan
         raise RuntimeError(
-            "Canonical graph writer is fail-closed; configure DP_PG_DSN + "
-            "DP_ICEBERG_WAREHOUSE_PATH and use IcebergCanonicalGraphWriter "
-            "to enable writes",
+            "data-platform does not implement graph promotion write-back; "
+            "graph-engine owns graph promotion and snapshot computation",
         )
 
 
-# NOTE: ``StubCanonicalGraphWriter`` is intentionally NOT in ``__all__`` (M2.6
-# follow-up #1 review-fold P2-1). The alias is retained at module level for
-# import compatibility with M2.3a-2 callers, but a name containing "Stub" that
-# resolves to a production writer would be misleading via ``import *``. New
-# code should reference ``IcebergCanonicalGraphWriter`` (or
-# ``_FailClosedCanonicalGraphWriter`` for explicit fail-closed wiring).
+StubCanonicalGraphWriter = _FailClosedCanonicalGraphWriter
+
+
 __all__ = [
-    "IcebergCanonicalGraphWriter",
     "IcebergEntityAnchorReader",
     "PostgresCandidateDeltaReader",
 ]

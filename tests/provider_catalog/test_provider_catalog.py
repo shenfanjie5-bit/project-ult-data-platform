@@ -222,6 +222,34 @@ def test_holdings_registry_points_to_canonical_v2_serving_tables() -> None:
     )
 
 
+def test_holding_position_catalog_uses_v2_announced_date_identity() -> None:
+    canonical = CANONICAL_DATASETS["holding_position"]
+
+    assert canonical.primary_key == (
+        "holding_source",
+        "holder_id",
+        "security_id",
+        "report_date",
+        "announced_date",
+    )
+    assert "announced_date" in {field.name for field in canonical.fields}
+
+    expected_announced_date_sources = {
+        "top10_holders": "ann_date",
+        "top10_floatholders": "ann_date",
+        "fund_portfolio": "ann_date",
+        "hsgt_hold_top10": "trade_date",
+    }
+    for source_interface_id, expected_source_field in expected_announced_date_sources.items():
+        mapping = mapping_for_source_interface_id("tushare", source_interface_id)
+        assert mapping is not None
+        sources_by_canonical_field = {
+            canonical_field: source_field
+            for source_field, canonical_field in mapping.field_mapping
+        }
+        assert sources_by_canonical_field["announced_date"] == expected_source_field
+
+
 def test_block_trade_uses_full_row_shape_identity_contract() -> None:
     """block_trade has no immutable execution id; identity is provider row shape."""
 
