@@ -176,6 +176,31 @@ HM_DETAIL_NUMERIC_FIELD_NAMES = {
     "sell_amount",
     "net_amount",
 }
+TOP10_HOLDERS_NUMERIC_FIELD_NAMES = {
+    "hold_amount",
+    "hold_ratio",
+    "hold_float_ratio",
+    "hold_change",
+}
+FUND_PORTFOLIO_NUMERIC_FIELD_NAMES = {
+    "mkv",
+    "amount",
+    "stk_mkv_ratio",
+    "stk_float_ratio",
+}
+HSGT_TOP10_NUMERIC_FIELD_NAMES = {
+    "close",
+    "change",
+    "rank",
+    "amount",
+    "net_amount",
+    "buy",
+    "sell",
+}
+HSGT_HOLD_TOP10_NUMERIC_FIELD_NAMES = {
+    "vol",
+    "ratio",
+}
 FIXTURE_DECIMAL_STRING = "1.123456789012345678"
 
 
@@ -663,6 +688,8 @@ def _sample_value(dataset: str, field: pa.Field) -> str | Decimal | None:
     if field.name == "ts_code":
         # index_basic ts_code must match index_member index_code for
         # referential integrity (relationship test checks this FK).
+        if dataset == "fund_portfolio":
+            return "001753.OF"
         if dataset in {"index_basic", "index_daily"}:
             return "000300.SH"
         return "000001.SZ"
@@ -671,10 +698,14 @@ def _sample_value(dataset: str, field: pa.Field) -> str | Decimal | None:
     if field.name == "con_code":
         return "000001.SZ"
     if field.name == "symbol":
+        if dataset == "fund_portfolio":
+            return "000001.SZ"
         return "000001"
     if field.name == "list_status":
         return "L"
     if field.name in {"report_type", "comp_type", "is_open"}:
+        return "1"
+    if field.name == "rank":
         return "1"
     if dataset == "trade_cal" and field.name == "exchange":
         return "SSE"
@@ -715,6 +746,16 @@ def _sample_value(dataset: str, field: pa.Field) -> str | Decimal | None:
     if dataset == "limit_list_d" and field.name in LIMIT_LIST_D_NUMERIC_FIELD_NAMES:
         return FIXTURE_DECIMAL_STRING
     if dataset == "hm_detail" and field.name in HM_DETAIL_NUMERIC_FIELD_NAMES:
+        return FIXTURE_DECIMAL_STRING
+    if dataset in {"top10_holders", "top10_floatholders"} and (
+        field.name in TOP10_HOLDERS_NUMERIC_FIELD_NAMES
+    ):
+        return FIXTURE_DECIMAL_STRING
+    if dataset == "fund_portfolio" and field.name in FUND_PORTFOLIO_NUMERIC_FIELD_NAMES:
+        return FIXTURE_DECIMAL_STRING
+    if dataset == "hsgt_top10" and field.name in HSGT_TOP10_NUMERIC_FIELD_NAMES:
+        return FIXTURE_DECIMAL_STRING
+    if dataset == "hsgt_hold_top10" and field.name in HSGT_HOLD_TOP10_NUMERIC_FIELD_NAMES:
         return FIXTURE_DECIMAL_STRING
     if pa.types.is_decimal(field.type):
         return Decimal("1.123456789012345678")

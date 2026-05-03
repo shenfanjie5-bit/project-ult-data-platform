@@ -45,6 +45,12 @@ TUSHARE_STK_SURV_ASSET_NAME = "tushare_stk_surv"
 TUSHARE_LIMIT_LIST_THS_ASSET_NAME = "tushare_limit_list_ths"
 TUSHARE_LIMIT_LIST_D_ASSET_NAME = "tushare_limit_list_d"
 TUSHARE_HM_DETAIL_ASSET_NAME = "tushare_hm_detail"
+# M4.5 holdings intake expansion.
+TUSHARE_TOP10_HOLDERS_ASSET_NAME = "tushare_top10_holders"
+TUSHARE_TOP10_FLOATHOLDERS_ASSET_NAME = "tushare_top10_floatholders"
+TUSHARE_FUND_PORTFOLIO_ASSET_NAME = "tushare_fund_portfolio"
+TUSHARE_HSGT_TOP10_ASSET_NAME = "tushare_hsgt_top10"
+TUSHARE_HSGT_HOLD_TOP10_ASSET_NAME = "tushare_hsgt_hold_top10"
 
 ALLOW_NULL_IDENTITY_METADATA_KEY = b"data_platform.allow_null_identity"
 ALLOW_NULL_IDENTITY_METADATA_VALUE = b"true"
@@ -560,6 +566,77 @@ TUSHARE_HM_DETAIL_SCHEMA = pa.schema(
     ]
 )
 
+# M4.5 holdings intake expansion. Numeric fields stay pa.string() at
+# Raw/staging, matching the existing event and market-data convention.
+TUSHARE_TOP10_HOLDERS_SCHEMA = pa.schema(
+    [
+        ("ts_code", pa.string()),
+        ("ann_date", pa.string()),
+        ("end_date", pa.string()),
+        ("holder_name", pa.string()),
+        ("hold_amount", TUSHARE_RAW_NUMERIC_TYPE),
+        ("hold_ratio", TUSHARE_RAW_NUMERIC_TYPE),
+        ("hold_float_ratio", TUSHARE_RAW_NUMERIC_TYPE),
+        ("hold_change", TUSHARE_RAW_NUMERIC_TYPE),
+        ("holder_type", pa.string()),
+    ]
+)
+
+TUSHARE_TOP10_FLOATHOLDERS_SCHEMA = pa.schema(
+    [
+        ("ts_code", pa.string()),
+        ("ann_date", pa.string()),
+        ("end_date", pa.string()),
+        ("holder_name", pa.string()),
+        ("hold_amount", TUSHARE_RAW_NUMERIC_TYPE),
+        ("hold_ratio", TUSHARE_RAW_NUMERIC_TYPE),
+        ("hold_float_ratio", TUSHARE_RAW_NUMERIC_TYPE),
+        ("hold_change", TUSHARE_RAW_NUMERIC_TYPE),
+        ("holder_type", pa.string()),
+    ]
+)
+
+TUSHARE_FUND_PORTFOLIO_SCHEMA = pa.schema(
+    [
+        ("ts_code", pa.string()),
+        ("ann_date", pa.string()),
+        ("end_date", pa.string()),
+        ("symbol", pa.string()),
+        ("mkv", TUSHARE_RAW_NUMERIC_TYPE),
+        ("amount", TUSHARE_RAW_NUMERIC_TYPE),
+        ("stk_mkv_ratio", TUSHARE_RAW_NUMERIC_TYPE),
+        ("stk_float_ratio", TUSHARE_RAW_NUMERIC_TYPE),
+    ]
+)
+
+TUSHARE_HSGT_TOP10_SCHEMA = pa.schema(
+    [
+        ("trade_date", pa.string()),
+        ("ts_code", pa.string()),
+        ("name", pa.string()),
+        ("close", TUSHARE_RAW_NUMERIC_TYPE),
+        ("change", TUSHARE_RAW_NUMERIC_TYPE),
+        ("rank", TUSHARE_RAW_NUMERIC_TYPE),
+        ("market_type", pa.string()),
+        ("amount", TUSHARE_RAW_NUMERIC_TYPE),
+        ("net_amount", TUSHARE_RAW_NUMERIC_TYPE),
+        ("buy", TUSHARE_RAW_NUMERIC_TYPE),
+        ("sell", TUSHARE_RAW_NUMERIC_TYPE),
+    ]
+)
+
+TUSHARE_HSGT_HOLD_TOP10_SCHEMA = pa.schema(
+    [
+        ("code", pa.string()),
+        ("trade_date", pa.string()),
+        ("ts_code", pa.string()),
+        ("name", pa.string()),
+        ("vol", TUSHARE_RAW_NUMERIC_TYPE),
+        ("ratio", TUSHARE_RAW_NUMERIC_TYPE),
+        ("exchange", pa.string()),
+    ]
+)
+
 
 def _financial_schema(numeric_fields: tuple[str, ...]) -> pa.Schema:
     return pa.schema(
@@ -702,6 +779,17 @@ TUSHARE_LIMIT_LIST_D_FIELDS = tuple(TUSHARE_LIMIT_LIST_D_SCHEMA.names)
 TUSHARE_LIMIT_LIST_D_FIELDS_CSV = ",".join(TUSHARE_LIMIT_LIST_D_FIELDS)
 TUSHARE_HM_DETAIL_FIELDS = tuple(TUSHARE_HM_DETAIL_SCHEMA.names)
 TUSHARE_HM_DETAIL_FIELDS_CSV = ",".join(TUSHARE_HM_DETAIL_FIELDS)
+# M4.5 holdings intake expansion.
+TUSHARE_TOP10_HOLDERS_FIELDS = tuple(TUSHARE_TOP10_HOLDERS_SCHEMA.names)
+TUSHARE_TOP10_HOLDERS_FIELDS_CSV = ",".join(TUSHARE_TOP10_HOLDERS_FIELDS)
+TUSHARE_TOP10_FLOATHOLDERS_FIELDS = tuple(TUSHARE_TOP10_FLOATHOLDERS_SCHEMA.names)
+TUSHARE_TOP10_FLOATHOLDERS_FIELDS_CSV = ",".join(TUSHARE_TOP10_FLOATHOLDERS_FIELDS)
+TUSHARE_FUND_PORTFOLIO_FIELDS = tuple(TUSHARE_FUND_PORTFOLIO_SCHEMA.names)
+TUSHARE_FUND_PORTFOLIO_FIELDS_CSV = ",".join(TUSHARE_FUND_PORTFOLIO_FIELDS)
+TUSHARE_HSGT_TOP10_FIELDS = tuple(TUSHARE_HSGT_TOP10_SCHEMA.names)
+TUSHARE_HSGT_TOP10_FIELDS_CSV = ",".join(TUSHARE_HSGT_TOP10_FIELDS)
+TUSHARE_HSGT_HOLD_TOP10_FIELDS = tuple(TUSHARE_HSGT_HOLD_TOP10_SCHEMA.names)
+TUSHARE_HSGT_HOLD_TOP10_FIELDS_CSV = ",".join(TUSHARE_HSGT_HOLD_TOP10_FIELDS)
 
 REFERENCE_DATA_IDENTITY_FIELDS: dict[str, tuple[str, ...]] = {
     "index_basic": ("ts_code",),
@@ -764,6 +852,14 @@ FORECAST_VERSION_FIELDS: tuple[str, ...] = (
     "update_flag",
     "type",
 )
+
+HOLDINGS_DATASET_FIELDS: dict[str, tuple[str, ...]] = {
+    "top10_holders": TUSHARE_TOP10_HOLDERS_FIELDS,
+    "top10_floatholders": TUSHARE_TOP10_FLOATHOLDERS_FIELDS,
+    "fund_portfolio": TUSHARE_FUND_PORTFOLIO_FIELDS,
+    "hsgt_top10": TUSHARE_HSGT_TOP10_FIELDS,
+    "hsgt_hold_top10": TUSHARE_HSGT_HOLD_TOP10_FIELDS,
+}
 
 
 def _tushare_asset_spec(
@@ -1042,6 +1138,41 @@ TUSHARE_HM_DETAIL_ASSET = _tushare_asset_spec(
     schema=TUSHARE_HM_DETAIL_SCHEMA,
 )
 
+TUSHARE_TOP10_HOLDERS_ASSET = _tushare_asset_spec(
+    name=TUSHARE_TOP10_HOLDERS_ASSET_NAME,
+    dataset="top10_holders",
+    partition="daily",
+    schema=TUSHARE_TOP10_HOLDERS_SCHEMA,
+)
+
+TUSHARE_TOP10_FLOATHOLDERS_ASSET = _tushare_asset_spec(
+    name=TUSHARE_TOP10_FLOATHOLDERS_ASSET_NAME,
+    dataset="top10_floatholders",
+    partition="daily",
+    schema=TUSHARE_TOP10_FLOATHOLDERS_SCHEMA,
+)
+
+TUSHARE_FUND_PORTFOLIO_ASSET = _tushare_asset_spec(
+    name=TUSHARE_FUND_PORTFOLIO_ASSET_NAME,
+    dataset="fund_portfolio",
+    partition="daily",
+    schema=TUSHARE_FUND_PORTFOLIO_SCHEMA,
+)
+
+TUSHARE_HSGT_TOP10_ASSET = _tushare_asset_spec(
+    name=TUSHARE_HSGT_TOP10_ASSET_NAME,
+    dataset="hsgt_top10",
+    partition="daily",
+    schema=TUSHARE_HSGT_TOP10_SCHEMA,
+)
+
+TUSHARE_HSGT_HOLD_TOP10_ASSET = _tushare_asset_spec(
+    name=TUSHARE_HSGT_HOLD_TOP10_ASSET_NAME,
+    dataset="hsgt_hold_top10",
+    partition="daily",
+    schema=TUSHARE_HSGT_HOLD_TOP10_SCHEMA,
+)
+
 TUSHARE_ASSETS = [
     TUSHARE_STOCK_BASIC_ASSET,
     TUSHARE_DAILY_ASSET,
@@ -1081,6 +1212,12 @@ TUSHARE_ASSETS = [
     TUSHARE_LIMIT_LIST_THS_ASSET,
     TUSHARE_LIMIT_LIST_D_ASSET,
     TUSHARE_HM_DETAIL_ASSET,
+    # M4.5 holdings intake expansion.
+    TUSHARE_TOP10_HOLDERS_ASSET,
+    TUSHARE_TOP10_FLOATHOLDERS_ASSET,
+    TUSHARE_FUND_PORTFOLIO_ASSET,
+    TUSHARE_HSGT_TOP10_ASSET,
+    TUSHARE_HSGT_HOLD_TOP10_ASSET,
 ]
 
 __all__ = [
@@ -1214,6 +1351,7 @@ __all__ = [
     # moneyflow / forecast) + forecast family containers.
     "FORECAST_DATASET_FIELDS",
     "FORECAST_VERSION_FIELDS",
+    "HOLDINGS_DATASET_FIELDS",
     "TUSHARE_BLOCK_TRADE_ASSET",
     "TUSHARE_BLOCK_TRADE_ASSET_NAME",
     "TUSHARE_BLOCK_TRADE_FIELDS",
@@ -1240,6 +1378,21 @@ __all__ = [
     "TUSHARE_HM_DETAIL_FIELDS",
     "TUSHARE_HM_DETAIL_FIELDS_CSV",
     "TUSHARE_HM_DETAIL_SCHEMA",
+    "TUSHARE_FUND_PORTFOLIO_ASSET",
+    "TUSHARE_FUND_PORTFOLIO_ASSET_NAME",
+    "TUSHARE_FUND_PORTFOLIO_FIELDS",
+    "TUSHARE_FUND_PORTFOLIO_FIELDS_CSV",
+    "TUSHARE_FUND_PORTFOLIO_SCHEMA",
+    "TUSHARE_HSGT_HOLD_TOP10_ASSET",
+    "TUSHARE_HSGT_HOLD_TOP10_ASSET_NAME",
+    "TUSHARE_HSGT_HOLD_TOP10_FIELDS",
+    "TUSHARE_HSGT_HOLD_TOP10_FIELDS_CSV",
+    "TUSHARE_HSGT_HOLD_TOP10_SCHEMA",
+    "TUSHARE_HSGT_TOP10_ASSET",
+    "TUSHARE_HSGT_TOP10_ASSET_NAME",
+    "TUSHARE_HSGT_TOP10_FIELDS",
+    "TUSHARE_HSGT_TOP10_FIELDS_CSV",
+    "TUSHARE_HSGT_TOP10_SCHEMA",
     "TUSHARE_LIMIT_LIST_D_ASSET",
     "TUSHARE_LIMIT_LIST_D_ASSET_NAME",
     "TUSHARE_LIMIT_LIST_D_FIELDS",
@@ -1275,4 +1428,14 @@ __all__ = [
     "TUSHARE_STK_SURV_FIELDS",
     "TUSHARE_STK_SURV_FIELDS_CSV",
     "TUSHARE_STK_SURV_SCHEMA",
+    "TUSHARE_TOP10_FLOATHOLDERS_ASSET",
+    "TUSHARE_TOP10_FLOATHOLDERS_ASSET_NAME",
+    "TUSHARE_TOP10_FLOATHOLDERS_FIELDS",
+    "TUSHARE_TOP10_FLOATHOLDERS_FIELDS_CSV",
+    "TUSHARE_TOP10_FLOATHOLDERS_SCHEMA",
+    "TUSHARE_TOP10_HOLDERS_ASSET",
+    "TUSHARE_TOP10_HOLDERS_ASSET_NAME",
+    "TUSHARE_TOP10_HOLDERS_FIELDS",
+    "TUSHARE_TOP10_HOLDERS_FIELDS_CSV",
+    "TUSHARE_TOP10_HOLDERS_SCHEMA",
 ]

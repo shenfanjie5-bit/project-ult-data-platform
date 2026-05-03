@@ -10,3 +10,6 @@ dist/
 .venv-py312/
 .venv-py313/
 PROJECT_REPORT.md
+
+# dbt runtime artifacts
+src/data_platform/dbt/logs/

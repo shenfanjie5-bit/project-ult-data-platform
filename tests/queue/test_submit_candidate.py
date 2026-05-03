@@ -73,6 +73,58 @@ def test_submit_candidate_validates_and_writes_with_repository(
     assert closed is True
 
 
+def test_submit_candidate_accepts_sdk_bridge_shaped_ex3_envelope(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    seen_envelopes: list[CandidateEnvelope] = []
+
+    class FakeRepository:
+        def insert_candidate(self, envelope: CandidateEnvelope) -> CandidateQueueItem:
+            seen_envelopes.append(envelope)
+            return CandidateQueueItem(
+                id=11,
+                payload_type=envelope.payload_type,
+                payload=envelope.payload,
+                submitted_by=envelope.submitted_by,
+                submitted_at=datetime.now(UTC),
+                ingest_seq=100,
+                validation_status="pending",
+                rejection_reason=None,
+            )
+
+        def close(self) -> None:
+            return None
+
+    monkeypatch.setattr(queue_api, "CandidateRepository", FakeRepository)
+
+    payload = {
+        "payload_type": "Ex-3",
+        "submitted_by": "subsystem-bridge",
+        "subsystem_id": "subsystem-bridge",
+        "delta_id": "sdk-bridge-delta-1",
+        "delta_type": "add",
+        "source_node": "node-source",
+        "target_node": "node-target",
+        "relation_type": "SUPPLY_CHAIN",
+        "properties": {"weight": 0.7},
+        "evidence_refs": ["announcement:1"],
+    }
+
+    item = submit_candidate(payload)
+
+    assert item.id == 11
+    assert item.payload_type == "Ex-3"
+    assert item.submitted_by == "subsystem-bridge"
+    assert dict(item.payload) == payload
+    assert seen_envelopes == [
+        CandidateEnvelope(
+            payload_type="Ex-3",
+            submitted_by="subsystem-bridge",
+            payload=payload,
+        )
+    ]
+
+
 def test_validate_candidate_envelope_returns_immutable_payload_copy() -> None:
     payload = {
         "payload_type": "Ex-2",

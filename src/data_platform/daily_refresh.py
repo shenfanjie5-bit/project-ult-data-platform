@@ -89,6 +89,7 @@ STRING_NUMERIC_FIELD_NAMES = frozenset(
         "amount",
         "avg_price",
         "base_point",
+        "buy",
         "buy_amount",
         "buy_elg_amount",
         "buy_elg_vol",
@@ -116,6 +117,10 @@ STRING_NUMERIC_FIELD_NAMES = frozenset(
         "h_total_ratio",
         "high",
         "high_limit",
+        "hold_amount",
+        "hold_change",
+        "hold_float_ratio",
+        "hold_ratio",
         "holder_num",
         "holding_amount",
         "last_parent_net",
@@ -124,6 +129,7 @@ STRING_NUMERIC_FIELD_NAMES = frozenset(
         "limit_up_suc_rate",
         "low",
         "low_limit",
+        "mkv",
         "net_amount",
         "net_mf_amount",
         "net_mf_vol",
@@ -145,8 +151,11 @@ STRING_NUMERIC_FIELD_NAMES = frozenset(
         "price",
         "ps",
         "ps_ttm",
+        "rank",
         "reg_capital",
+        "ratio",
         "rest_pledge",
+        "sell",
         "sell_amount",
         "sell_elg_amount",
         "sell_elg_vol",
@@ -157,6 +166,8 @@ STRING_NUMERIC_FIELD_NAMES = frozenset(
         "sell_sm_amount",
         "sell_sm_vol",
         "stk_div",
+        "stk_float_ratio",
+        "stk_mkv_ratio",
         "total_mv",
         "total_share",
         "turnover_ratio",
@@ -922,6 +933,8 @@ def _mock_value(dataset: str, field: pa.Field, partition_date: date) -> Any:
     if field.name in DATE_FIELD_NAMES:
         return _mock_date_value(dataset, field.name, partition_date)
     if field.name == "ts_code":
+        if dataset == "fund_portfolio":
+            return "001753.OF"
         if dataset in {"index_basic", "index_daily"}:
             return "000300.SH"
         return "000001.SZ"
@@ -932,10 +945,14 @@ def _mock_value(dataset: str, field: pa.Field, partition_date: date) -> Any:
     if field.name == "exchange":
         return "SSE"
     if field.name == "symbol":
+        if dataset == "fund_portfolio":
+            return "000001.SZ"
         return "000001"
     if field.name == "list_status":
         return "L"
     if field.name in {"report_type", "comp_type", "is_open"}:
+        return "1"
+    if field.name == "rank":
         return "1"
     if field.name == "update_flag":
         return "0"

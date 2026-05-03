@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 from datetime import date
-from decimal import Decimal
 import os
 from pathlib import Path
 from typing import Any
@@ -475,6 +474,55 @@ def test_event_v2_and_lineage_marts_preserve_hm_detail_fixture(tmp_path: Path) -
         expected_source_interface_id="hm_detail",
     )
 
+def test_holdings_marts_preserve_promoted_holdings_fixtures(tmp_path: Path) -> None:
+    duckdb = pytest.importorskip("duckdb")
+
+    raw_zone_path = tmp_path / "raw"
+    _write_all_tushare_raw_fixtures(raw_zone_path, tmp_path)
+
+    connection = duckdb.connect(":memory:")
+    try:
+        _create_all_staging_views(connection, raw_zone_path)
+        _create_mart_table(connection, "mart_fact_holding_position_v2", MARTS_V2_DIR)
+        _create_mart_table(connection, "mart_fact_northbound_turnover_v2", MARTS_V2_DIR)
+
+        holding_sources = {
+            row[0]
+            for row in connection.execute(
+                """
+                select distinct holding_source
+                from mart_fact_holding_position_v2
+                """
+            ).fetchall()
+        }
+        holding_duplicate_count = connection.execute(
+            """
+            select count(*)
+            from (
+                select holding_source, holder_id, security_id, report_date
+                from mart_fact_holding_position_v2
+                group by holding_source, holder_id, security_id, report_date
+                having count(*) > 1
+            )
+            """
+        ).fetchone()[0]
+        northbound_row = connection.execute(
+            """
+            select security_id, trade_date, market_type, rank
+            from mart_fact_northbound_turnover_v2
+            """
+        ).fetchone()
+    finally:
+        connection.close()
+
+    assert holding_sources == {
+        "top_holder",
+        "top_float_holder",
+        "fund_portfolio",
+        "northbound_hold",
+    }
+    assert holding_duplicate_count == 0
+    assert northbound_row == ("000001.SZ", date(2026, 4, 15), "market_type-fixture", 1)
 
 
 def test_dbt_run_and_test_marts_with_rawwriter_fixture(tmp_path: Path) -> None:

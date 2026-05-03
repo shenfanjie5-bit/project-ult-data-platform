@@ -41,6 +41,8 @@ MART_V2_MODEL_NAMES = [
     "mart_fact_index_price_bar_v2",
     "mart_fact_forecast_event_v2",
     "mart_fact_event_v2",
+    "mart_fact_holding_position_v2",
+    "mart_fact_northbound_turnover_v2",
 ]
 MART_LINEAGE_MODEL_NAMES = [
     "mart_lineage_dim_security",

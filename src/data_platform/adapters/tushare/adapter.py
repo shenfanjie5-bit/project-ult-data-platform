@@ -26,6 +26,7 @@ from data_platform.adapters.tushare.assets import (
     FINANCIAL_VERSION_FIELDS,
     FORECAST_DATASET_FIELDS,
     FORECAST_VERSION_FIELDS,
+    HOLDINGS_DATASET_FIELDS,
     REFERENCE_DATA_IDENTITY_FIELDS,
     TUSHARE_ASSETS,
     TUSHARE_STOCK_BASIC_ASSET_NAME,
@@ -55,6 +56,7 @@ FINANCIAL_DATASETS = frozenset(FINANCIAL_DATASET_FIELDS)
 # field set lacks f_ann_date / report_type / comp_type). See
 # assets.FORECAST_DATASET_FIELDS / FORECAST_VERSION_FIELDS.
 FORECAST_DATASETS = frozenset(FORECAST_DATASET_FIELDS)
+HOLDINGS_DATASETS = frozenset(HOLDINGS_DATASET_FIELDS)
 FINANCIAL_REQUIRED_FIELDS = (
     FINANCIAL_VERSION_FIELDS[0],
     FINANCIAL_VERSION_FIELDS[1],
@@ -75,6 +77,10 @@ STOCK_TS_CODE_DATASETS = frozenset(
         "stock_company",
         "namechange",
         *EVENT_DATASETS,  # includes block_trade per Plan §5
+        "top10_holders",
+        "top10_floatholders",
+        "hsgt_top10",
+        "hsgt_hold_top10",
         *FINANCIAL_DATASETS,
         *FORECAST_DATASETS,  # Plan §5 — forecast keyed on ts_code
         "stk_limit",  # Plan §5 — market-like, ts_code identity
@@ -225,6 +231,22 @@ class _TushareClient(Protocol):
     def hm_detail(self, **kwargs: Any) -> Any:
         """Return hot-money entity per-stock daily trade rows from Tushare Pro."""
 
+    # M4.5 holdings intake expansion.
+    def top10_holders(self, **kwargs: Any) -> Any:
+        """Return top 10 shareholder rows from Tushare Pro."""
+
+    def top10_floatholders(self, **kwargs: Any) -> Any:
+        """Return top 10 free-float shareholder rows from Tushare Pro."""
+
+    def fund_portfolio(self, **kwargs: Any) -> Any:
+        """Return fund portfolio holdings rows from Tushare Pro."""
+
+    def hsgt_top10(self, **kwargs: Any) -> Any:
+        """Return northbound top turnover rows from Tushare Pro."""
+
+    def hk_hold(self, **kwargs: Any) -> Any:
+        """Return northbound holding rows from Tushare Pro."""
+
 
 class TushareAdapter(BaseAdapter):
     """Tushare reference adapter exposing Raw Zone structured assets."""
@@ -282,6 +304,8 @@ class TushareAdapter(BaseAdapter):
         # field set distinct from FINANCIAL, so it gets its own branch.
         if spec.asset.dataset in FORECAST_DATASET_FIELDS:
             return _to_forecast_table(spec.asset.dataset, result, spec.asset.schema)
+        if spec.asset.dataset in HOLDINGS_DATASET_FIELDS:
+            return _to_holdings_table(spec.asset.dataset, result, spec.asset.schema)
         return _to_asset_table(result, spec.asset, spec.identity_fields)
 
     def _get_client(self) -> _TushareClient:
@@ -487,6 +511,29 @@ def _to_forecast_table(dataset: str, result: Any, schema: pa.Schema) -> pa.Table
         msg = f"Tushare {asset.dataset} response returned an empty table"
         raise UpstreamEmptyResult(msg)
     _validate_event_date_columns(table, asset, forecast_date_fields)
+    return table
+
+
+def _to_holdings_table(dataset: str, result: Any, schema: pa.Schema) -> pa.Table:
+    try:
+        spec = _FETCH_SPECS_BY_DATASET[dataset]
+        identity_fields = HOLDINGS_IDENTITY_FIELDS[dataset]
+        date_fields = HOLDINGS_DATE_FIELDS[dataset]
+    except KeyError as exc:
+        msg = f"unsupported Tushare holdings dataset: {dataset!r}"
+        raise ValueError(msg) from exc
+
+    asset = AssetSpec(
+        name=spec.asset.name,
+        dataset=spec.asset.dataset,
+        partition=spec.asset.partition,
+        schema=schema,
+    )
+    table = _to_asset_table(result, asset, identity_fields)
+    if table.num_rows == 0:
+        msg = f"Tushare {asset.dataset} response returned an empty table"
+        raise UpstreamEmptyResult(msg)
+    _validate_event_date_columns(table, asset, date_fields)
     return table
 
 
@@ -972,6 +1019,20 @@ FORECAST_IDENTITY_FIELDS: dict[str, tuple[str, ...]] = {
 FORECAST_DATE_FIELDS: dict[str, tuple[str, ...]] = {
     "forecast": ("ann_date", "end_date"),
 }
+HOLDINGS_IDENTITY_FIELDS: dict[str, tuple[str, ...]] = {
+    "top10_holders": ("ts_code", "end_date", "holder_name", "ann_date"),
+    "top10_floatholders": ("ts_code", "end_date", "holder_name", "ann_date"),
+    "fund_portfolio": ("ts_code", "end_date", "symbol", "ann_date"),
+    "hsgt_top10": ("trade_date", "ts_code", "market_type", "rank"),
+    "hsgt_hold_top10": ("trade_date", "ts_code", "exchange"),
+}
+HOLDINGS_DATE_FIELDS: dict[str, tuple[str, ...]] = {
+    "top10_holders": ("ann_date", "end_date"),
+    "top10_floatholders": ("ann_date", "end_date"),
+    "fund_portfolio": ("ann_date", "end_date"),
+    "hsgt_top10": ("trade_date",),
+    "hsgt_hold_top10": ("trade_date",),
+}
 _METHOD_BY_DATASET = {
     "stock_basic": "stock_basic",
     "daily": "daily",
@@ -1011,6 +1072,13 @@ _METHOD_BY_DATASET = {
     "limit_list_ths": "limit_list_ths",
     "limit_list_d": "limit_list_d",
     "hm_detail": "hm_detail",
+    # M4.5 holdings intake expansion. hsgt_hold_top10 is the data-platform
+    # raw dataset name for Tushare's official hk_hold API.
+    "top10_holders": "top10_holders",
+    "top10_floatholders": "top10_floatholders",
+    "fund_portfolio": "fund_portfolio",
+    "hsgt_top10": "hsgt_top10",
+    "hsgt_hold_top10": "hk_hold",
 }
 _IDENTITY_FIELDS_BY_DATASET = {
     "stock_basic": STOCK_BASIC_IDENTITY_FIELDS,
@@ -1019,6 +1087,7 @@ _IDENTITY_FIELDS_BY_DATASET = {
     **EVENT_IDENTITY_FIELDS,
     **{dataset: FINANCIAL_REQUIRED_FIELDS for dataset in FINANCIAL_DATASETS},
     **FORECAST_IDENTITY_FIELDS,  # Plan §5
+    **HOLDINGS_IDENTITY_FIELDS,
 }
 _PARTITION_DATE_FIELD_BY_DATASET = {
     **{dataset: "trade_date" for dataset in MARKET_DATASETS},
@@ -1044,6 +1113,12 @@ _PARTITION_DATE_FIELD_BY_DATASET = {
     "limit_list_ths": "trade_date",
     "limit_list_d": "trade_date",
     "hm_detail": "trade_date",
+    # M4.5 holdings intake expansion.
+    "top10_holders": "end_date",
+    "top10_floatholders": "end_date",
+    "fund_portfolio": "end_date",
+    "hsgt_top10": "trade_date",
+    "hsgt_hold_top10": "trade_date",
     **{dataset: "end_date" for dataset in FINANCIAL_DATASETS},
 }
 _PARTITION_REQUEST_PARAMS_BY_DATASET = {
@@ -1071,6 +1146,12 @@ _PARTITION_REQUEST_PARAMS_BY_DATASET = {
     "limit_list_ths": ("trade_date",),
     "limit_list_d": ("trade_date",),
     "hm_detail": ("trade_date",),
+    # M4.5 holdings intake expansion.
+    "top10_holders": ("period",),
+    "top10_floatholders": ("period",),
+    "fund_portfolio": ("period",),
+    "hsgt_top10": ("trade_date",),
+    "hsgt_hold_top10": ("trade_date",),
     **{dataset: ("period",) for dataset in FINANCIAL_DATASETS},
 }
 _DATE_PARAM_NAMES_BY_DATASET = {
@@ -1110,6 +1191,12 @@ _DATE_PARAM_NAMES_BY_DATASET = {
     "limit_list_ths": ("trade_date", "start_date", "end_date"),
     "limit_list_d": ("trade_date", "start_date", "end_date"),
     "hm_detail": ("trade_date", "start_date", "end_date"),
+    # M4.5 holdings intake expansion.
+    "top10_holders": ("period", "ann_date", "start_date", "end_date"),
+    "top10_floatholders": ("period", "ann_date", "start_date", "end_date"),
+    "fund_portfolio": ("period", "ann_date", "start_date", "end_date"),
+    "hsgt_top10": ("trade_date", "start_date", "end_date"),
+    "hsgt_hold_top10": ("trade_date", "start_date", "end_date"),
     **{
         dataset: ("ann_date", "start_date", "end_date", "period")
         for dataset in FINANCIAL_DATASETS
