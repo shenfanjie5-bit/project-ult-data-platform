@@ -16,6 +16,7 @@ from data_platform.ddl.iceberg_tables import (
     CANONICAL_GRAPH_NODE_SPEC,
     CANONICAL_GRAPH_PROMOTION_TABLE_SPECS,
     CANONICAL_LINEAGE_DIM_SECURITY_SPEC,
+    CANONICAL_LINEAGE_FACT_HOLDING_POSITION_SPEC,
     CANONICAL_LINEAGE_TABLE_SPECS,
     CANONICAL_V2_DIM_SECURITY_SPEC,
     CANONICAL_V2_TABLE_SPECS,
@@ -170,6 +171,18 @@ def test_default_table_specs_include_canonical_v2_and_lineage_storage_points() -
     ]
     assert CANONICAL_LINEAGE_DIM_SECURITY_SPEC.schema.names == [
         "security_id",
+        "source_provider",
+        "source_interface_id",
+        "source_run_id",
+        "raw_loaded_at",
+        "canonical_loaded_at",
+    ]
+    assert CANONICAL_LINEAGE_FACT_HOLDING_POSITION_SPEC.schema.names == [
+        "holding_source",
+        "holder_id",
+        "security_id",
+        "report_date",
+        "announced_date",
         "source_provider",
         "source_interface_id",
         "source_run_id",

@@ -1298,8 +1298,8 @@ _CANONICAL_TABLE_BY_DATASET: Final[dict[str, str]] = {
     "market_leverage_daily": "canonical.fact_market_daily_feature",
     "security_leverage_detail": "canonical.fact_market_daily_feature",
     "business_segment_exposure": "canonical.fact_financial_indicator",
-    "holding_position": "canonical.fact_holding_position",
-    "northbound_turnover_daily": "canonical.fact_northbound_turnover",
+    "holding_position": "canonical_v2.fact_holding_position",
+    "northbound_turnover_daily": "canonical_v2.fact_northbound_turnover",
 }
 
 

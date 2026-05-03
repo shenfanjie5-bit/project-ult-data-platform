@@ -860,6 +860,7 @@ HOLDINGS_DATASET_FIELDS: dict[str, tuple[str, ...]] = {
     "hsgt_top10": TUSHARE_HSGT_TOP10_FIELDS,
     "hsgt_hold_top10": TUSHARE_HSGT_HOLD_TOP10_FIELDS,
 }
+EXPLICIT_TS_CODE_RAW_DATASETS = frozenset({"top10_holders", "top10_floatholders"})
 
 
 def _tushare_asset_spec(
@@ -871,6 +872,10 @@ def _tushare_asset_spec(
 ) -> AssetSpec:
     metadata = dict(tushare_interface_metadata_for_raw_dataset(dataset))
     metadata["schema_hash"] = schema_hash(schema)
+    if dataset in EXPLICIT_TS_CODE_RAW_DATASETS:
+        metadata["required_fetch_params"] = ("ts_code",)
+        metadata["raw_partition_scope"] = "explicit_ts_code"
+        metadata["daily_refresh_scope_env"] = "DP_TUSHARE_TOP10_TS_CODES"
     return AssetSpec(
         name=name,
         dataset=dataset,

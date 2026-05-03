@@ -182,7 +182,13 @@ def _fields_csv(asset: Any) -> str:
 
 
 def _raw_partition_call_params(asset: Any) -> dict[str, str]:
-    if asset.dataset in {"top10_holders", "top10_floatholders", "fund_portfolio"}:
+    if asset.dataset in {"top10_holders", "top10_floatholders"}:
+        return {
+            "period": "20260415",
+            "ts_code": "000001.SZ",
+            "fields": _fields_csv(asset),
+        }
+    if asset.dataset == "fund_portfolio":
         return {"period": "20260415", "fields": _fields_csv(asset)}
     return {"trade_date": "20260415", "fields": _fields_csv(asset)}
 
@@ -201,6 +207,12 @@ def test_holdings_assets_and_staging_models_are_registered() -> None:
     for asset in HOLDINGS_ASSETS:
         assert assets_by_name[asset.name] == asset
         assert f"stg_{asset.dataset}" in adapter.get_staging_dbt_models()
+    assert TUSHARE_TOP10_HOLDERS_ASSET.metadata["required_fetch_params"] == ("ts_code",)
+    assert TUSHARE_TOP10_HOLDERS_ASSET.metadata["raw_partition_scope"] == "explicit_ts_code"
+    assert (
+        TUSHARE_TOP10_FLOATHOLDERS_ASSET.metadata["daily_refresh_scope_env"]
+        == "DP_TUSHARE_TOP10_TS_CODES"
+    )
     assert {asset.name for asset in adapter.get_assets()} == {asset.name for asset in TUSHARE_ASSETS}
 
 
@@ -217,6 +229,12 @@ def test_fetch_holdings_asset_returns_declared_schema(asset: Any) -> None:
         expected_params = {
             **expected_params,
             "limit": tushare_adapter_module.FUND_PORTFOLIO_PAGE_LIMIT,
+            "offset": 0,
+        }
+    if asset.dataset == "hsgt_hold_top10":
+        expected_params = {
+            **expected_params,
+            "limit": tushare_adapter_module.HK_HOLD_PAGE_LIMIT,
             "offset": 0,
         }
     assert isinstance(table, pa.Table)
@@ -254,6 +272,46 @@ def test_fetch_fund_portfolio_pages_until_short_page(
     assert [call[1]["limit"] for call in client.calls] == [2, 2, 2]
 
 
+def test_fetch_hk_hold_splits_unscoped_trade_date_by_exchange_and_paginates(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    asset = TUSHARE_HSGT_HOLD_TOP10_ASSET
+    rows_by_exchange = {
+        exchange: [
+            {
+                **_holdings_row(asset, index=index, partition_date="20240401"),
+                "exchange": exchange,
+                "ts_code": f"{index:06d}.SZ",
+            }
+            for index in range(row_count)
+        ]
+        for exchange, row_count in {"SH": 3, "SZ": 1}.items()
+    }
+
+    def fetch_page(**kwargs: Any) -> Any:
+        exchange = kwargs["exchange"]
+        offset = kwargs["offset"]
+        limit = kwargs["limit"]
+        return pd.DataFrame(rows_by_exchange[exchange][offset : offset + limit])
+
+    monkeypatch.setattr(tushare_adapter_module, "HK_HOLD_PAGE_LIMIT", 2)
+    client = _client_for_asset(asset, fetch_page)
+    adapter = TushareAdapter(token="test-token", client=client)
+
+    table = adapter.fetch(asset.name, {"trade_date": "20240401"})
+
+    assert table.num_rows == 4
+    assert table.column("exchange").to_pylist() == ["SH", "SH", "SH", "SZ"]
+    assert [
+        (call[1]["exchange"], call[1]["offset"], call[1]["limit"])
+        for call in client.calls
+    ] == [
+        ("SH", 0, 2),
+        ("SH", 2, 2),
+        ("SZ", 0, 2),
+    ]
+
+
 def test_fetch_fund_portfolio_rejects_non_advancing_pagination(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -270,6 +328,20 @@ def test_fetch_fund_portfolio_rejects_non_advancing_pagination(
     assert [call[1]["offset"] for call in client.calls] == [0, 2]
 
 
+def test_fetch_top10_requires_explicit_ts_code() -> None:
+    asset = TUSHARE_TOP10_HOLDERS_ASSET
+    client = _client_for_asset(asset, _holdings_frame(asset, 1))
+    adapter = TushareAdapter(token="test-token", client=client)
+
+    with pytest.raises(
+        tushare_adapter_module.AdapterFetchError,
+        match="requires explicit ts_code",
+    ):
+        adapter.fetch(asset.name, {"period": "20240331"})
+
+    assert client.calls == []
+
+
 @pytest.mark.parametrize("asset", HOLDINGS_ASSETS, ids=lambda asset: asset.name)
 def test_cli_writes_holdings_raw_artifact_and_manifest(
     raw_zone_path: Path,
@@ -277,10 +349,21 @@ def test_cli_writes_holdings_raw_artifact_and_manifest(
     capsys: pytest.CaptureFixture[str],
     asset: Any,
 ) -> None:
-    client = _client_for_asset(asset, _holdings_frame(asset, 3))
+    if asset.dataset == "hsgt_hold_top10":
+        frame = _holdings_frame(asset, 3)
+        frame["exchange"] = "SH"
+    else:
+        frame = _holdings_frame(asset, 3)
+    client = _client_for_asset(asset, frame)
     tokens = _install_tushare_client(monkeypatch, client)
 
-    exit_code = tushare_adapter_module.main(["--asset", asset.name, "--date", "20260415"])
+    args = ["--asset", asset.name, "--date", "20260415"]
+    if asset.dataset in {"top10_holders", "top10_floatholders"}:
+        args.extend(["--ts-code", "000001.SZ"])
+    if asset.dataset == "hsgt_hold_top10":
+        args.extend(["--exchange", "SH"])
+
+    exit_code = tushare_adapter_module.main(args)
 
     captured = capsys.readouterr()
     artifact_path = Path(captured.out.strip())
@@ -307,7 +390,78 @@ def test_cli_writes_holdings_raw_artifact_and_manifest(
             "limit": tushare_adapter_module.FUND_PORTFOLIO_PAGE_LIMIT,
             "offset": 0,
         }
+    if asset.dataset == "hsgt_hold_top10":
+        expected_call_params = {
+            **expected_call_params,
+            "exchange": "SH",
+            "limit": tushare_adapter_module.HK_HOLD_PAGE_LIMIT,
+            "offset": 0,
+        }
     assert client.calls == [(METHOD_BY_DATASET[asset.dataset], expected_call_params)]
+
+
+def test_cli_rejects_top10_without_explicit_ts_code(
+    raw_zone_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    asset = TUSHARE_TOP10_HOLDERS_ASSET
+    client = _client_for_asset(asset, _holdings_frame(asset, 1))
+    _install_tushare_client(monkeypatch, client)
+
+    exit_code = tushare_adapter_module.main(
+        ["--asset", asset.name, "--date", "20260415"]
+    )
+
+    captured = capsys.readouterr()
+    payload = json.loads(captured.err)
+
+    assert exit_code == 1
+    assert captured.out == ""
+    assert "requires explicit ts_code" in payload["error"]
+    assert client.calls == []
+    assert list(raw_zone_path.rglob("*.parquet")) == []
+
+
+def test_cli_combines_repeated_top10_ts_codes_into_one_raw_artifact(
+    raw_zone_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    asset = TUSHARE_TOP10_HOLDERS_ASSET
+
+    def fetch_symbol(**kwargs: Any) -> Any:
+        row = _holdings_row(asset, partition_date="20260415")
+        row["ts_code"] = kwargs["ts_code"]
+        return pd.DataFrame([row])
+
+    client = _client_for_asset(asset, fetch_symbol)
+    _install_tushare_client(monkeypatch, client)
+
+    exit_code = tushare_adapter_module.main(
+        [
+            "--asset",
+            asset.name,
+            "--date",
+            "20260415",
+            "--ts-code",
+            "000001.SZ",
+            "--ts-code",
+            "600519.SH",
+        ]
+    )
+
+    artifact_path = Path(capsys.readouterr().out.strip())
+    table = pq.read_table(artifact_path).select(asset.schema.names)
+
+    assert exit_code == 0
+    assert table.num_rows == 2
+    assert table.column("ts_code").to_pylist() == ["000001.SZ", "600519.SH"]
+    assert [call[1]["ts_code"] for call in client.calls] == [
+        "000001.SZ",
+        "600519.SH",
+    ]
+    assert len(list(raw_zone_path.rglob("*.parquet"))) == 1
 
 
 def test_live_tushare_holdings_smoke_requires_token() -> None:

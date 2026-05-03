@@ -37,7 +37,7 @@ models:
           - not_null
 
   - name: mart_lineage_fact_holding_position
-    description: Provider-aware lineage rows joined 1:1 to canonical_v2.fact_holding_position on (holding_source, holder_id, security_id, report_date). Per-row source_interface_id identifies the promoted holdings source.
+    description: Provider-aware lineage rows joined 1:1 to canonical_v2.fact_holding_position on (holding_source, holder_id, security_id, report_date, announced_date). Per-row source_interface_id identifies the promoted holdings source.
     tests:
       - unique_combination_of_columns:
           combination_of_columns:
@@ -45,6 +45,7 @@ models:
             - holder_id
             - security_id
             - report_date
+            - announced_date
     columns:
       - name: holding_source
         tests:
@@ -56,6 +57,9 @@ models:
         tests:
           - not_null
       - name: report_date
+        tests:
+          - not_null
+      - name: announced_date
         tests:
           - not_null
       - name: source_provider

@@ -204,6 +204,24 @@ def test_tushare_interface_registry_distinguishes_stock_and_futures_trade_cal() 
     assert futures_entry.fetch_support == "inventory_only"
 
 
+def test_holdings_registry_points_to_canonical_v2_serving_tables() -> None:
+    assert TUSHARE_INTERFACE_REGISTRY["top10_holders"].canonical_table == (
+        "canonical_v2.fact_holding_position"
+    )
+    assert TUSHARE_INTERFACE_REGISTRY["top10_floatholders"].canonical_table == (
+        "canonical_v2.fact_holding_position"
+    )
+    assert TUSHARE_INTERFACE_REGISTRY["fund_portfolio"].canonical_table == (
+        "canonical_v2.fact_holding_position"
+    )
+    assert TUSHARE_INTERFACE_REGISTRY["hsgt_hold_top10"].canonical_table == (
+        "canonical_v2.fact_holding_position"
+    )
+    assert TUSHARE_INTERFACE_REGISTRY["hsgt_top10"].canonical_table == (
+        "canonical_v2.fact_northbound_turnover"
+    )
+
+
 def test_block_trade_uses_full_row_shape_identity_contract() -> None:
     """block_trade has no immutable execution id; identity is provider row shape."""
 

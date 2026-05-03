@@ -549,6 +549,7 @@ CANONICAL_LINEAGE_FACT_HOLDING_POSITION_LOAD_SPEC: Final[CanonicalLoadSpec] = (
             "holder_id",
             "security_id",
             "report_date",
+            "announced_date",
             "source_provider",
             "source_interface_id",
             "source_run_id",
@@ -653,6 +654,7 @@ CANONICAL_V2_PAIRING_KEY_COLUMNS: Final[dict[str, tuple[str, ...]]] = {
         "holder_id",
         "security_id",
         "report_date",
+        "announced_date",
     ),
     "canonical_v2.fact_northbound_turnover": (
         "security_id",

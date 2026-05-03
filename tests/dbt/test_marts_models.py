@@ -509,9 +509,9 @@ def test_holdings_marts_preserve_promoted_holdings_fixtures(tmp_path: Path) -> N
             """
             select count(*)
             from (
-                select holding_source, holder_id, security_id, report_date
+                select holding_source, holder_id, security_id, report_date, announced_date
                 from mart_fact_holding_position_v2
-                group by holding_source, holder_id, security_id, report_date
+                group by holding_source, holder_id, security_id, report_date, announced_date
                 having count(*) > 1
             )
             """

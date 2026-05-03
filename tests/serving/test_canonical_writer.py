@@ -189,6 +189,65 @@ def test_load_canonical_v2_marts_pairs_forecast_event_by_update_flag(
     )
 
 
+def test_load_canonical_v2_marts_pairs_holding_position_by_announced_date(
+    tmp_path: Path,
+) -> None:
+    catalog = create_catalog(
+        tmp_path,
+        [*CANONICAL_V2_TABLE_SPECS, *CANONICAL_LINEAGE_TABLE_SPECS],
+    )
+    duckdb_path = tmp_path / "marts.duckdb"
+    write_canonical_v2_mart_relations(duckdb_path)
+    connection = duckdb.connect(str(duckdb_path))
+    try:
+        connection.execute("DELETE FROM mart_fact_holding_position_v2")
+        connection.execute("DELETE FROM mart_lineage_fact_holding_position")
+        connection.execute(
+            """
+            INSERT INTO mart_fact_holding_position_v2 VALUES
+                ('fund_portfolio', 'FUND_PLACEHOLDER', 'Placeholder Fund', 'fund',
+                 'SEC_PLACEHOLDER', DATE '2026-03-31', DATE '2026-04-10',
+                 100, 1, 1, NULL, 1000, NULL),
+                ('fund_portfolio', 'FUND_PLACEHOLDER', 'Placeholder Fund', 'fund',
+                 'SEC_PLACEHOLDER', DATE '2026-03-31', DATE '2026-04-15',
+                 110, 2, 2, NULL, 1100, NULL)
+            """
+        )
+        connection.execute(
+            """
+            INSERT INTO mart_lineage_fact_holding_position VALUES
+                ('fund_portfolio', 'FUND_PLACEHOLDER', 'SEC_PLACEHOLDER',
+                 DATE '2026-03-31', DATE '2026-04-10', 'tushare',
+                 'fund_portfolio', 'run-holding-0',
+                 TIMESTAMP '2026-04-15 10:00:00'),
+                ('fund_portfolio', 'FUND_PLACEHOLDER', 'SEC_PLACEHOLDER',
+                 DATE '2026-03-31', DATE '2026-04-15', 'tushare',
+                 'fund_portfolio', 'run-holding-1',
+                 TIMESTAMP '2026-04-15 10:00:00')
+            """
+        )
+    finally:
+        connection.close()
+
+    results = load_canonical_v2_marts(catalog, duckdb_path)  # type: ignore[arg-type]
+    result_by_table = {result.table: result for result in results}
+
+    assert canonical_writer.CANONICAL_V2_PAIRING_KEY_COLUMNS[
+        "canonical_v2.fact_holding_position"
+    ] == (
+        "holding_source",
+        "holder_id",
+        "security_id",
+        "report_date",
+        "announced_date",
+    )
+    assert result_by_table["canonical_v2.fact_holding_position"].row_count == 2
+    assert (
+        result_by_table["canonical_lineage.lineage_fact_holding_position"].row_count
+        == 2
+    )
+
+
 def test_load_canonical_v2_marts_rejects_missing_lineage_key_before_overwrite(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
@@ -1239,6 +1298,7 @@ def _write_canonical_v2_mart_placeholder_relations(
                 "holder_id" VARCHAR,
                 "security_id" VARCHAR,
                 "report_date" DATE,
+                "announced_date" DATE,
                 "source_provider" VARCHAR,
                 "source_interface_id" VARCHAR,
                 "source_run_id" VARCHAR,
@@ -1249,8 +1309,8 @@ def _write_canonical_v2_mart_placeholder_relations(
         connection.execute(
             "INSERT INTO mart_lineage_fact_holding_position VALUES "
             "('fund_portfolio', 'FUND_PLACEHOLDER', 'SEC_PLACEHOLDER', "
-            "DATE '2026-03-31', 'tushare', 'fund_portfolio', 'run-placeholder', "
-            "TIMESTAMP '2026-04-15 10:00:00')"
+            "DATE '2026-03-31', DATE '2026-04-15', 'tushare', 'fund_portfolio', "
+            "'run-placeholder', TIMESTAMP '2026-04-15 10:00:00')"
         )
 
         # canonical_v2.fact_northbound_turnover + lineage_fact_northbound_turnover

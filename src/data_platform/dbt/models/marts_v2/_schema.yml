@@ -221,7 +221,12 @@ models:
       Provider-shaped identifiers are renamed to holder_id and security_id.
     tests:
       - unique_combination_of_columns:
-          combination_of_columns: ["holding_source", "holder_id", "security_id", "report_date"]
+          combination_of_columns:
+            - holding_source
+            - holder_id
+            - security_id
+            - report_date
+            - announced_date
     columns:
       - name: holding_source
         tests:
@@ -240,6 +245,9 @@ models:
         tests:
           - not_null
       - name: report_date
+        tests:
+          - not_null
+      - name: announced_date
         tests:
           - not_null
 

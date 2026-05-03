@@ -34,6 +34,9 @@ Known planning constraints:
   `fund_portfolio`, `hsgt_top10`, and `hsgt_hold_top10` through
   data-platform Raw/staging/mart paths. `hsgt_hold_top10` is the
   data-platform dataset name over Tushare's official `hk_hold` API.
+  `top10_holders` and `top10_floatholders` require explicit `ts_code`
+  scope for live/raw fetches; set `DP_TUSHARE_TOP10_TS_CODES` for
+  daily refresh or pass `--ts-code` to the raw asset CLI.
 - The P1a positive PostgreSQL evidence is still required: `make smoke-p1a`
   and the Iceberg write-chain spike must run against a real PG DSN without
   skipping before broader canonical/Iceberg production claims.

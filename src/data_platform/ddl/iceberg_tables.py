@@ -746,6 +746,7 @@ CANONICAL_LINEAGE_FACT_HOLDING_POSITION_SPEC: Final[TableSpec] = TableSpec(
             pa.field("holder_id", pa.string()),
             pa.field("security_id", pa.string()),
             pa.field("report_date", pa.date32()),
+            pa.field("announced_date", pa.date32()),
             pa.field("source_provider", pa.string()),
             pa.field("source_interface_id", pa.string()),
             pa.field("source_run_id", pa.string()),

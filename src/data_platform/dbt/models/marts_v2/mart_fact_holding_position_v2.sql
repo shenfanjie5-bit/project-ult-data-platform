@@ -62,7 +62,7 @@ northbound_positions as (
         cast('northbound' as varchar) as holder_type,
         ts_code as security_id,
         trade_date as report_date,
-        cast(null as date) as announced_date,
+        trade_date as announced_date,
         try_cast(vol as decimal(38, 18)) as holding_amount,
         try_cast(ratio as decimal(38, 18)) as holding_ratio,
         try_cast(ratio as decimal(38, 18)) as holding_float_ratio,

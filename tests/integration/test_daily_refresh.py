@@ -157,6 +157,34 @@ def test_daily_refresh_partial_dbt_selectors_keep_legacy_staging_path() -> None:
     ) == (f"stg_{selected_assets[0].dataset}",)
 
 
+def test_live_top10_refresh_requires_configured_ts_codes(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    asset = next(
+        asset for asset in daily_refresh.TUSHARE_ASSETS if asset.dataset == "top10_holders"
+    )
+    monkeypatch.delenv("DP_TUSHARE_TOP10_TS_CODES", raising=False)
+
+    with pytest.raises(
+        daily_refresh.DailyRefreshStepError,
+        match="requires explicit ts_code",
+    ):
+        daily_refresh._live_fetch_params_for_asset(asset)
+
+
+def test_live_top10_refresh_uses_configured_ts_codes(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    asset = next(
+        asset for asset in daily_refresh.TUSHARE_ASSETS if asset.dataset == "top10_holders"
+    )
+    monkeypatch.setenv("DP_TUSHARE_TOP10_TS_CODES", "000001.SZ, 600519.SH")
+
+    assert daily_refresh._live_fetch_params_for_asset(asset) == {
+        "ts_codes": ("000001.SZ", "600519.SH")
+    }
+
+
 def test_mock_adapter_values_cover_dbt_cast_fields() -> None:
     assets_by_dataset = {asset.dataset: asset for asset in daily_refresh.TUSHARE_ASSETS}
 

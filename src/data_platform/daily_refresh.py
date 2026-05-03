@@ -24,7 +24,12 @@ import pyarrow as pa  # type: ignore[import-untyped]
 from pydantic import ValidationError
 
 from data_platform.adapters.base import AssetSpec, FetchParams, FetchableAdapter
-from data_platform.adapters.tushare.adapter import TushareAdapter, run_tushare_asset
+from data_platform.adapters.tushare.adapter import (
+    EXPLICIT_TS_CODE_RAW_DATASETS,
+    EXPLICIT_TS_CODES_PARAM,
+    TushareAdapter,
+    run_tushare_asset,
+)
 from data_platform.adapters.tushare.assets import TUSHARE_ASSETS
 from data_platform.assets import build_assets, build_resources
 from data_platform.config import Settings, get_settings
@@ -48,6 +53,7 @@ DEFAULT_DBT_SELECTORS = ("staging", "intermediate", "marts_v2", "marts_lineage")
 TRUTHY_VALUES = frozenset({"1", "true", "yes", "on"})
 DEFAULT_REFRESH_LOCK_STALE_AFTER = timedelta(hours=6)
 REFRESH_LOCK_STALE_SECONDS_ENV = "DP_DAILY_REFRESH_LOCK_STALE_SECONDS"
+TOP10_TS_CODES_ENV = "DP_TUSHARE_TOP10_TS_CODES"
 DATE_FIELD_NAMES = frozenset(
     {
         "actual_date",
@@ -452,7 +458,14 @@ def _run_adapter_step(
                 )
             )
             continue
-        artifacts.append(run_tushare_asset(asset.name, partition_date, raw_writer=writer))
+        artifacts.append(
+            run_tushare_asset(
+                asset.name,
+                partition_date,
+                params=_live_fetch_params_for_asset(asset),
+                raw_writer=writer,
+            )
+        )
 
     return {
         "mock": mock,
@@ -560,6 +573,38 @@ def _resolve_dbt_executable(env: Mapping[str, str] | None = None) -> str | None:
     if local_dbt.is_file() and os.access(local_dbt, os.X_OK):
         return str(local_dbt)
     return None
+
+
+def _live_fetch_params_for_asset(asset: AssetSpec) -> dict[str, Any] | None:
+    if asset.dataset not in EXPLICIT_TS_CODE_RAW_DATASETS:
+        return None
+
+    ts_codes = _split_csv_env(TOP10_TS_CODES_ENV)
+    if not ts_codes:
+        msg = (
+            f"Tushare {asset.dataset} live refresh requires explicit ts_code scope; "
+            f"set {TOP10_TS_CODES_ENV} to a comma-separated symbol list or run the "
+            "raw asset CLI with --ts-code"
+        )
+        raise DailyRefreshStepError(
+            msg,
+            {
+                "error": msg,
+                "error_type": "missing_required_fetch_scope",
+                "asset": asset.name,
+                "dataset": asset.dataset,
+                "required_params": ["ts_code"],
+                "config_env": TOP10_TS_CODES_ENV,
+            },
+        )
+    return {EXPLICIT_TS_CODES_PARAM: ts_codes}
+
+
+def _split_csv_env(name: str) -> tuple[str, ...]:
+    value = os.environ.get(name)
+    if value is None:
+        return ()
+    return tuple(part.strip() for part in value.split(",") if part.strip())
 
 
 def _which_executable(candidate: str, *, path: str | None) -> str | None:
