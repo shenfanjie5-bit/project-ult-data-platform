@@ -92,6 +92,7 @@ DATE_IDENTITY_FIELDS = frozenset(
 )
 STOCK_BASIC_TS_CODE_PATTERN = re.compile(r"\d{6}\.(?:SH|SZ|BJ)")
 TRADE_DATE_PATTERN = re.compile(r"\d{8}")
+FUND_PORTFOLIO_PAGE_LIMIT = 5_000
 
 
 @dataclass(frozen=True, slots=True)
@@ -293,6 +294,9 @@ class TushareAdapter(BaseAdapter):
         request_params["fields"] = _fields_csv(spec.asset)
 
         fetch_method = getattr(self._get_client(), spec.method_name)
+        if spec.asset.dataset == "fund_portfolio":
+            return _fetch_fund_portfolio_table(fetch_method, request_params, spec.asset)
+
         result = fetch_method(**request_params)
         if spec.asset.dataset in REFERENCE_DATA_IDENTITY_FIELDS:
             return _to_reference_table(spec.asset.dataset, result, spec.asset.schema)
@@ -535,6 +539,94 @@ def _to_holdings_table(dataset: str, result: Any, schema: pa.Schema) -> pa.Table
         raise UpstreamEmptyResult(msg)
     _validate_event_date_columns(table, asset, date_fields)
     return table
+
+
+def _fetch_fund_portfolio_table(
+    fetch_method: Any,
+    request_params: Mapping[str, Any],
+    asset: AssetSpec,
+) -> pa.Table:
+    """Fetch fund_portfolio through Tushare's limit/offset pagination surface."""
+
+    base_params = dict(request_params)
+    page_limit = _positive_int_param(
+        base_params.pop("limit", FUND_PORTFOLIO_PAGE_LIMIT),
+        "limit",
+    )
+    offset = _non_negative_int_param(base_params.pop("offset", 0), "offset")
+    page_tables: list[pa.Table] = []
+    seen_keys: set[tuple[Any, ...]] = set()
+
+    while True:
+        page_params = {**base_params, "limit": page_limit, "offset": offset}
+        page_result = fetch_method(**page_params)
+        page_table = _to_holdings_page_table(asset, page_result)
+        if page_table.num_rows == 0:
+            break
+
+        page_keys = _identity_key_set(page_table, HOLDINGS_IDENTITY_FIELDS[asset.dataset])
+        repeated_keys = seen_keys.intersection(page_keys)
+        if repeated_keys:
+            msg = (
+                "Tushare fund_portfolio pagination did not advance; "
+                "received duplicate identity key(s) after applying offset"
+            )
+            raise UpstreamDataQualityError(msg)
+
+        page_tables.append(page_table)
+        seen_keys.update(page_keys)
+        if page_table.num_rows < page_limit:
+            break
+        offset += page_table.num_rows
+
+    if not page_tables:
+        msg = "Tushare fund_portfolio response returned an empty table"
+        raise UpstreamEmptyResult(msg)
+    return pa.concat_tables(page_tables)
+
+
+def _to_holdings_page_table(asset: AssetSpec, result: Any) -> pa.Table:
+    identity_fields = HOLDINGS_IDENTITY_FIELDS[asset.dataset]
+    date_fields = HOLDINGS_DATE_FIELDS[asset.dataset]
+    table = _to_asset_table(result, asset, identity_fields)
+    if table.num_rows:
+        _validate_event_date_columns(table, asset, date_fields)
+    return table
+
+
+def _positive_int_param(value: Any, name: str) -> int:
+    try:
+        parsed = int(value)
+    except (TypeError, ValueError) as exc:
+        msg = f"Tushare fund_portfolio {name} must be a positive integer"
+        raise ValueError(msg) from exc
+    if parsed < 1:
+        msg = f"Tushare fund_portfolio {name} must be a positive integer"
+        raise ValueError(msg)
+    return parsed
+
+
+def _non_negative_int_param(value: Any, name: str) -> int:
+    try:
+        parsed = int(value)
+    except (TypeError, ValueError) as exc:
+        msg = f"Tushare fund_portfolio {name} must be a non-negative integer"
+        raise ValueError(msg) from exc
+    if parsed < 0:
+        msg = f"Tushare fund_portfolio {name} must be a non-negative integer"
+        raise ValueError(msg)
+    return parsed
+
+
+def _identity_key_set(
+    table: pa.Table,
+    identity_fields: tuple[str, ...],
+) -> set[tuple[Any, ...]]:
+    columns = [table[field_name].to_pylist() for field_name in identity_fields]
+    return {
+        tuple(column[row_index] for column in columns)
+        for row_index in range(table.num_rows)
+    }
 
 
 def _to_financial_table(dataset: str, result: Any, schema: pa.Schema) -> pa.Table:

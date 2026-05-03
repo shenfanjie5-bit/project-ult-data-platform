@@ -7,7 +7,6 @@ from pathlib import Path
 from typing import Sequence
 
 import duckdb
-import pyarrow as pa  # type: ignore[import-untyped]
 import pytest
 from pyiceberg.catalog.memory import InMemoryCatalog
 
@@ -320,7 +319,7 @@ def test_load_canonical_v2_marts_closed_loop_under_v2_flag_reads_pinned_snapshot
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """M1.10 closed-loop proof: write→read across all 9 v2 + 9 lineage marts.
+    """M1.10 closed-loop proof: write→read across all v2 + lineage marts.
 
     Drives `load_canonical_v2_marts()` once over a fixture catalog populated
     with all paired marts, then under `DP_CANONICAL_USE_V2=1` calls
@@ -354,8 +353,8 @@ def test_load_canonical_v2_marts_closed_loop_under_v2_flag_reads_pinned_snapshot
     expected_lineage_identifiers = {
         spec.identifier for spec in canonical_writer.CANONICAL_LINEAGE_MART_LOAD_SPECS
     }
-    assert len(expected_v2_identifiers) == 9
-    assert len(expected_lineage_identifiers) == 9
+    assert len(expected_v2_identifiers) == 11
+    assert len(expected_lineage_identifiers) == 11
     assert expected_v2_identifiers <= result_by_table.keys()
     assert expected_lineage_identifiers <= result_by_table.keys()
     for identifier in (*expected_v2_identifiers, *expected_lineage_identifiers):
@@ -462,7 +461,6 @@ def test_overwrite_failure_does_not_refresh_or_report_snapshot(
     target_v2 = canonical_writer.CANONICAL_V2_MART_LOAD_SPECS[0].identifier
     target_lineage = canonical_writer.CANONICAL_LINEAGE_MART_LOAD_SPECS[0].identifier
     real_overwrite = canonical_writer._overwrite_prepared_load
-    refreshed_calls: list[str] = []
     original_overwrite_calls: list[str] = []
 
     def tracking_overwrite(prepared: object, *, started_at: float) -> object:
@@ -1206,6 +1204,96 @@ def _write_canonical_v2_mart_placeholder_relations(
             "('dividend', 'ENTITY_PLACEHOLDER', DATE '2026-04-15', "
             "'ek-placeholder', 'tushare', 'dividend', 'run-placeholder', "
             "TIMESTAMP '2026-04-15 10:00:00')"
+        )
+
+        # canonical_v2.fact_holding_position + lineage_fact_holding_position
+        connection.execute(
+            """
+            CREATE OR REPLACE TABLE mart_fact_holding_position_v2 (
+                "holding_source" VARCHAR,
+                "holder_id" VARCHAR,
+                "holder_name" VARCHAR,
+                "holder_type" VARCHAR,
+                "security_id" VARCHAR,
+                "report_date" DATE,
+                "announced_date" DATE,
+                "holding_amount" DECIMAL(38, 18),
+                "holding_ratio" DECIMAL(38, 18),
+                "holding_float_ratio" DECIMAL(38, 18),
+                "holding_change" DECIMAL(38, 18),
+                "market_value" DECIMAL(38, 18),
+                "exchange" VARCHAR
+            )
+            """
+        )
+        connection.execute(
+            "INSERT INTO mart_fact_holding_position_v2 VALUES "
+            "('fund_portfolio', 'FUND_PLACEHOLDER', 'Placeholder Fund', 'fund', "
+            "'SEC_PLACEHOLDER', DATE '2026-03-31', DATE '2026-04-15', "
+            "100, 1, 1, NULL, 1000, NULL)"
+        )
+        connection.execute(
+            """
+            CREATE OR REPLACE TABLE mart_lineage_fact_holding_position (
+                "holding_source" VARCHAR,
+                "holder_id" VARCHAR,
+                "security_id" VARCHAR,
+                "report_date" DATE,
+                "source_provider" VARCHAR,
+                "source_interface_id" VARCHAR,
+                "source_run_id" VARCHAR,
+                "raw_loaded_at" TIMESTAMP
+            )
+            """
+        )
+        connection.execute(
+            "INSERT INTO mart_lineage_fact_holding_position VALUES "
+            "('fund_portfolio', 'FUND_PLACEHOLDER', 'SEC_PLACEHOLDER', "
+            "DATE '2026-03-31', 'tushare', 'fund_portfolio', 'run-placeholder', "
+            "TIMESTAMP '2026-04-15 10:00:00')"
+        )
+
+        # canonical_v2.fact_northbound_turnover + lineage_fact_northbound_turnover
+        connection.execute(
+            """
+            CREATE OR REPLACE TABLE mart_fact_northbound_turnover_v2 (
+                "security_id" VARCHAR,
+                "trade_date" DATE,
+                "security_name" VARCHAR,
+                "market_type" VARCHAR,
+                "rank" INTEGER,
+                "close" DECIMAL(38, 18),
+                "change" DECIMAL(38, 18),
+                "amount" DECIMAL(38, 18),
+                "net_amount" DECIMAL(38, 18),
+                "buy_amount" DECIMAL(38, 18),
+                "sell_amount" DECIMAL(38, 18)
+            )
+            """
+        )
+        connection.execute(
+            "INSERT INTO mart_fact_northbound_turnover_v2 VALUES "
+            "('SEC_PLACEHOLDER', DATE '2026-04-15', 'Placeholder Co', '1', "
+            "1, 10, 0.1, 1000, 100, 550, 450)"
+        )
+        connection.execute(
+            """
+            CREATE OR REPLACE TABLE mart_lineage_fact_northbound_turnover (
+                "security_id" VARCHAR,
+                "trade_date" DATE,
+                "market_type" VARCHAR,
+                "rank" INTEGER,
+                "source_provider" VARCHAR,
+                "source_interface_id" VARCHAR,
+                "source_run_id" VARCHAR,
+                "raw_loaded_at" TIMESTAMP
+            )
+            """
+        )
+        connection.execute(
+            "INSERT INTO mart_lineage_fact_northbound_turnover VALUES "
+            "('SEC_PLACEHOLDER', DATE '2026-04-15', '1', 1, 'tushare', "
+            "'hsgt_top10', 'run-placeholder', TIMESTAMP '2026-04-15 10:00:00')"
         )
     finally:
         connection.close()

@@ -36,6 +36,87 @@ models:
         tests:
           - not_null
 
+  - name: mart_lineage_fact_holding_position
+    description: Provider-aware lineage rows joined 1:1 to canonical_v2.fact_holding_position on (holding_source, holder_id, security_id, report_date). Per-row source_interface_id identifies the promoted holdings source.
+    tests:
+      - unique_combination_of_columns:
+          combination_of_columns:
+            - holding_source
+            - holder_id
+            - security_id
+            - report_date
+    columns:
+      - name: holding_source
+        tests:
+          - not_null
+      - name: holder_id
+        tests:
+          - not_null
+      - name: security_id
+        tests:
+          - not_null
+      - name: report_date
+        tests:
+          - not_null
+      - name: source_provider
+        tests:
+          - not_null
+      - name: source_interface_id
+        tests:
+          - not_null
+          - accepted_values:
+              values:
+                - 'top10_holders'
+                - 'top10_floatholders'
+                - 'fund_portfolio'
+                - 'hsgt_hold_top10'
+              quote: true
+      - name: source_run_id
+        tests:
+          - not_null
+      - name: raw_loaded_at
+        tests:
+          - not_null
+
+  - name: mart_lineage_fact_northbound_turnover
+    description: Provider-aware lineage rows joined 1:1 to canonical_v2.fact_northbound_turnover on (security_id, trade_date, market_type, rank). source_interface_id is hsgt_top10.
+    tests:
+      - unique_combination_of_columns:
+          combination_of_columns:
+            - security_id
+            - trade_date
+            - market_type
+            - rank
+    columns:
+      - name: security_id
+        tests:
+          - not_null
+      - name: trade_date
+        tests:
+          - not_null
+      - name: market_type
+        tests:
+          - not_null
+      - name: rank
+        tests:
+          - not_null
+      - name: source_provider
+        tests:
+          - not_null
+      - name: source_interface_id
+        tests:
+          - not_null
+          - accepted_values:
+              values:
+                - 'hsgt_top10'
+              quote: true
+      - name: source_run_id
+        tests:
+          - not_null
+      - name: raw_loaded_at
+        tests:
+          - not_null
+
   - name: mart_lineage_stock_basic
     description: Provider-aware lineage rows joined 1:1 to canonical_v2.stock_basic on security_id. Uses the same int_security_master path as mart_lineage_dim_security; composite source_interface_id reflects multi-source assembly.
     columns:

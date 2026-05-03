@@ -54,6 +54,8 @@ MART_LINEAGE_MODEL_NAMES = [
     "mart_lineage_fact_index_price_bar",
     "mart_lineage_fact_forecast_event",
     "mart_lineage_fact_event",
+    "mart_lineage_fact_holding_position",
+    "mart_lineage_fact_northbound_turnover",
 ]
 
 

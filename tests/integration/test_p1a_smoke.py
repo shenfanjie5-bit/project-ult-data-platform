@@ -28,7 +28,6 @@ EXPECTED_COLUMNS = [
     "market",
     "list_date",
     "is_active",
-    "source_run_id",
     "canonical_loaded_at",
 ]
 
@@ -187,6 +186,7 @@ def _smoke_env(tmp_path: Path, postgres_dsn: str) -> dict[str, str]:
             "DP_ICEBERG_WAREHOUSE_PATH": str(smoke_dir / "warehouse"),
             "DP_DUCKDB_PATH": str(smoke_dir / "data_platform.duckdb"),
             "DP_ICEBERG_CATALOG_NAME": "data_platform_p1a_smoke",
+            "DP_CANONICAL_USE_V2": "1",
             "DP_ENV": "test",
             "DP_SMOKE_P1A_CONFIRM_DESTRUCTIVE": "1",
             "PYTHON": sys.executable,
@@ -207,6 +207,7 @@ def _base_script_env(tmp_path: Path) -> dict[str, str]:
             "DP_ICEBERG_WAREHOUSE_PATH": str(smoke_dir / "warehouse"),
             "DP_DUCKDB_PATH": str(smoke_dir / "data_platform.duckdb"),
             "DP_ICEBERG_CATALOG_NAME": "data_platform_p1a_smoke",
+            "DP_CANONICAL_USE_V2": "1",
             "DP_ENV": "test",
             "PYTHON": sys.executable,
             "PYTHONPATH": str(PROJECT_ROOT / "src"),
@@ -262,10 +263,10 @@ from __future__ import annotations
 import json
 
 from data_platform.serving.catalog import load_catalog
-from data_platform.serving.reader import read_canonical
+from data_platform.serving.reader import get_canonical_stock_basic
 
-catalog_table = load_catalog().load_table("canonical.stock_basic").scan().to_arrow()
-duckdb_table = read_canonical("stock_basic")
+catalog_table = load_catalog().load_table("canonical_v2.stock_basic").scan().to_arrow()
+duckdb_table = get_canonical_stock_basic()
 print(
     json.dumps(
         {

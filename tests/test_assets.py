@@ -33,6 +33,8 @@ EXPECTED_CANONICAL_V2_IDENTIFIERS = [
     "canonical_v2.fact_index_price_bar",
     "canonical_v2.fact_forecast_event",
     "canonical_v2.fact_event",
+    "canonical_v2.fact_holding_position",
+    "canonical_v2.fact_northbound_turnover",
 ]
 EXPECTED_CANONICAL_LINEAGE_IDENTIFIERS = [
     "canonical_lineage.lineage_dim_security",
@@ -44,6 +46,8 @@ EXPECTED_CANONICAL_LINEAGE_IDENTIFIERS = [
     "canonical_lineage.lineage_fact_index_price_bar",
     "canonical_lineage.lineage_fact_forecast_event",
     "canonical_lineage.lineage_fact_event",
+    "canonical_lineage.lineage_fact_holding_position",
+    "canonical_lineage.lineage_fact_northbound_turnover",
 ]
 EXPECTED_CANONICAL_V2_DUCKDB_RELATIONS = [
     "mart_dim_security_v2",
@@ -55,6 +59,8 @@ EXPECTED_CANONICAL_V2_DUCKDB_RELATIONS = [
     "mart_fact_index_price_bar_v2",
     "mart_fact_forecast_event_v2",
     "mart_fact_event_v2",
+    "mart_fact_holding_position_v2",
+    "mart_fact_northbound_turnover_v2",
 ]
 EXPECTED_CANONICAL_LINEAGE_DUCKDB_RELATIONS = [
     "mart_lineage_dim_security",
@@ -66,6 +72,8 @@ EXPECTED_CANONICAL_LINEAGE_DUCKDB_RELATIONS = [
     "mart_lineage_fact_index_price_bar",
     "mart_lineage_fact_forecast_event",
     "mart_lineage_fact_event",
+    "mart_lineage_fact_holding_position",
+    "mart_lineage_fact_northbound_turnover",
 ]
 EXPECTED_CANONICAL_V2_MART_DBT_KEYS = {
     ("dbt", relation)

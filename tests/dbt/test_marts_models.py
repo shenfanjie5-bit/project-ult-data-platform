@@ -485,6 +485,16 @@ def test_holdings_marts_preserve_promoted_holdings_fixtures(tmp_path: Path) -> N
         _create_all_staging_views(connection, raw_zone_path)
         _create_mart_table(connection, "mart_fact_holding_position_v2", MARTS_V2_DIR)
         _create_mart_table(connection, "mart_fact_northbound_turnover_v2", MARTS_V2_DIR)
+        _create_mart_table(
+            connection,
+            "mart_lineage_fact_holding_position",
+            MARTS_LINEAGE_DIR,
+        )
+        _create_mart_table(
+            connection,
+            "mart_lineage_fact_northbound_turnover",
+            MARTS_LINEAGE_DIR,
+        )
 
         holding_sources = {
             row[0]
@@ -512,6 +522,21 @@ def test_holdings_marts_preserve_promoted_holdings_fixtures(tmp_path: Path) -> N
             from mart_fact_northbound_turnover_v2
             """
         ).fetchone()
+        holding_lineage_sources = {
+            row[0]
+            for row in connection.execute(
+                """
+                select distinct source_interface_id
+                from mart_lineage_fact_holding_position
+                """
+            ).fetchall()
+        }
+        northbound_lineage_row = connection.execute(
+            """
+            select security_id, trade_date, market_type, rank, source_interface_id
+            from mart_lineage_fact_northbound_turnover
+            """
+        ).fetchone()
     finally:
         connection.close()
 
@@ -523,6 +548,19 @@ def test_holdings_marts_preserve_promoted_holdings_fixtures(tmp_path: Path) -> N
     }
     assert holding_duplicate_count == 0
     assert northbound_row == ("000001.SZ", date(2026, 4, 15), "market_type-fixture", 1)
+    assert holding_lineage_sources == {
+        "top10_holders",
+        "top10_floatholders",
+        "fund_portfolio",
+        "hsgt_hold_top10",
+    }
+    assert northbound_lineage_row == (
+        "000001.SZ",
+        date(2026, 4, 15),
+        "market_type-fixture",
+        1,
+        "hsgt_top10",
+    )
 
 
 def test_dbt_run_and_test_marts_with_rawwriter_fixture(tmp_path: Path) -> None:

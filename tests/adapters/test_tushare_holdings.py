@@ -109,7 +109,10 @@ class FakeTushareHoldingsClient:
 
     def _record_call(self, method_name: str, kwargs: dict[str, Any]) -> Any:
         self.calls.append((method_name, kwargs))
-        return self.frames_by_method[method_name]
+        frame = self.frames_by_method[method_name]
+        if callable(frame):
+            return frame(**kwargs)
+        return frame
 
 
 @pytest.fixture
@@ -210,11 +213,61 @@ def test_fetch_holdings_asset_returns_declared_schema(asset: Any) -> None:
     table = adapter.fetch(asset.name, params)
 
     expected_params = {**params, "fields": _fields_csv(asset)}
+    if asset.dataset == "fund_portfolio":
+        expected_params = {
+            **expected_params,
+            "limit": tushare_adapter_module.FUND_PORTFOLIO_PAGE_LIMIT,
+            "offset": 0,
+        }
     assert isinstance(table, pa.Table)
     assert table.schema == asset.schema
     assert table.num_rows == 2
     assert table.column_names == asset.schema.names
     assert client.calls == [(METHOD_BY_DATASET[asset.dataset], expected_params)]
+
+
+def test_fetch_fund_portfolio_pages_until_short_page(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    asset = TUSHARE_FUND_PORTFOLIO_ASSET
+    rows = [
+        _holdings_row(asset, index=index, partition_date="20240331")
+        for index in range(5)
+    ]
+    for index, row in enumerate(rows):
+        row["symbol"] = f"{index:06d}.SZ"
+
+    def fetch_page(**kwargs: Any) -> Any:
+        offset = kwargs["offset"]
+        limit = kwargs["limit"]
+        return pd.DataFrame(rows[offset : offset + limit])
+
+    monkeypatch.setattr(tushare_adapter_module, "FUND_PORTFOLIO_PAGE_LIMIT", 2)
+    client = _client_for_asset(asset, fetch_page)
+    adapter = TushareAdapter(token="test-token", client=client)
+
+    table = adapter.fetch(asset.name, {"ts_code": "001753.OF", "period": "20240331"})
+
+    assert table.num_rows == 5
+    assert table.column("symbol").to_pylist() == [f"{index:06d}.SZ" for index in range(5)]
+    assert [call[1]["offset"] for call in client.calls] == [0, 2, 4]
+    assert [call[1]["limit"] for call in client.calls] == [2, 2, 2]
+
+
+def test_fetch_fund_portfolio_rejects_non_advancing_pagination(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    asset = TUSHARE_FUND_PORTFOLIO_ASSET
+    repeated_page = _holdings_frame(asset, 2, partition_date="20240331")
+
+    monkeypatch.setattr(tushare_adapter_module, "FUND_PORTFOLIO_PAGE_LIMIT", 2)
+    client = _client_for_asset(asset, repeated_page)
+    adapter = TushareAdapter(token="test-token", client=client)
+
+    with pytest.raises(tushare_adapter_module.AdapterFetchError, match="did not advance"):
+        adapter.fetch(asset.name, {"ts_code": "001753.OF", "period": "20240331"})
+
+    assert [call[1]["offset"] for call in client.calls] == [0, 2]
 
 
 @pytest.mark.parametrize("asset", HOLDINGS_ASSETS, ids=lambda asset: asset.name)
@@ -247,7 +300,14 @@ def test_cli_writes_holdings_raw_artifact_and_manifest(
     assert artifact_entry["dataset"] == asset.dataset
     assert artifact_entry["row_count"] == 3
     assert uuid.UUID(artifact_entry["run_id"]).version == 4
-    assert client.calls == [(METHOD_BY_DATASET[asset.dataset], _raw_partition_call_params(asset))]
+    expected_call_params = _raw_partition_call_params(asset)
+    if asset.dataset == "fund_portfolio":
+        expected_call_params = {
+            **expected_call_params,
+            "limit": tushare_adapter_module.FUND_PORTFOLIO_PAGE_LIMIT,
+            "offset": 0,
+        }
+    assert client.calls == [(METHOD_BY_DATASET[asset.dataset], expected_call_params)]
 
 
 def test_live_tushare_holdings_smoke_requires_token() -> None:

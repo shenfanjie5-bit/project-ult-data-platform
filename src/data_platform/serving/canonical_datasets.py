@@ -110,6 +110,11 @@ CANONICAL_DATASET_TABLE_MAPPINGS_V2: Final[tuple[CanonicalDatasetTable, ...]] = 
     CanonicalDatasetTable("event_timeline", "canonical_v2.fact_event"),
     CanonicalDatasetTable("financial_indicator", "canonical_v2.fact_financial_indicator"),
     CanonicalDatasetTable("financial_forecast_event", "canonical_v2.fact_forecast_event"),
+    CanonicalDatasetTable("holding_position", "canonical_v2.fact_holding_position"),
+    CanonicalDatasetTable(
+        "northbound_turnover_daily",
+        "canonical_v2.fact_northbound_turnover",
+    ),
 )
 
 # Per-dataset canonical alias column. Used by reader callers that need to
@@ -138,6 +143,8 @@ _V2_ALIAS_COLUMN: Final[dict[str, str]] = {
     "event_timeline": "entity_id",
     "financial_indicator": "security_id",
     "financial_forecast_event": "security_id",
+    "holding_position": "security_id",
+    "northbound_turnover_daily": "security_id",
 }
 
 USE_CANONICAL_V2_ENV_VAR: Final[str] = "DP_CANONICAL_USE_V2"
@@ -228,10 +235,10 @@ def canonical_alias_column_for_dataset(dataset_id: str) -> str:
     returns the provider-shaped legacy name (`ts_code`/`index_code`).
     """
 
-    if dataset_id not in _LEGACY_ALIAS_COLUMN:
-        raise UnsupportedCanonicalDataset(dataset_id)
     if use_canonical_v2() and dataset_id in _V2_ALIAS_COLUMN:
         return _V2_ALIAS_COLUMN[dataset_id]
+    if dataset_id not in _LEGACY_ALIAS_COLUMN:
+        raise UnsupportedCanonicalDataset(dataset_id)
     return _LEGACY_ALIAS_COLUMN[dataset_id]
 
 

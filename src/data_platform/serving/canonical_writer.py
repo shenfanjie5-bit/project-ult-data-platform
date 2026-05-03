@@ -8,6 +8,7 @@ from dataclasses import asdict, dataclass
 from datetime import UTC, datetime
 import json
 import logging
+import os
 from pathlib import Path
 import re
 import sys
@@ -28,6 +29,7 @@ from data_platform.serving.catalog import load_catalog
 logger = logging.getLogger(__name__)
 
 TABLE_V2_MARTS = "v2_marts"
+TABLE_STOCK_BASIC = "stock_basic"
 CANONICAL_LOADED_AT_COLUMN = "canonical_loaded_at"
 CANONICAL_MART_SNAPSHOT_SET_FILE = "_mart_snapshot_set.json"
 FORBIDDEN_PAYLOAD_FIELDS = frozenset(
@@ -155,11 +157,12 @@ def _validate_identifier(identifier: str) -> None:
 # (security_id / index_id / entity_id) instead of provider-shaped names;
 # raw-zone lineage columns move to the matching canonical_lineage spec.
 #
-# Coverage: 9 paired specs covering all canonical mart tables — dim_security,
+# Coverage: 11 paired specs covering all canonical mart tables — dim_security,
 # stock_basic, dim_index, fact_price_bar, fact_financial_indicator,
-# fact_market_daily_feature, fact_index_price_bar, fact_forecast_event, and
-# fact_event. fact_event currently covers 8 source interfaces after M1.8
-# block_trade promotion; the 8 unstaged candidates remain blocked upstream.
+# fact_market_daily_feature, fact_index_price_bar, fact_forecast_event,
+# fact_event, fact_holding_position, and fact_northbound_turnover. fact_event
+# currently covers 8 source interfaces after M1.8 block_trade promotion; the
+# 8 unstaged candidates remain blocked upstream.
 #
 # Per M1-A design + M1-B spike + M1.3 second batch + M1.6 event promotion.
 # ---------------------------------------------------------------------------
@@ -517,6 +520,80 @@ CANONICAL_LINEAGE_FACT_EVENT_LOAD_SPEC: Final[CanonicalLoadSpec] = CanonicalLoad
     ),
 )
 
+CANONICAL_V2_FACT_HOLDING_POSITION_LOAD_SPEC: Final[CanonicalLoadSpec] = CanonicalLoadSpec(
+    identifier="canonical_v2.fact_holding_position",
+    duckdb_relation="mart_fact_holding_position_v2",
+    required_columns=(
+        "holding_source",
+        "holder_id",
+        "holder_name",
+        "holder_type",
+        "security_id",
+        "report_date",
+        "announced_date",
+        "holding_amount",
+        "holding_ratio",
+        "holding_float_ratio",
+        "holding_change",
+        "market_value",
+        "exchange",
+    ),
+)
+
+CANONICAL_LINEAGE_FACT_HOLDING_POSITION_LOAD_SPEC: Final[CanonicalLoadSpec] = (
+    CanonicalLoadSpec(
+        identifier="canonical_lineage.lineage_fact_holding_position",
+        duckdb_relation="mart_lineage_fact_holding_position",
+        required_columns=(
+            "holding_source",
+            "holder_id",
+            "security_id",
+            "report_date",
+            "source_provider",
+            "source_interface_id",
+            "source_run_id",
+            "raw_loaded_at",
+        ),
+    )
+)
+
+CANONICAL_V2_FACT_NORTHBOUND_TURNOVER_LOAD_SPEC: Final[CanonicalLoadSpec] = (
+    CanonicalLoadSpec(
+        identifier="canonical_v2.fact_northbound_turnover",
+        duckdb_relation="mart_fact_northbound_turnover_v2",
+        required_columns=(
+            "security_id",
+            "trade_date",
+            "security_name",
+            "market_type",
+            "rank",
+            "close",
+            "change",
+            "amount",
+            "net_amount",
+            "buy_amount",
+            "sell_amount",
+        ),
+    )
+)
+
+CANONICAL_LINEAGE_FACT_NORTHBOUND_TURNOVER_LOAD_SPEC: Final[CanonicalLoadSpec] = (
+    CanonicalLoadSpec(
+        identifier="canonical_lineage.lineage_fact_northbound_turnover",
+        duckdb_relation="mart_lineage_fact_northbound_turnover",
+        required_columns=(
+            "security_id",
+            "trade_date",
+            "market_type",
+            "rank",
+            "source_provider",
+            "source_interface_id",
+            "source_run_id",
+            "raw_loaded_at",
+        ),
+    )
+)
+
 CANONICAL_V2_MART_LOAD_SPECS: Final[tuple[CanonicalLoadSpec, ...]] = (
     CANONICAL_V2_DIM_SECURITY_LOAD_SPEC,
     CANONICAL_V2_STOCK_BASIC_LOAD_SPEC,
@@ -527,6 +604,8 @@ CANONICAL_V2_MART_LOAD_SPECS: Final[tuple[CanonicalLoadSpec, ...]] = (
     CANONICAL_V2_FACT_INDEX_PRICE_BAR_LOAD_SPEC,
     CANONICAL_V2_FACT_FORECAST_EVENT_LOAD_SPEC,
     CANONICAL_V2_FACT_EVENT_LOAD_SPEC,
+    CANONICAL_V2_FACT_HOLDING_POSITION_LOAD_SPEC,
+    CANONICAL_V2_FACT_NORTHBOUND_TURNOVER_LOAD_SPEC,
 )
 
 CANONICAL_LINEAGE_MART_LOAD_SPECS: Final[tuple[CanonicalLoadSpec, ...]] = (
@@ -539,6 +618,8 @@ CANONICAL_LINEAGE_MART_LOAD_SPECS: Final[tuple[CanonicalLoadSpec, ...]] = (
     CANONICAL_LINEAGE_FACT_INDEX_PRICE_BAR_LOAD_SPEC,
     CANONICAL_LINEAGE_FACT_FORECAST_EVENT_LOAD_SPEC,
     CANONICAL_LINEAGE_FACT_EVENT_LOAD_SPEC,
+    CANONICAL_LINEAGE_FACT_HOLDING_POSITION_LOAD_SPEC,
+    CANONICAL_LINEAGE_FACT_NORTHBOUND_TURNOVER_LOAD_SPEC,
 )
 
 # Canonical PK columns per (v2, lineage) load-spec pair. The pairing validator
@@ -566,6 +647,18 @@ CANONICAL_V2_PAIRING_KEY_COLUMNS: Final[dict[str, tuple[str, ...]]] = {
         "entity_id",
         "event_date",
         "event_key",
+    ),
+    "canonical_v2.fact_holding_position": (
+        "holding_source",
+        "holder_id",
+        "security_id",
+        "report_date",
+    ),
+    "canonical_v2.fact_northbound_turnover": (
+        "security_id",
+        "trade_date",
+        "market_type",
+        "rank",
     ),
 }
 
@@ -674,9 +767,10 @@ def load_canonical_v2_marts(
     writes both sets in lock-step inside one Python frame so the
     `_mart_snapshot_set.json` v2 sidecar pins them as a co-published pair.
 
-    Coverage: 9 paired specs — dim_security, stock_basic, dim_index,
+    Coverage: 11 paired specs — dim_security, stock_basic, dim_index,
     fact_price_bar, fact_financial_indicator, fact_market_daily_feature,
-    fact_index_price_bar, fact_forecast_event, and fact_event. The pairing-key validator
+    fact_index_price_bar, fact_forecast_event, fact_event, fact_holding_position,
+    and fact_northbound_turnover. The pairing-key validator
     (`_validate_canonical_v2_mart_pairings`) enforces 1:1 row matching on the
     composite PK declared in `CANONICAL_V2_PAIRING_KEY_COLUMNS`.
     """
@@ -766,6 +860,83 @@ def load_canonical_v2_marts(
         _rollback_attempted_overwrites(attempted_overwrites, original_snapshot_ids)
         raise
     return results
+
+
+def load_canonical_v2_stock_basic_smoke(
+    catalog: SqlCatalog,
+    duckdb_path: Path,
+    *,
+    allow_empty: bool = False,
+) -> list[WriteResult]:
+    """Publish the stock_basic v2/lineage pair for the destructive P1a smoke.
+
+    The public canonical_v2 serving path is `load_canonical_v2_marts`. This
+    narrower path exists only for the isolated smoke database, where the fixture
+    seeds stock_basic and its immediate dbt dependencies instead of every mart
+    input family.
+    """
+
+    paired_canonical_loaded_at = datetime.now(UTC).replace(tzinfo=None)
+    prepared_v2 = _prepare_canonical_load(
+        catalog,
+        duckdb_path,
+        CANONICAL_V2_STOCK_BASIC_LOAD_SPEC,
+        allow_empty=allow_empty,
+        canonical_loaded_at=paired_canonical_loaded_at,
+    )
+    prepared_lineage = _prepare_canonical_load(
+        catalog,
+        duckdb_path,
+        CANONICAL_LINEAGE_STOCK_BASIC_LOAD_SPEC,
+        allow_empty=allow_empty,
+        canonical_loaded_at=paired_canonical_loaded_at,
+    )
+    prepared_loads = (prepared_v2, prepared_lineage)
+    _validate_canonical_v2_mart_pairings([prepared_v2], [prepared_lineage])
+
+    load_id = str(uuid4())
+    original_snapshot_ids = {
+        prepared.spec.identifier: _current_snapshot_id_or_none(prepared.table)
+        for prepared in prepared_loads
+    }
+    attempted_overwrites: list[_PreparedCanonicalLoad] = []
+    try:
+        attempted_overwrites.append(prepared_v2)
+        v2_result, v2_refreshed = _overwrite_prepared_load(
+            prepared_v2,
+            started_at=perf_counter(),
+        )
+        attempted_overwrites.append(prepared_lineage)
+        lineage_result, lineage_refreshed = _overwrite_prepared_load(
+            prepared_lineage,
+            started_at=perf_counter(),
+        )
+        _write_canonical_v2_snapshot_set_manifest(
+            prepared_v2.table,
+            load_id=load_id,
+            canonical_v2_tables={
+                _table_name_from_identifier(v2_result.table): {
+                    "identifier": v2_result.table,
+                    "snapshot_id": v2_result.snapshot_id,
+                    "metadata_location": str(
+                        _local_path_from_location(v2_refreshed.metadata_location)
+                    ),
+                }
+            },
+            canonical_lineage_tables={
+                _table_name_from_identifier(lineage_result.table): {
+                    "identifier": lineage_result.table,
+                    "snapshot_id": lineage_result.snapshot_id,
+                    "metadata_location": str(
+                        _local_path_from_location(lineage_refreshed.metadata_location)
+                    ),
+                }
+            },
+        )
+    except Exception:
+        _rollback_attempted_overwrites(attempted_overwrites, original_snapshot_ids)
+        raise
+    return [v2_result, lineage_result]
 
 
 def _validate_canonical_v2_mart_pairings(
@@ -1032,6 +1203,13 @@ def main(argv: Sequence[str] | None = None) -> int:
                 get_settings().duckdb_path,
                 allow_empty=args.allow_empty,
             )
+        elif args.table == TABLE_STOCK_BASIC:
+            _require_test_env_for_stock_basic_smoke()
+            result = load_canonical_v2_stock_basic_smoke(
+                load_catalog(),
+                get_settings().duckdb_path,
+                allow_empty=args.allow_empty,
+            )
         else:
             msg = f"unsupported canonical table: {args.table}"
             raise ValueError(msg)
@@ -1042,6 +1220,16 @@ def main(argv: Sequence[str] | None = None) -> int:
 
     print(json.dumps(_serialize_result(result), sort_keys=True))
     return 0
+
+
+def _require_test_env_for_stock_basic_smoke() -> None:
+    if os.environ.get("DP_ENV") == "test":
+        return
+    msg = (
+        "stock_basic single-table publication is restricted to DP_ENV=test "
+        "P1a smoke runs; use --table v2_marts for canonical_v2 publication"
+    )
+    raise ValueError(msg)
 
 
 def _read_duckdb_relation(
@@ -1195,8 +1383,10 @@ __all__ = [
     "CANONICAL_LINEAGE_FACT_EVENT_LOAD_SPEC",
     "CANONICAL_LINEAGE_FACT_FINANCIAL_INDICATOR_LOAD_SPEC",
     "CANONICAL_LINEAGE_FACT_FORECAST_EVENT_LOAD_SPEC",
+    "CANONICAL_LINEAGE_FACT_HOLDING_POSITION_LOAD_SPEC",
     "CANONICAL_LINEAGE_FACT_INDEX_PRICE_BAR_LOAD_SPEC",
     "CANONICAL_LINEAGE_FACT_MARKET_DAILY_FEATURE_LOAD_SPEC",
+    "CANONICAL_LINEAGE_FACT_NORTHBOUND_TURNOVER_LOAD_SPEC",
     "CANONICAL_LINEAGE_FACT_PRICE_BAR_LOAD_SPEC",
     "CANONICAL_LINEAGE_MART_LOAD_SPECS",
     "CANONICAL_LINEAGE_STOCK_BASIC_LOAD_SPEC",
@@ -1206,8 +1396,10 @@ __all__ = [
     "CANONICAL_V2_FACT_EVENT_LOAD_SPEC",
     "CANONICAL_V2_FACT_FINANCIAL_INDICATOR_LOAD_SPEC",
     "CANONICAL_V2_FACT_FORECAST_EVENT_LOAD_SPEC",
+    "CANONICAL_V2_FACT_HOLDING_POSITION_LOAD_SPEC",
     "CANONICAL_V2_FACT_INDEX_PRICE_BAR_LOAD_SPEC",
     "CANONICAL_V2_FACT_MARKET_DAILY_FEATURE_LOAD_SPEC",
+    "CANONICAL_V2_FACT_NORTHBOUND_TURNOVER_LOAD_SPEC",
     "CANONICAL_V2_FACT_PRICE_BAR_LOAD_SPEC",
     "CANONICAL_V2_MART_LOAD_SPECS",
     "CANONICAL_V2_PAIRING_KEY_COLUMNS",
@@ -1215,6 +1407,7 @@ __all__ = [
     "CanonicalLoadSpec",
     "WriteResult",
     "load_canonical_table",
+    "load_canonical_v2_stock_basic_smoke",
     "load_canonical_v2_marts",
     "main",
 ]
