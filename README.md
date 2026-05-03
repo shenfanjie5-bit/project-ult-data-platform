@@ -30,13 +30,25 @@ Already present and relevant to the next roadmap:
 
 Known planning constraints:
 
-- Holdings intake now promotes `top10_holders`, `top10_floatholders`,
-  `fund_portfolio`, `hsgt_top10`, and `hsgt_hold_top10` through
-  data-platform Raw/staging/mart paths. `hsgt_hold_top10` is the
-  data-platform dataset name over Tushare's official `hk_hold` API.
-  `top10_holders` and `top10_floatholders` require explicit `ts_code`
-  scope for live/raw fetches; set `DP_TUSHARE_TOP10_TS_CODES` for
-  daily refresh or pass `--ts-code` to the raw asset CLI.
+- Holdings #96 promotes the Tushare interfaces `top10_holders`,
+  `top10_floatholders`, `fund_portfolio`, `hsgt_top10`, and
+  `hsgt_hold_top10` through data-platform Raw/staging/mart paths.
+  `hsgt_hold_top10` is the data-platform dataset name over Tushare's
+  official `hk_hold` API.
+- `top10_holders` and `top10_floatholders` require explicit `ts_code`
+  scope for live/raw fetches. Use repeated raw CLI `--ts-code` flags for
+  bounded fetches, or set `DP_TUSHARE_TOP10_TS_CODES` for daily refresh.
+- `hk_hold` / `hsgt_hold_top10` handles Tushare's row cap by splitting
+  unscoped calls across `SH` and `SZ`, then paginating each exchange with
+  `limit` / `offset`.
+- The provider-neutral `holding_position` mart identity includes
+  `announced_date`: `(holding_source, holder_id, security_id, report_date,
+  announced_date)`.
+- Graph boundary: data-platform provides Phase 1 read adapters, the queue,
+  and canonical intake surfaces only. Graph promotion write-back and graph
+  snapshot computation are graph-engine-owned.
+- Live holdings smoke stays blocked unless both `DP_TUSHARE_TOKEN` and
+  `DP_TUSHARE_LIVE_HOLDINGS_SMOKE=1` are present.
 - The P1a positive PostgreSQL evidence is still required: `make smoke-p1a`
   and the Iceberg write-chain spike must run against a real PG DSN without
   skipping before broader canonical/Iceberg production claims.
