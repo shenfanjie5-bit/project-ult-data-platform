@@ -45,7 +45,7 @@ def test_tushare_provider_catalog_is_normalized_and_available() -> None:
     doc_apis = [item.doc_api for item in catalog]
     interface_ids = [item.source_interface_id for item in catalog]
 
-    assert len(catalog) == 138
+    assert len(catalog) == 142
     assert len(interface_ids) == len(set(interface_ids))
     duplicate_doc_apis = sorted(
         doc_api for doc_api, count in Counter(doc_apis).items() if count > 1
@@ -57,7 +57,14 @@ def test_tushare_provider_catalog_is_normalized_and_available() -> None:
     assert {"daily", "stock_basic", "trade_cal", "margin", "index_dailybasic"}.issubset(
         set(doc_apis)
     )
-    assert "top10_floatholders" not in set(doc_apis)
+    assert {
+        "top10_holders",
+        "top10_floatholders",
+        "fund_portfolio",
+        "hsgt_top10",
+        "hk_hold",
+    }.issubset(set(doc_apis))
+    assert "hsgt_hold_top10" in set(interface_ids)
 
 
 def test_committed_catalog_does_not_persist_local_paths_or_secrets() -> None:
@@ -75,14 +82,16 @@ def test_committed_catalog_does_not_persist_local_paths_or_secrets() -> None:
 
 
 def test_existing_typed_tushare_assets_have_mapping_or_explicit_legacy_status() -> None:
-    mapped_doc_apis = {(mapping.provider, mapping.doc_api): mapping for mapping in PROVIDER_MAPPINGS}
     catalog_interface_ids = {
         (item.provider, item.source_interface_id) for item in load_tushare_provider_catalog()
     }
 
     missing = []
     for asset in TUSHARE_ASSETS:
-        mapping = mapped_doc_apis.get(("tushare", asset.dataset))
+        mapping = mapping_for_source_interface_id(
+            "tushare",
+            str(asset.metadata["source_interface_id"]),
+        )
         if mapping is None:
             missing.append(asset.dataset)
             continue
@@ -120,6 +129,14 @@ def test_generic_unpromoted_interfaces_do_not_gain_business_mapping() -> None:
     assert mapping_for_provider_interface("tushare", "fund_nav") is None
     assert mapping_for_provider_interface("tushare", "repo_daily") is None
     assert mapping_for_provider_interface("tushare", "daily").canonical_dataset == "price_bar"  # type: ignore[union-attr]
+    assert (
+        mapping_for_provider_interface("tushare", "top10_floatholders").canonical_dataset  # type: ignore[union-attr]
+        == "holding_position"
+    )
+    assert (
+        mapping_for_source_interface_id("tushare", "hsgt_hold_top10").doc_api  # type: ignore[union-attr]
+        == "hk_hold"
+    )
 
     with pytest.raises(AmbiguousProviderInterface):
         mapping_for_provider_interface("tushare", "trade_cal")
@@ -154,15 +171,16 @@ def test_tushare_interface_registry_keeps_inventory_out_of_production_fetch() ->
         if entry.source_interface_id in catalog_interface_ids and not entry.production_selectable
     ]
 
-    assert len(TUSHARE_INTERFACE_REGISTRY) == 148
+    assert len(TUSHARE_INTERFACE_REGISTRY) == 152
     assert {entry.source_interface_id for entry in TUSHARE_INTERFACE_REGISTRY.values()} == set(
         TUSHARE_INTERFACE_REGISTRY
     )
-    assert len(production_entries) == len(TUSHARE_ASSETS) == 36
+    assert len(production_entries) == len(TUSHARE_ASSETS) == 41
     assert {entry.raw_dataset for entry in production_entries} == typed_raw_datasets
     assert all(entry.enabled for entry in production_entries)
     assert all(entry.fetch_support == "typed" for entry in production_entries)
     assert all(entry.dbt_support for entry in production_entries)
+    assert all(entry.canonical_table is not None for entry in production_entries)
     assert all(not entry.enabled for entry in inventory_only_catalog_entries)
     assert all(entry.fetch_support == "inventory_only" for entry in inventory_only_catalog_entries)
     assert all(not entry.dbt_support for entry in inventory_only_catalog_entries)
@@ -186,6 +204,68 @@ def test_tushare_interface_registry_distinguishes_stock_and_futures_trade_cal() 
     assert futures_entry.fetch_support == "inventory_only"
 
 
+def test_holdings_registry_points_to_canonical_v2_serving_tables() -> None:
+    assert TUSHARE_INTERFACE_REGISTRY["top10_holders"].canonical_table == (
+        "canonical_v2.fact_holding_position"
+    )
+    assert TUSHARE_INTERFACE_REGISTRY["top10_floatholders"].canonical_table == (
+        "canonical_v2.fact_holding_position"
+    )
+    assert TUSHARE_INTERFACE_REGISTRY["fund_portfolio"].canonical_table == (
+        "canonical_v2.fact_holding_position"
+    )
+    assert TUSHARE_INTERFACE_REGISTRY["hsgt_hold_top10"].canonical_table == (
+        "canonical_v2.fact_holding_position"
+    )
+    assert TUSHARE_INTERFACE_REGISTRY["hsgt_top10"].canonical_table == (
+        "canonical_v2.fact_northbound_turnover"
+    )
+
+
+def test_hk_hold_catalog_policy_does_not_claim_post_cutoff_daily_freshness() -> None:
+    mapping = mapping_for_source_interface_id("tushare", "hsgt_hold_top10")
+    assert mapping is not None
+
+    assert "2024-08-20" in mapping.date_policy
+    assert "stopped" in mapping.date_policy
+    assert mapping.update_policy == (
+        "daily through 2024-08-20; quarterly northbound disclosure thereafter "
+        "with late corrections"
+    )
+    assert TUSHARE_INTERFACE_REGISTRY["hsgt_hold_top10"].refresh_policy == (
+        "daily through 2024-08-20; quarterly northbound disclosure thereafter "
+        "with late corrections"
+    )
+
+
+def test_holding_position_catalog_uses_v2_announced_date_identity() -> None:
+    canonical = CANONICAL_DATASETS["holding_position"]
+
+    assert canonical.primary_key == (
+        "holding_source",
+        "holder_id",
+        "security_id",
+        "report_date",
+        "announced_date",
+    )
+    assert "announced_date" in {field.name for field in canonical.fields}
+
+    expected_announced_date_sources = {
+        "top10_holders": "ann_date",
+        "top10_floatholders": "ann_date",
+        "fund_portfolio": "ann_date",
+        "hsgt_hold_top10": "trade_date",
+    }
+    for source_interface_id, expected_source_field in expected_announced_date_sources.items():
+        mapping = mapping_for_source_interface_id("tushare", source_interface_id)
+        assert mapping is not None
+        sources_by_canonical_field = {
+            canonical_field: source_field
+            for source_field, canonical_field in mapping.field_mapping
+        }
+        assert sources_by_canonical_field["announced_date"] == expected_source_field
+
+
 def test_block_trade_uses_full_row_shape_identity_contract() -> None:
     """block_trade has no immutable execution id; identity is provider row shape."""
 
@@ -204,7 +284,7 @@ def test_catalog_summary_supports_dual_provider_readiness_evidence() -> None:
     summary = catalog_summary()
 
     assert summary["provider"] == "tushare"
-    assert summary["provider_interface_count"] == 138
+    assert summary["provider_interface_count"] == 142
     assert summary["promoted_mapping_count"] == len(PROVIDER_MAPPINGS)
     assert summary["promotion_candidate_count"] == len(PROMOTION_CANDIDATE_MAPPINGS)
     assert summary["canonical_dataset_count"] == len(CANONICAL_DATASETS)

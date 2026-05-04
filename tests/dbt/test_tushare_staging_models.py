@@ -176,6 +176,31 @@ HM_DETAIL_NUMERIC_FIELD_NAMES = {
     "sell_amount",
     "net_amount",
 }
+TOP10_HOLDERS_NUMERIC_FIELD_NAMES = {
+    "hold_amount",
+    "hold_ratio",
+    "hold_float_ratio",
+    "hold_change",
+}
+FUND_PORTFOLIO_NUMERIC_FIELD_NAMES = {
+    "mkv",
+    "amount",
+    "stk_mkv_ratio",
+    "stk_float_ratio",
+}
+HSGT_TOP10_NUMERIC_FIELD_NAMES = {
+    "close",
+    "change",
+    "rank",
+    "amount",
+    "net_amount",
+    "buy",
+    "sell",
+}
+HSGT_HOLD_TOP10_NUMERIC_FIELD_NAMES = {
+    "vol",
+    "ratio",
+}
 FIXTURE_DECIMAL_STRING = "1.123456789012345678"
 
 
@@ -397,6 +422,100 @@ def test_partitioned_staging_keeps_latest_artifact_per_partition(
     assert rows == [
         ("000001.SZ", date(2026, 4, 14), first_partition_latest.run_id),
         ("000002.SZ", date(2026, 4, 15), second_partition.run_id),
+    ]
+
+
+@pytest.mark.parametrize("dataset", ("top10_holders", "top10_floatholders"))
+def test_request_scoped_top10_staging_keeps_latest_artifact_per_symbol(
+    tmp_path: Path,
+    dataset: str,
+) -> None:
+    duckdb = pytest.importorskip("duckdb")
+
+    raw_zone_path = tmp_path / "raw"
+    writer = RawWriter(
+        raw_zone_path=raw_zone_path,
+        iceberg_warehouse_path=tmp_path / "iceberg" / "warehouse",
+    )
+    asset = _asset_by_dataset(dataset)
+    partition_date = date(2026, 3, 31)
+    request_a = {
+        "period": "20260331",
+        "ts_code": "000001.SZ",
+        "fields": ",".join(asset.schema.names),
+    }
+    request_b = {
+        "period": "20260331",
+        "ts_code": "600519.SH",
+        "fields": ",".join(asset.schema.names),
+    }
+
+    writer.write_arrow(
+        "tushare",
+        dataset,
+        partition_date,
+        str(uuid4()),
+        _sample_table_with_values(
+            asset,
+            {
+                "ts_code": "000001.SZ",
+                "end_date": "20260331",
+                "ann_date": "20260430",
+                "holder_name": "OLD_SCOPE_A",
+            },
+        ),
+        request_params=request_a,
+    )
+    latest_a = writer.write_arrow(
+        "tushare",
+        dataset,
+        partition_date,
+        str(uuid4()),
+        _sample_table_with_values(
+            asset,
+            {
+                "ts_code": "000001.SZ",
+                "end_date": "20260331",
+                "ann_date": "20260430",
+                "holder_name": "LATEST_SCOPE_A",
+            },
+        ),
+        request_params=request_a,
+    )
+    latest_b = writer.write_arrow(
+        "tushare",
+        dataset,
+        partition_date,
+        str(uuid4()),
+        _sample_table_with_values(
+            asset,
+            {
+                "ts_code": "600519.SH",
+                "end_date": "20260331",
+                "ann_date": "20260430",
+                "holder_name": "LATEST_SCOPE_B",
+            },
+        ),
+        request_params=request_b,
+    )
+
+    model_sql = _render_staging_model(f"stg_{dataset}", raw_zone_path)
+    connection = duckdb.connect(":memory:")
+    try:
+        connection.execute(f'create view "stg_{dataset}" as {model_sql}')
+        rows = connection.execute(
+            f"""
+            select ts_code, end_date, holder_name, source_run_id
+            from "stg_{dataset}"
+            order by ts_code
+            """
+        ).fetchall()
+    finally:
+        connection.close()
+
+    assert rows == [
+        ("000001.SZ", partition_date, "LATEST_SCOPE_A", latest_a.run_id),
+        ("600519.SH", partition_date, "LATEST_SCOPE_B", latest_b.run_id),
     ]
 
 
@@ -663,6 +782,8 @@ def _sample_value(dataset: str, field: pa.Field) -> str | Decimal | None:
     if field.name == "ts_code":
         # index_basic ts_code must match index_member index_code for
         # referential integrity (relationship test checks this FK).
+        if dataset == "fund_portfolio":
+            return "001753.OF"
         if dataset in {"index_basic", "index_daily"}:
             return "000300.SH"
         return "000001.SZ"
@@ -671,10 +792,14 @@ def _sample_value(dataset: str, field: pa.Field) -> str | Decimal | None:
     if field.name == "con_code":
         return "000001.SZ"
     if field.name == "symbol":
+        if dataset == "fund_portfolio":
+            return "000001.SZ"
         return "000001"
     if field.name == "list_status":
         return "L"
     if field.name in {"report_type", "comp_type", "is_open"}:
+        return "1"
+    if field.name == "rank":
         return "1"
     if dataset == "trade_cal" and field.name == "exchange":
         return "SSE"
@@ -715,6 +840,16 @@ def _sample_value(dataset: str, field: pa.Field) -> str | Decimal | None:
     if dataset == "limit_list_d" and field.name in LIMIT_LIST_D_NUMERIC_FIELD_NAMES:
         return FIXTURE_DECIMAL_STRING
     if dataset == "hm_detail" and field.name in HM_DETAIL_NUMERIC_FIELD_NAMES:
+        return FIXTURE_DECIMAL_STRING
+    if dataset in {"top10_holders", "top10_floatholders"} and (
+        field.name in TOP10_HOLDERS_NUMERIC_FIELD_NAMES
+    ):
+        return FIXTURE_DECIMAL_STRING
+    if dataset == "fund_portfolio" and field.name in FUND_PORTFOLIO_NUMERIC_FIELD_NAMES:
+        return FIXTURE_DECIMAL_STRING
+    if dataset == "hsgt_top10" and field.name in HSGT_TOP10_NUMERIC_FIELD_NAMES:
+        return FIXTURE_DECIMAL_STRING
+    if dataset == "hsgt_hold_top10" and field.name in HSGT_HOLD_TOP10_NUMERIC_FIELD_NAMES:
         return FIXTURE_DECIMAL_STRING
     if pa.types.is_decimal(field.type):
         return Decimal("1.123456789012345678")

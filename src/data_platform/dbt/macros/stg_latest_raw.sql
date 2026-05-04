@@ -1,4 +1,4 @@
-{% macro stg_latest_raw(source_id, dataset, source_columns, select_list, partition_mode="partitioned") -%}
+{% macro stg_latest_raw(source_id, dataset, source_columns, select_list, partition_mode="partitioned", request_scoped=false) -%}
 with raw_manifest_files as (
     select
         partition_date,
@@ -6,6 +6,10 @@ with raw_manifest_files as (
         filename
     from read_json_auto(
         '{{ dp_raw_manifest_path(source_id, dataset) }}',
+        columns={
+            partition_date: 'VARCHAR',
+            artifacts: 'STRUCT(run_id VARCHAR, written_at VARCHAR, partition_date VARCHAR, request_params_hash VARCHAR)[]'
+        },
         hive_partitioning=1,
         filename=1
     )
@@ -20,7 +24,11 @@ raw_artifacts as (
         strftime(
             cast(coalesce(artifact.partition_date, raw_manifest_files.partition_date) as date),
             '%Y%m%d'
-        ) as partition_yyyymmdd
+        ) as partition_yyyymmdd,
+        coalesce(
+            nullif(cast(artifact.request_params_hash as varchar), ''),
+            cast(artifact.run_id as varchar)
+        ) as request_scope_key
     from raw_manifest_files
     cross join unnest(raw_manifest_files.artifacts) as artifact_item(artifact)
 ),
@@ -31,9 +39,14 @@ ranked_raw_artifacts as (
         raw_loaded_at,
         partition_date,
         partition_yyyymmdd,
+        request_scope_key,
         row_number() over (
-{%- if partition_mode != "static" %}
+{%- if partition_mode != "static" and request_scoped %}
+            partition by partition_date, request_scope_key
+{%- elif partition_mode != "static" %}
             partition by partition_date
+{%- elif request_scoped %}
+            partition by request_scope_key
 {%- endif %}
             order by raw_loaded_at desc, partition_date desc, source_run_id desc
         ) as artifact_rank

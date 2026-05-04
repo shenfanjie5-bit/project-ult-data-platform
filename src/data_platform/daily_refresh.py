@@ -24,7 +24,12 @@ import pyarrow as pa  # type: ignore[import-untyped]
 from pydantic import ValidationError
 
 from data_platform.adapters.base import AssetSpec, FetchParams, FetchableAdapter
-from data_platform.adapters.tushare.adapter import TushareAdapter, run_tushare_asset
+from data_platform.adapters.tushare.adapter import (
+    EXPLICIT_TS_CODE_RAW_DATASETS,
+    EXPLICIT_TS_CODES_PARAM,
+    TushareAdapter,
+    run_tushare_asset,
+)
 from data_platform.adapters.tushare.assets import TUSHARE_ASSETS
 from data_platform.assets import build_assets, build_resources
 from data_platform.config import Settings, get_settings
@@ -48,6 +53,9 @@ DEFAULT_DBT_SELECTORS = ("staging", "intermediate", "marts_v2", "marts_lineage")
 TRUTHY_VALUES = frozenset({"1", "true", "yes", "on"})
 DEFAULT_REFRESH_LOCK_STALE_AFTER = timedelta(hours=6)
 REFRESH_LOCK_STALE_SECONDS_ENV = "DP_DAILY_REFRESH_LOCK_STALE_SECONDS"
+TOP10_TS_CODES_ENV = "DP_TUSHARE_TOP10_TS_CODES"
+HK_HOLD_DAILY_REFRESH_DATASET = "hsgt_hold_top10"
+HK_HOLD_DAILY_PUBLICATION_LAST_DATE = date(2024, 8, 20)
 DATE_FIELD_NAMES = frozenset(
     {
         "actual_date",
@@ -89,6 +97,7 @@ STRING_NUMERIC_FIELD_NAMES = frozenset(
         "amount",
         "avg_price",
         "base_point",
+        "buy",
         "buy_amount",
         "buy_elg_amount",
         "buy_elg_vol",
@@ -116,6 +125,10 @@ STRING_NUMERIC_FIELD_NAMES = frozenset(
         "h_total_ratio",
         "high",
         "high_limit",
+        "hold_amount",
+        "hold_change",
+        "hold_float_ratio",
+        "hold_ratio",
         "holder_num",
         "holding_amount",
         "last_parent_net",
@@ -124,6 +137,7 @@ STRING_NUMERIC_FIELD_NAMES = frozenset(
         "limit_up_suc_rate",
         "low",
         "low_limit",
+        "mkv",
         "net_amount",
         "net_mf_amount",
         "net_mf_vol",
@@ -145,8 +159,11 @@ STRING_NUMERIC_FIELD_NAMES = frozenset(
         "price",
         "ps",
         "ps_ttm",
+        "rank",
         "reg_capital",
+        "ratio",
         "rest_pledge",
+        "sell",
         "sell_amount",
         "sell_elg_amount",
         "sell_elg_vol",
@@ -157,6 +174,8 @@ STRING_NUMERIC_FIELD_NAMES = frozenset(
         "sell_sm_amount",
         "sell_sm_vol",
         "stk_div",
+        "stk_float_ratio",
+        "stk_mkv_ratio",
         "total_mv",
         "total_share",
         "turnover_ratio",
@@ -218,6 +237,12 @@ class _DailyRefreshLock:
                 os.close(self.fd)
 
 
+@dataclass(frozen=True)
+class _RefreshAssetPlan:
+    assets: tuple[AssetSpec, ...]
+    skipped_assets: tuple[dict[str, Any], ...]
+
+
 class _JsonArgumentParser(argparse.ArgumentParser):
     def error(self, message: str) -> NoReturn:
         raise ValueError(message)
@@ -267,9 +292,23 @@ def run_daily_refresh(
         adapter = _build_adapter(mock=mock)
         all_assets = adapter.get_assets()
         selected_assets = _select_assets(all_assets, select)
+        refresh_plan = _refresh_asset_plan(selected_assets, partition_date, mock=mock)
         asset_specs = build_assets([adapter])
     except Exception as exc:
         _append_failed_step(steps, "config", exc, started_at=perf_counter())
+        result = _result(partition_date, steps)
+        _write_report_if_requested(json_report, result)
+        return result
+
+    if not refresh_plan.assets:
+        skip_metadata = _no_refreshable_assets_metadata(
+            mock=mock,
+            asset_specs_count=len(asset_specs),
+            skipped_assets=refresh_plan.skipped_assets,
+        )
+        _append_skipped_step(steps, "adapter", skip_metadata)
+        for step_name in ("dbt_run", "dbt_test", "canonical", "raw_health"):
+            _append_skipped_step(steps, step_name, skip_metadata)
         result = _result(partition_date, steps)
         _write_report_if_requested(json_report, result)
         return result
@@ -291,8 +330,9 @@ def run_daily_refresh(
                 adapter,
                 settings,
                 partition_date,
-                selected_assets,
+                refresh_plan.assets,
                 asset_specs_count=len(asset_specs),
+                skipped_assets=refresh_plan.skipped_assets,
                 mock=mock,
             ),
         ):
@@ -300,7 +340,7 @@ def run_daily_refresh(
             _write_report_if_requested(json_report, result)
             return result
 
-        dbt_selectors = _dbt_selectors(selected_assets, all_assets)
+        dbt_selectors = _dbt_selectors(refresh_plan.assets, all_assets)
         if not _append_step(
             steps,
             "dbt_run",
@@ -332,7 +372,7 @@ def run_daily_refresh(
         if not _append_step(
             steps,
             "canonical",
-            lambda: _run_canonical_step(settings, selected_assets, all_assets),
+            lambda: _run_canonical_step(settings, refresh_plan.assets, all_assets),
         ):
             result = _result(partition_date, steps)
             _write_report_if_requested(json_report, result)
@@ -344,7 +384,7 @@ def run_daily_refresh(
             lambda: _run_raw_health_step(
                 settings,
                 partition_date,
-                selected_assets,
+                refresh_plan.assets,
                 source_id=adapter.source_id(),
             ),
         )
@@ -401,7 +441,7 @@ def _load_settings() -> Settings:
 
 
 def _prepare_runtime_paths(settings: Settings) -> None:
-    settings.raw_zone_path.expanduser().mkdir(parents=True, exist_ok=True)
+    settings.ensure_data_storage_directories()
     settings.iceberg_warehouse_path.expanduser().mkdir(parents=True, exist_ok=True)
     settings.duckdb_path.expanduser().parent.mkdir(parents=True, exist_ok=True)
 
@@ -412,6 +452,75 @@ def _build_adapter(*, mock: bool) -> FetchableAdapter:
     return TushareAdapter()
 
 
+def _refresh_asset_plan(
+    selected_assets: Sequence[AssetSpec],
+    partition_date: date,
+    *,
+    mock: bool,
+) -> _RefreshAssetPlan:
+    refreshable_assets: list[AssetSpec] = []
+    skipped_assets: list[dict[str, Any]] = []
+    for asset in selected_assets:
+        skip_metadata = _daily_refresh_skip_for_asset(
+            asset,
+            partition_date,
+            mock=mock,
+        )
+        if skip_metadata is None:
+            refreshable_assets.append(asset)
+        else:
+            skipped_assets.append(skip_metadata)
+    return _RefreshAssetPlan(tuple(refreshable_assets), tuple(skipped_assets))
+
+
+def _daily_refresh_skip_for_asset(
+    asset: AssetSpec,
+    partition_date: date,
+    *,
+    mock: bool,
+) -> dict[str, Any] | None:
+    if mock:
+        return None
+    if asset.dataset != HK_HOLD_DAILY_REFRESH_DATASET:
+        return None
+    if partition_date <= HK_HOLD_DAILY_PUBLICATION_LAST_DATE:
+        return None
+
+    return {
+        "asset": asset.name,
+        "dataset": asset.dataset,
+        "source_interface_id": asset.metadata.get("source_interface_id", asset.dataset),
+        "doc_api": asset.metadata.get("doc_api", "hk_hold"),
+        "partition_date": f"{partition_date:%Y%m%d}",
+        "status": "skipped",
+        "reason_type": "daily_publication_discontinued",
+        "reason": (
+            "Tushare hk_hold daily northbound publication ended after "
+            f"{HK_HOLD_DAILY_PUBLICATION_LAST_DATE:%Y-%m-%d}; the daily refresh "
+            "does not fetch post-cutoff current-date hk_hold pages"
+        ),
+        "daily_publication_last_date": HK_HOLD_DAILY_PUBLICATION_LAST_DATE.isoformat(),
+        "replacement_cadence": "quarterly_disclosure",
+        "skip_policy": "fail_closed_no_daily_live_freshness_claim",
+    }
+
+
+def _no_refreshable_assets_metadata(
+    *,
+    mock: bool,
+    asset_specs_count: int,
+    skipped_assets: Sequence[Mapping[str, Any]],
+) -> dict[str, Any]:
+    return {
+        "mock": mock,
+        "asset_specs_count": asset_specs_count,
+        "artifact_count": 0,
+        "artifacts": [],
+        "skipped_assets": list(skipped_assets),
+        "reason": "no refreshable assets remain after applying daily refresh gates",
+    }
+
+
 def _run_adapter_step(
     adapter: FetchableAdapter,
     settings: Settings,
@@ -419,6 +528,7 @@ def _run_adapter_step(
     selected_assets: Sequence[AssetSpec],
     *,
     asset_specs_count: int,
+    skipped_assets: Sequence[Mapping[str, Any]] = (),
     mock: bool,
 ) -> dict[str, Any]:
     artifacts: list[RawArtifact] = []
@@ -441,13 +551,21 @@ def _run_adapter_step(
                 )
             )
             continue
-        artifacts.append(run_tushare_asset(asset.name, partition_date, raw_writer=writer))
+        artifacts.append(
+            run_tushare_asset(
+                asset.name,
+                partition_date,
+                params=_live_fetch_params_for_asset(asset),
+                raw_writer=writer,
+            )
+        )
 
     return {
         "mock": mock,
         "asset_specs_count": asset_specs_count,
         "artifact_count": len(artifacts),
         "artifacts": [_raw_artifact_metadata(artifact) for artifact in artifacts],
+        "skipped_assets": list(skipped_assets),
     }
 
 
@@ -492,7 +610,9 @@ def _run_dbt_command(args: Sequence[str], settings: Settings) -> dict[str, Any]:
 
     env.update(
         {
+            "DP_DATA_STORAGE_ROOT_PATH": str(settings.data_storage_root_path),
             "DP_RAW_ZONE_PATH": str(settings.raw_zone_path),
+            "DP_PROCESSED_DATA_PATH": str(settings.processed_data_path),
             "DP_DUCKDB_PATH": str(settings.duckdb_path),
             DBT_EXECUTABLE_ENV: dbt_executable,
             "DP_ICEBERG_WAREHOUSE_PATH": str(settings.iceberg_warehouse_path),
@@ -547,6 +667,38 @@ def _resolve_dbt_executable(env: Mapping[str, str] | None = None) -> str | None:
     if local_dbt.is_file() and os.access(local_dbt, os.X_OK):
         return str(local_dbt)
     return None
+
+
+def _live_fetch_params_for_asset(asset: AssetSpec) -> dict[str, Any] | None:
+    if asset.dataset not in EXPLICIT_TS_CODE_RAW_DATASETS:
+        return None
+
+    ts_codes = _split_csv_env(TOP10_TS_CODES_ENV)
+    if not ts_codes:
+        msg = (
+            f"Tushare {asset.dataset} live refresh requires explicit ts_code scope; "
+            f"set {TOP10_TS_CODES_ENV} to a comma-separated symbol list or run the "
+            "raw asset CLI with --ts-code"
+        )
+        raise DailyRefreshStepError(
+            msg,
+            {
+                "error": msg,
+                "error_type": "missing_required_fetch_scope",
+                "asset": asset.name,
+                "dataset": asset.dataset,
+                "required_params": ["ts_code"],
+                "config_env": TOP10_TS_CODES_ENV,
+            },
+        )
+    return {EXPLICIT_TS_CODES_PARAM: ts_codes}
+
+
+def _split_csv_env(name: str) -> tuple[str, ...]:
+    value = os.environ.get(name)
+    if value is None:
+        return ()
+    return tuple(part.strip() for part in value.split(",") if part.strip())
 
 
 def _which_executable(candidate: str, *, path: str | None) -> str | None:
@@ -809,6 +961,21 @@ def _append_step(
     return True
 
 
+def _append_skipped_step(
+    steps: list[DailyRefreshStepResult],
+    name: str,
+    metadata: Mapping[str, Any],
+) -> None:
+    steps.append(
+        DailyRefreshStepResult(
+            name=name,
+            status="skipped",
+            duration_ms=0,
+            metadata=_json_safe(metadata),
+        )
+    )
+
+
 def _append_failed_step(
     steps: list[DailyRefreshStepResult],
     name: str,
@@ -920,6 +1087,8 @@ def _mock_value(dataset: str, field: pa.Field, partition_date: date) -> Any:
     if field.name in DATE_FIELD_NAMES:
         return _mock_date_value(dataset, field.name, partition_date)
     if field.name == "ts_code":
+        if dataset == "fund_portfolio":
+            return "001753.OF"
         if dataset in {"index_basic", "index_daily"}:
             return "000300.SH"
         return "000001.SZ"
@@ -930,10 +1099,14 @@ def _mock_value(dataset: str, field: pa.Field, partition_date: date) -> Any:
     if field.name == "exchange":
         return "SSE"
     if field.name == "symbol":
+        if dataset == "fund_portfolio":
+            return "000001.SZ"
         return "000001"
     if field.name == "list_status":
         return "L"
     if field.name in {"report_type", "comp_type", "is_open"}:
+        return "1"
+    if field.name == "rank":
         return "1"
     if field.name == "update_flag":
         return "0"

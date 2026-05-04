@@ -26,6 +26,7 @@ from data_platform.adapters.tushare.assets import (
     FINANCIAL_VERSION_FIELDS,
     FORECAST_DATASET_FIELDS,
     FORECAST_VERSION_FIELDS,
+    HOLDINGS_DATASET_FIELDS,
     REFERENCE_DATA_IDENTITY_FIELDS,
     TUSHARE_ASSETS,
     TUSHARE_STOCK_BASIC_ASSET_NAME,
@@ -55,6 +56,7 @@ FINANCIAL_DATASETS = frozenset(FINANCIAL_DATASET_FIELDS)
 # field set lacks f_ann_date / report_type / comp_type). See
 # assets.FORECAST_DATASET_FIELDS / FORECAST_VERSION_FIELDS.
 FORECAST_DATASETS = frozenset(FORECAST_DATASET_FIELDS)
+HOLDINGS_DATASETS = frozenset(HOLDINGS_DATASET_FIELDS)
 FINANCIAL_REQUIRED_FIELDS = (
     FINANCIAL_VERSION_FIELDS[0],
     FINANCIAL_VERSION_FIELDS[1],
@@ -75,6 +77,10 @@ STOCK_TS_CODE_DATASETS = frozenset(
         "stock_company",
         "namechange",
         *EVENT_DATASETS,  # includes block_trade per Plan §5
+        "top10_holders",
+        "top10_floatholders",
+        "hsgt_top10",
+        "hsgt_hold_top10",
         *FINANCIAL_DATASETS,
         *FORECAST_DATASETS,  # Plan §5 — forecast keyed on ts_code
         "stk_limit",  # Plan §5 — market-like, ts_code identity
@@ -86,6 +92,11 @@ DATE_IDENTITY_FIELDS = frozenset(
 )
 STOCK_BASIC_TS_CODE_PATTERN = re.compile(r"\d{6}\.(?:SH|SZ|BJ)")
 TRADE_DATE_PATTERN = re.compile(r"\d{8}")
+FUND_PORTFOLIO_PAGE_LIMIT = 5_000
+HK_HOLD_PAGE_LIMIT = 3_800
+HK_HOLD_EXCHANGES = ("SH", "SZ")
+EXPLICIT_TS_CODE_RAW_DATASETS = frozenset({"top10_holders", "top10_floatholders"})
+EXPLICIT_TS_CODES_PARAM = "ts_codes"
 
 
 @dataclass(frozen=True, slots=True)
@@ -225,6 +236,22 @@ class _TushareClient(Protocol):
     def hm_detail(self, **kwargs: Any) -> Any:
         """Return hot-money entity per-stock daily trade rows from Tushare Pro."""
 
+    # M4.5 holdings intake expansion.
+    def top10_holders(self, **kwargs: Any) -> Any:
+        """Return top 10 shareholder rows from Tushare Pro."""
+
+    def top10_floatholders(self, **kwargs: Any) -> Any:
+        """Return top 10 free-float shareholder rows from Tushare Pro."""
+
+    def fund_portfolio(self, **kwargs: Any) -> Any:
+        """Return fund portfolio holdings rows from Tushare Pro."""
+
+    def hsgt_top10(self, **kwargs: Any) -> Any:
+        """Return northbound top turnover rows from Tushare Pro."""
+
+    def hk_hold(self, **kwargs: Any) -> Any:
+        """Return northbound holding rows from Tushare Pro."""
+
 
 class TushareAdapter(BaseAdapter):
     """Tushare reference adapter exposing Raw Zone structured assets."""
@@ -268,9 +295,15 @@ class TushareAdapter(BaseAdapter):
         spec = _fetch_spec_by_asset_name(asset_id)
         request_params = dict(params)
         _validate_date_params(spec.asset.dataset, request_params, spec.date_param_names)
+        _validate_required_fetch_params(spec.asset.dataset, request_params)
         request_params["fields"] = _fields_csv(spec.asset)
 
         fetch_method = getattr(self._get_client(), spec.method_name)
+        if spec.asset.dataset == "fund_portfolio":
+            return _fetch_fund_portfolio_table(fetch_method, request_params, spec.asset)
+        if spec.asset.dataset == "hsgt_hold_top10":
+            return _fetch_hk_hold_table(fetch_method, request_params, spec.asset)
+
         result = fetch_method(**request_params)
         if spec.asset.dataset in REFERENCE_DATA_IDENTITY_FIELDS:
             return _to_reference_table(spec.asset.dataset, result, spec.asset.schema)
@@ -282,6 +315,8 @@ class TushareAdapter(BaseAdapter):
         # field set distinct from FINANCIAL, so it gets its own branch.
         if spec.asset.dataset in FORECAST_DATASET_FIELDS:
             return _to_forecast_table(spec.asset.dataset, result, spec.asset.schema)
+        if spec.asset.dataset in HOLDINGS_DATASET_FIELDS:
+            return _to_holdings_table(spec.asset.dataset, result, spec.asset.schema)
         return _to_asset_table(result, spec.asset, spec.identity_fields)
 
     def _get_client(self) -> _TushareClient:
@@ -311,7 +346,7 @@ def run_tushare_asset(
     adapter = TushareAdapter()
     asset = _asset_by_name(adapter, asset_id)
     fetch_params = _fetch_params_for_raw_partition(asset, partition_date, params)
-    table = adapter.fetch(asset.name, fetch_params)
+    table, request_params = _fetch_raw_table_for_params(adapter, asset, fetch_params)
 
     if not isinstance(table, pa.Table):
         msg = f"Tushare fetch returned unsupported result for asset={asset.name!r}"
@@ -321,7 +356,6 @@ def run_tushare_asset(
         spec = _fetch_spec_by_asset_name(asset.name)
         _validate_raw_partition_date(table, asset, partition_date, spec.partition_date_field)
 
-    request_params = dict(fetch_params)
     request_params["fields"] = _fields_csv(asset)
     writer = raw_writer or RawWriter()
     return writer.write_arrow(
@@ -345,11 +379,27 @@ def main(argv: Sequence[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description="Fetch Tushare assets into the Raw Zone.")
     parser.add_argument("--asset", required=True)
     parser.add_argument("--date", required=True, help="Raw partition date in YYYYMMDD format.")
+    parser.add_argument(
+        "--ts-code",
+        action="append",
+        help=(
+            "Tushare ts_code filter. Required for top10_holders/top10_floatholders; "
+            "repeat or comma-separate to write one combined raw partition artifact."
+        ),
+    )
+    parser.add_argument(
+        "--exchange",
+        help="Optional Tushare exchange filter, e.g. SH or SZ for hk_hold-backed assets.",
+    )
     args = parser.parse_args(argv)
 
     try:
         partition_date = _parse_partition_date(args.date)
-        artifact = run_tushare_asset(args.asset, partition_date)
+        artifact = run_tushare_asset(
+            args.asset,
+            partition_date,
+            params=_cli_fetch_params(args),
+        )
     except Exception as exc:
         _print_error(exc, args.asset)
         return 1
@@ -396,6 +446,59 @@ def _fetch_params_for_raw_partition(
                 )
                 raise ValueError(msg)
     return fetch_params
+
+
+def _fetch_raw_table_for_params(
+    adapter: TushareAdapter,
+    asset: AssetSpec,
+    fetch_params: Mapping[str, Any],
+) -> tuple[pa.Table, dict[str, Any]]:
+    request_params = dict(fetch_params)
+    if EXPLICIT_TS_CODES_PARAM not in request_params:
+        table = adapter.fetch(asset.name, request_params)
+        return cast(pa.Table, table), request_params
+
+    if asset.dataset not in EXPLICIT_TS_CODE_RAW_DATASETS:
+        msg = (
+            f"Tushare {asset.dataset} raw partition does not support "
+            f"{EXPLICIT_TS_CODES_PARAM!r}; pass a single ts_code instead"
+        )
+        raise ValueError(msg)
+    if "ts_code" in request_params:
+        msg = (
+            f"Tushare {asset.dataset} raw partition accepts either ts_code or "
+            f"{EXPLICIT_TS_CODES_PARAM}, not both"
+        )
+        raise ValueError(msg)
+
+    ts_codes = _parse_ts_code_list(asset.dataset, request_params.pop(EXPLICIT_TS_CODES_PARAM))
+    tables: list[pa.Table] = []
+    for ts_code in ts_codes:
+        table = adapter.fetch(asset.name, {**request_params, "ts_code": ts_code})
+        if not isinstance(table, pa.Table):
+            msg = f"Tushare fetch returned unsupported result for asset={asset.name!r}"
+            raise TypeError(msg)
+        tables.append(table)
+
+    return pa.concat_tables(tables), {**request_params, EXPLICIT_TS_CODES_PARAM: ts_codes}
+
+
+def _cli_fetch_params(args: argparse.Namespace) -> dict[str, Any] | None:
+    params: dict[str, Any] = {}
+    if args.exchange:
+        params["exchange"] = args.exchange
+
+    if args.ts_code:
+        ts_codes: list[str] = []
+        for value in args.ts_code:
+            ts_codes.extend(part.strip() for part in value.split(","))
+        ts_codes = [value for value in ts_codes if value]
+        if len(ts_codes) == 1:
+            params["ts_code"] = ts_codes[0]
+        elif ts_codes:
+            params[EXPLICIT_TS_CODES_PARAM] = tuple(ts_codes)
+
+    return params or None
 
 
 def _parse_partition_date(value: str) -> date:
@@ -488,6 +591,176 @@ def _to_forecast_table(dataset: str, result: Any, schema: pa.Schema) -> pa.Table
         raise UpstreamEmptyResult(msg)
     _validate_event_date_columns(table, asset, forecast_date_fields)
     return table
+
+
+def _to_holdings_table(dataset: str, result: Any, schema: pa.Schema) -> pa.Table:
+    try:
+        spec = _FETCH_SPECS_BY_DATASET[dataset]
+        identity_fields = HOLDINGS_IDENTITY_FIELDS[dataset]
+        date_fields = HOLDINGS_DATE_FIELDS[dataset]
+    except KeyError as exc:
+        msg = f"unsupported Tushare holdings dataset: {dataset!r}"
+        raise ValueError(msg) from exc
+
+    asset = AssetSpec(
+        name=spec.asset.name,
+        dataset=spec.asset.dataset,
+        partition=spec.asset.partition,
+        schema=schema,
+    )
+    table = _to_asset_table(result, asset, identity_fields)
+    if table.num_rows == 0:
+        msg = f"Tushare {asset.dataset} response returned an empty table"
+        raise UpstreamEmptyResult(msg)
+    _validate_event_date_columns(table, asset, date_fields)
+    return table
+
+
+def _fetch_fund_portfolio_table(
+    fetch_method: Any,
+    request_params: Mapping[str, Any],
+    asset: AssetSpec,
+) -> pa.Table:
+    """Fetch fund_portfolio through Tushare's limit/offset pagination surface."""
+
+    return _fetch_paginated_holdings_table(
+        fetch_method,
+        request_params,
+        asset,
+        default_page_limit=FUND_PORTFOLIO_PAGE_LIMIT,
+        pagination_label="fund_portfolio",
+    )
+
+
+def _fetch_hk_hold_table(
+    fetch_method: Any,
+    request_params: Mapping[str, Any],
+    asset: AssetSpec,
+) -> pa.Table:
+    """Fetch hk_hold with exchange splitting and limit/offset pagination.
+
+    Tushare documents a 3,800-row cap for hk_hold. A trade-date-only call can
+    silently truncate, so the raw path splits the unscoped request by SH/SZ and
+    paginates each exchange. If callers pass exchange explicitly, only that
+    exchange is paginated.
+    """
+
+    scope_params = None
+    if not _has_explicit_param(request_params, "exchange"):
+        scope_params = tuple({"exchange": exchange} for exchange in HK_HOLD_EXCHANGES)
+    return _fetch_paginated_holdings_table(
+        fetch_method,
+        request_params,
+        asset,
+        default_page_limit=HK_HOLD_PAGE_LIMIT,
+        pagination_label="hk_hold",
+        scope_params=scope_params,
+    )
+
+
+def _fetch_paginated_holdings_table(
+    fetch_method: Any,
+    request_params: Mapping[str, Any],
+    asset: AssetSpec,
+    *,
+    default_page_limit: int,
+    pagination_label: str,
+    scope_params: Sequence[Mapping[str, Any]] | None = None,
+) -> pa.Table:
+    """Fetch a holdings endpoint through Tushare's limit/offset surface."""
+
+    base_params = dict(request_params)
+    page_limit = _positive_int_param(
+        base_params.pop("limit", default_page_limit),
+        "limit",
+        pagination_label,
+    )
+    initial_offset = _non_negative_int_param(
+        base_params.pop("offset", 0),
+        "offset",
+        pagination_label,
+    )
+    page_tables: list[pa.Table] = []
+    seen_keys: set[tuple[Any, ...]] = set()
+    scopes = tuple(scope_params or ({},))
+
+    for scope in scopes:
+        offset = initial_offset
+        while True:
+            page_params = {
+                **base_params,
+                **dict(scope),
+                "limit": page_limit,
+                "offset": offset,
+            }
+            page_result = fetch_method(**page_params)
+            page_table = _to_holdings_page_table(asset, page_result)
+            if page_table.num_rows == 0:
+                break
+
+            page_keys = _identity_key_set(page_table, HOLDINGS_IDENTITY_FIELDS[asset.dataset])
+            repeated_keys = seen_keys.intersection(page_keys)
+            if repeated_keys:
+                msg = (
+                    f"Tushare {pagination_label} pagination did not advance; "
+                    "received duplicate identity key(s) after applying offset/splitting"
+                )
+                raise UpstreamDataQualityError(msg)
+
+            page_tables.append(page_table)
+            seen_keys.update(page_keys)
+            if page_table.num_rows < page_limit:
+                break
+            offset += page_table.num_rows
+
+    if not page_tables:
+        msg = f"Tushare {pagination_label} response returned an empty table"
+        raise UpstreamEmptyResult(msg)
+    return pa.concat_tables(page_tables)
+
+
+def _to_holdings_page_table(asset: AssetSpec, result: Any) -> pa.Table:
+    identity_fields = HOLDINGS_IDENTITY_FIELDS[asset.dataset]
+    date_fields = HOLDINGS_DATE_FIELDS[asset.dataset]
+    table = _to_asset_table(result, asset, identity_fields)
+    if table.num_rows:
+        _validate_event_date_columns(table, asset, date_fields)
+    return table
+
+
+def _positive_int_param(value: Any, name: str, dataset: str = "fund_portfolio") -> int:
+    try:
+        parsed = int(value)
+    except (TypeError, ValueError) as exc:
+        msg = f"Tushare {dataset} {name} must be a positive integer"
+        raise ValueError(msg) from exc
+    if parsed < 1:
+        msg = f"Tushare {dataset} {name} must be a positive integer"
+        raise ValueError(msg)
+    return parsed
+
+
+def _non_negative_int_param(value: Any, name: str, dataset: str = "fund_portfolio") -> int:
+    try:
+        parsed = int(value)
+    except (TypeError, ValueError) as exc:
+        msg = f"Tushare {dataset} {name} must be a non-negative integer"
+        raise ValueError(msg) from exc
+    if parsed < 0:
+        msg = f"Tushare {dataset} {name} must be a non-negative integer"
+        raise ValueError(msg)
+    return parsed
+
+
+def _identity_key_set(
+    table: pa.Table,
+    identity_fields: tuple[str, ...],
+) -> set[tuple[Any, ...]]:
+    columns = [table[field_name].to_pylist() for field_name in identity_fields]
+    return {
+        tuple(column[row_index] for column in columns)
+        for row_index in range(table.num_rows)
+    }
 
 
 def _to_financial_table(dataset: str, result: Any, schema: pa.Schema) -> pa.Table:
@@ -743,6 +1016,17 @@ def _validate_date_params(
         _validate_date_param(dataset, param_name, value)
 
 
+def _validate_required_fetch_params(dataset: str, params: Mapping[str, Any]) -> None:
+    if dataset in EXPLICIT_TS_CODE_RAW_DATASETS:
+        if not _has_explicit_param(params, "ts_code"):
+            msg = (
+                f"Tushare {dataset} requires explicit ts_code for live/raw fetch; "
+                "the Raw daily partition can derive period only, not a symbol universe"
+            )
+            raise ValueError(msg)
+        _validate_ts_code_param(dataset, params["ts_code"])
+
+
 def _validate_date_param(dataset: str, param_name: str, value: Any) -> None:
     if not pd.api.types.is_scalar(value) or _is_nullish(value):
         msg = f"Tushare {dataset} {param_name} must be a YYYYMMDD string"
@@ -750,6 +1034,41 @@ def _validate_date_param(dataset: str, param_name: str, value: Any) -> None:
     if not _is_valid_trade_date(str(value)):
         msg = f"Tushare {dataset} {param_name} must be a valid YYYYMMDD date: {value!r}"
         raise ValueError(msg)
+
+
+def _validate_ts_code_param(dataset: str, value: Any) -> None:
+    if not pd.api.types.is_scalar(value) or _is_nullish(value):
+        msg = f"Tushare {dataset} ts_code must be a CN A-share code like 000001.SZ"
+        raise ValueError(msg)
+    normalized = str(value).strip()
+    if normalized != str(value) or not STOCK_BASIC_TS_CODE_PATTERN.fullmatch(normalized):
+        msg = f"Tushare {dataset} ts_code must be a CN A-share code like 000001.SZ"
+        raise ValueError(msg)
+
+
+def _parse_ts_code_list(dataset: str, value: Any) -> tuple[str, ...]:
+    if isinstance(value, str):
+        candidates = [part.strip() for part in value.split(",")]
+    elif isinstance(value, Sequence):
+        candidates = [str(part).strip() for part in value]
+    else:
+        msg = f"Tushare {dataset} {EXPLICIT_TS_CODES_PARAM} must be a non-empty list"
+        raise ValueError(msg)
+
+    ts_codes = tuple(candidate for candidate in candidates if candidate)
+    if not ts_codes:
+        msg = f"Tushare {dataset} {EXPLICIT_TS_CODES_PARAM} must be a non-empty list"
+        raise ValueError(msg)
+    for ts_code in ts_codes:
+        _validate_ts_code_param(dataset, ts_code)
+    return ts_codes
+
+
+def _has_explicit_param(params: Mapping[str, Any], param_name: str) -> bool:
+    value = params.get(param_name)
+    if value is None or _is_nullish(value):
+        return False
+    return bool(str(value).strip())
 
 
 def _validate_raw_partition_date(
@@ -972,6 +1291,20 @@ FORECAST_IDENTITY_FIELDS: dict[str, tuple[str, ...]] = {
 FORECAST_DATE_FIELDS: dict[str, tuple[str, ...]] = {
     "forecast": ("ann_date", "end_date"),
 }
+HOLDINGS_IDENTITY_FIELDS: dict[str, tuple[str, ...]] = {
+    "top10_holders": ("ts_code", "end_date", "holder_name", "ann_date"),
+    "top10_floatholders": ("ts_code", "end_date", "holder_name", "ann_date"),
+    "fund_portfolio": ("ts_code", "end_date", "symbol", "ann_date"),
+    "hsgt_top10": ("trade_date", "ts_code", "market_type", "rank"),
+    "hsgt_hold_top10": ("trade_date", "ts_code", "exchange"),
+}
+HOLDINGS_DATE_FIELDS: dict[str, tuple[str, ...]] = {
+    "top10_holders": ("ann_date", "end_date"),
+    "top10_floatholders": ("ann_date", "end_date"),
+    "fund_portfolio": ("ann_date", "end_date"),
+    "hsgt_top10": ("trade_date",),
+    "hsgt_hold_top10": ("trade_date",),
+}
 _METHOD_BY_DATASET = {
     "stock_basic": "stock_basic",
     "daily": "daily",
@@ -1011,6 +1344,13 @@ _METHOD_BY_DATASET = {
     "limit_list_ths": "limit_list_ths",
     "limit_list_d": "limit_list_d",
     "hm_detail": "hm_detail",
+    # M4.5 holdings intake expansion. hsgt_hold_top10 is the data-platform
+    # raw dataset name for Tushare's official hk_hold API.
+    "top10_holders": "top10_holders",
+    "top10_floatholders": "top10_floatholders",
+    "fund_portfolio": "fund_portfolio",
+    "hsgt_top10": "hsgt_top10",
+    "hsgt_hold_top10": "hk_hold",
 }
 _IDENTITY_FIELDS_BY_DATASET = {
     "stock_basic": STOCK_BASIC_IDENTITY_FIELDS,
@@ -1019,6 +1359,7 @@ _IDENTITY_FIELDS_BY_DATASET = {
     **EVENT_IDENTITY_FIELDS,
     **{dataset: FINANCIAL_REQUIRED_FIELDS for dataset in FINANCIAL_DATASETS},
     **FORECAST_IDENTITY_FIELDS,  # Plan §5
+    **HOLDINGS_IDENTITY_FIELDS,
 }
 _PARTITION_DATE_FIELD_BY_DATASET = {
     **{dataset: "trade_date" for dataset in MARKET_DATASETS},
@@ -1044,6 +1385,12 @@ _PARTITION_DATE_FIELD_BY_DATASET = {
     "limit_list_ths": "trade_date",
     "limit_list_d": "trade_date",
     "hm_detail": "trade_date",
+    # M4.5 holdings intake expansion.
+    "top10_holders": "end_date",
+    "top10_floatholders": "end_date",
+    "fund_portfolio": "end_date",
+    "hsgt_top10": "trade_date",
+    "hsgt_hold_top10": "trade_date",
     **{dataset: "end_date" for dataset in FINANCIAL_DATASETS},
 }
 _PARTITION_REQUEST_PARAMS_BY_DATASET = {
@@ -1071,6 +1418,12 @@ _PARTITION_REQUEST_PARAMS_BY_DATASET = {
     "limit_list_ths": ("trade_date",),
     "limit_list_d": ("trade_date",),
     "hm_detail": ("trade_date",),
+    # M4.5 holdings intake expansion.
+    "top10_holders": ("period",),
+    "top10_floatholders": ("period",),
+    "fund_portfolio": ("period",),
+    "hsgt_top10": ("trade_date",),
+    "hsgt_hold_top10": ("trade_date",),
     **{dataset: ("period",) for dataset in FINANCIAL_DATASETS},
 }
 _DATE_PARAM_NAMES_BY_DATASET = {
@@ -1110,6 +1463,12 @@ _DATE_PARAM_NAMES_BY_DATASET = {
     "limit_list_ths": ("trade_date", "start_date", "end_date"),
     "limit_list_d": ("trade_date", "start_date", "end_date"),
     "hm_detail": ("trade_date", "start_date", "end_date"),
+    # M4.5 holdings intake expansion.
+    "top10_holders": ("period", "ann_date", "start_date", "end_date"),
+    "top10_floatholders": ("period", "ann_date", "start_date", "end_date"),
+    "fund_portfolio": ("period", "ann_date", "start_date", "end_date"),
+    "hsgt_top10": ("trade_date", "start_date", "end_date"),
+    "hsgt_hold_top10": ("trade_date", "start_date", "end_date"),
     **{
         dataset: ("ann_date", "start_date", "end_date", "period")
         for dataset in FINANCIAL_DATASETS

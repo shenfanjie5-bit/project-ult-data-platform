@@ -213,3 +213,62 @@ models:
       - name: event_key
         tests:
           - not_null
+
+  - name: mart_fact_holding_position_v2
+    description: >
+      Provider-neutral holdings fact for top shareholders, top free-float
+      shareholders, fund portfolio holdings, and northbound holdings.
+      Provider-shaped identifiers are renamed to holder_id and security_id.
+    tests:
+      - unique_combination_of_columns:
+          combination_of_columns:
+            - holding_source
+            - holder_id
+            - security_id
+            - report_date
+            - announced_date
+    columns:
+      - name: holding_source
+        tests:
+          - not_null
+          - accepted_values:
+              values:
+                - 'top_holder'
+                - 'top_float_holder'
+                - 'fund_portfolio'
+                - 'northbound_hold'
+              quote: true
+      - name: holder_id
+        tests:
+          - not_null
+      - name: security_id
+        tests:
+          - not_null
+      - name: report_date
+        tests:
+          - not_null
+      - name: announced_date
+        tests:
+          - not_null
+
+  - name: mart_fact_northbound_turnover_v2
+    description: >
+      Provider-neutral northbound top-turnover fact sourced from hsgt_top10.
+      It is separate from holding positions because the source reports daily
+      traded amounts, not ownership.
+    tests:
+      - unique_combination_of_columns:
+          combination_of_columns: ["security_id", "trade_date", "market_type", "rank"]
+    columns:
+      - name: security_id
+        tests:
+          - not_null
+      - name: trade_date
+        tests:
+          - not_null
+      - name: market_type
+        tests:
+          - not_null
+      - name: rank
+        tests:
+          - not_null

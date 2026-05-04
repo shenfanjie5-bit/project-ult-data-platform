@@ -12,11 +12,13 @@ from data_platform.ddl import iceberg_tables
 from data_platform.ddl.iceberg_tables import (
     CANONICAL_ENTITY_SPEC,
     CANONICAL_LINEAGE_DIM_SECURITY_SPEC,
+    CANONICAL_LINEAGE_FACT_HOLDING_POSITION_SPEC,
     CANONICAL_LINEAGE_TABLE_SPECS,
     CANONICAL_V2_DIM_SECURITY_SPEC,
     CANONICAL_V2_TABLE_SPECS,
     DEFAULT_TABLE_SPECS,
     ENTITY_ALIAS_SPEC,
+    TIMESTAMP_TYPE,
     TableSpec,
     ensure_tables,
     register_table,
@@ -102,6 +104,13 @@ def test_default_table_specs_do_not_include_queue_fields() -> None:
         )
 
 
+def test_entity_storage_points_keep_existing_timestamp_type() -> None:
+    assert (
+        CANONICAL_ENTITY_SPEC.schema.field("created_at").type == TIMESTAMP_TYPE
+    )
+    assert ENTITY_ALIAS_SPEC.schema.field("created_at").type == TIMESTAMP_TYPE
+
+
 def test_default_table_specs_include_canonical_v2_and_lineage_storage_points() -> None:
     identifiers = {f"{spec.namespace}.{spec.name}" for spec in DEFAULT_TABLE_SPECS}
 
@@ -136,6 +145,18 @@ def test_default_table_specs_include_canonical_v2_and_lineage_storage_points() -
     ]
     assert CANONICAL_LINEAGE_DIM_SECURITY_SPEC.schema.names == [
         "security_id",
+        "source_provider",
+        "source_interface_id",
+        "source_run_id",
+        "raw_loaded_at",
+        "canonical_loaded_at",
+    ]
+    assert CANONICAL_LINEAGE_FACT_HOLDING_POSITION_SPEC.schema.names == [
+        "holding_source",
+        "holder_id",
+        "security_id",
+        "report_date",
+        "announced_date",
         "source_provider",
         "source_interface_id",
         "source_run_id",
@@ -183,8 +204,10 @@ def test_ensure_tables_is_idempotent() -> None:
         "canonical_lineage.lineage_fact_event",
         "canonical_lineage.lineage_fact_financial_indicator",
         "canonical_lineage.lineage_fact_forecast_event",
+        "canonical_lineage.lineage_fact_holding_position",
         "canonical_lineage.lineage_fact_index_price_bar",
         "canonical_lineage.lineage_fact_market_daily_feature",
+        "canonical_lineage.lineage_fact_northbound_turnover",
         "canonical_lineage.lineage_fact_price_bar",
         "canonical_lineage.lineage_stock_basic",
         "canonical_v2.dim_index",
@@ -192,8 +215,10 @@ def test_ensure_tables_is_idempotent() -> None:
         "canonical_v2.fact_event",
         "canonical_v2.fact_financial_indicator",
         "canonical_v2.fact_forecast_event",
+        "canonical_v2.fact_holding_position",
         "canonical_v2.fact_index_price_bar",
         "canonical_v2.fact_market_daily_feature",
+        "canonical_v2.fact_northbound_turnover",
         "canonical_v2.fact_price_bar",
         "canonical_v2.stock_basic",
     ]

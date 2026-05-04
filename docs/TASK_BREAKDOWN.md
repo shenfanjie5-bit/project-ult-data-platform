@@ -72,7 +72,7 @@ data_platform.config
 
 #### 实现范围
 - 新建 `src/data_platform/config/__init__.py` 与 `settings.py`
-- 定义 `Settings(BaseSettings)`：`pg_dsn: PostgresDsn`、`raw_zone_path: Path`、`iceberg_warehouse_path: Path`、`duckdb_path: Path`、`iceberg_catalog_name: str = "data_platform"`、`env: Literal["dev","test","prod"] = "dev"`
+- 定义 `Settings(BaseSettings)`：`pg_dsn: PostgresDsn`、`data_storage_root_path: Path`、`raw_zone_path: Path`、`processed_data_path: Path`、`iceberg_warehouse_path: Path`、`duckdb_path: Path`、`iceberg_catalog_name: str = "data_platform"`、`env: Literal["dev","test","prod"] = "dev"`
 - 支持从 `.env` 与环境变量加载（前缀 `DP_`）
 - 提供 `get_settings() -> Settings`（lru_cache），并提供 `reset_settings_cache()` 用于测试
 - 提供 `.env.example` 与 `tests/test_config.py`
@@ -248,8 +248,8 @@ data_platform.raw
 #### 验证命令
 ```bash
 cd /Users/fanjie/Desktop/Cowork/project-ult/data-platform
-DP_RAW_ZONE_PATH=/tmp/dp_raw pytest tests/raw/ -q
-ls /tmp/dp_raw
+DP_DATA_STORAGE_ROOT_PATH=/tmp/dp_data pytest tests/raw/ -q
+ls /tmp/dp_data/raw
 ```
 
 #### 依赖
@@ -394,7 +394,7 @@ data_platform.adapters.tushare
 cd /Users/fanjie/Desktop/Cowork/project-ult/data-platform
 pytest tests/adapters/test_tushare.py -q
 # 真实拉取（需要 token，可选）
-DP_TUSHARE_TOKEN=$TUSHARE_TOKEN DP_RAW_ZONE_PATH=/tmp/dp_raw \
+DP_TUSHARE_TOKEN=$TUSHARE_TOKEN DP_DATA_STORAGE_ROOT_PATH=/tmp/dp_data \
   python -m data_platform.adapters.tushare.adapter --asset tushare_stock_basic --date 20260415
 ```
 
@@ -490,9 +490,9 @@ data_platform.dbt/models/staging
 #### 验证命令
 ```bash
 cd /Users/fanjie/Desktop/Cowork/project-ult/data-platform
-cp -r tests/dbt/fixtures/raw /tmp/dp_raw
-DP_RAW_ZONE_PATH=/tmp/dp_raw ./scripts/dbt.sh run --select stg_stock_basic
-DP_RAW_ZONE_PATH=/tmp/dp_raw ./scripts/dbt.sh test --select stg_stock_basic
+cp -r tests/dbt/fixtures/raw /tmp/dp_data/raw
+DP_DATA_STORAGE_ROOT_PATH=/tmp/dp_data ./scripts/dbt.sh run --select stg_stock_basic
+DP_DATA_STORAGE_ROOT_PATH=/tmp/dp_data ./scripts/dbt.sh test --select stg_stock_basic
 duckdb $DP_DUCKDB_PATH "select count(*), min(list_date), max(list_date) from stg_stock_basic"
 ```
 

@@ -71,6 +71,8 @@ _EXPECTED_V2_MAPPING: tuple[tuple[str, str], ...] = (
     ("event_timeline", "canonical_v2.fact_event"),
     ("financial_indicator", "canonical_v2.fact_financial_indicator"),
     ("financial_forecast_event", "canonical_v2.fact_forecast_event"),
+    ("holding_position", "canonical_v2.fact_holding_position"),
+    ("northbound_turnover_daily", "canonical_v2.fact_northbound_turnover"),
 )
 
 
@@ -80,7 +82,7 @@ def test_v2_flag_routes_every_dataset_to_canonical_v2(
     dataset_id: str,
     expected_identifier: str,
 ) -> None:
-    """All 10 canonical dataset_ids resolve to a canonical_v2 table under flag.
+    """All v2-mapped canonical dataset_ids resolve to a canonical_v2 table under flag.
 
     M1-G2 closed the last gap (event_timeline). M1.5-2 pins the full table
     so any future cutover regression — e.g., a dataset_id silently falling
@@ -161,6 +163,8 @@ def test_v2_flag_uses_canonical_alias_columns(monkeypatch: pytest.MonkeyPatch) -
     assert (
         canonical_alias_column_for_dataset("financial_forecast_event") == "security_id"
     )
+    assert canonical_alias_column_for_dataset("holding_position") == "security_id"
+    assert canonical_alias_column_for_dataset("northbound_turnover_daily") == "security_id"
 
 
 def test_event_timeline_routes_to_canonical_v2_fact_event_under_v2_flag(
@@ -199,15 +203,16 @@ def test_falsy_env_values_keep_legacy(monkeypatch: pytest.MonkeyPatch) -> None:
         )
 
 
-def test_v2_mapping_set_mirrors_legacy_after_m1_g2() -> None:
-    """After M1-G2, every dataset_id present in the legacy mapping is also
-    present in the v2 mapping. The 8 blocked candidate sources still do not
-    have their own dataset_id; they are scoped under event_timeline (which IS
-    in both mappings)."""
+def test_v2_mapping_set_covers_legacy_plus_promoted_holdings() -> None:
+    """The v2 map covers every legacy dataset plus v2-only holdings marts."""
 
     legacy_dataset_ids = {m.dataset_id for m in CANONICAL_DATASET_TABLE_MAPPINGS}
     v2_dataset_ids = {m.dataset_id for m in CANONICAL_DATASET_TABLE_MAPPINGS_V2}
 
     assert "event_timeline" in legacy_dataset_ids
     assert "event_timeline" in v2_dataset_ids
-    assert v2_dataset_ids == legacy_dataset_ids
+    assert legacy_dataset_ids < v2_dataset_ids
+    assert v2_dataset_ids - legacy_dataset_ids == {
+        "holding_position",
+        "northbound_turnover_daily",
+    }

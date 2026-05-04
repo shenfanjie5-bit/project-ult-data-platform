@@ -151,3 +151,24 @@ sources:
         description: Tushare hm_detail parquet files written by RawWriter.
         loader: >
           Raw Zone path pattern: ${DP_RAW_ZONE_PATH}/tushare/hm_detail/**/*.parquet
+      # M4.5 holdings intake expansion.
+      - name: tushare_top10_holders
+        description: Tushare top10_holders parquet files written by RawWriter.
+        loader: >
+          Raw Zone path pattern: ${DP_RAW_ZONE_PATH}/tushare/top10_holders/**/*.parquet
+      - name: tushare_top10_floatholders
+        description: Tushare top10_floatholders parquet files written by RawWriter.
+        loader: >
+          Raw Zone path pattern: ${DP_RAW_ZONE_PATH}/tushare/top10_floatholders/**/*.parquet
+      - name: tushare_fund_portfolio
+        description: Tushare fund_portfolio parquet files written by RawWriter.
+        loader: >
+          Raw Zone path pattern: ${DP_RAW_ZONE_PATH}/tushare/fund_portfolio/**/*.parquet
+      - name: tushare_hsgt_top10
+        description: Tushare hsgt_top10 parquet files written by RawWriter.
+        loader: >
+          Raw Zone path pattern: ${DP_RAW_ZONE_PATH}/tushare/hsgt_top10/**/*.parquet
+      - name: tushare_hsgt_hold_top10
+        description: Tushare hsgt_hold_top10 parquet files written by RawWriter.
+        loader: >
+          Raw Zone path pattern: ${DP_RAW_ZONE_PATH}/tushare/hsgt_hold_top10/**/*.parquet

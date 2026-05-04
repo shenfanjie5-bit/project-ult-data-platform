@@ -20,7 +20,6 @@ from __future__ import annotations
 
 from typing import Final
 
-import pyarrow as pa  # type: ignore[import-untyped]
 import pytest
 
 from data_platform.ddl import iceberg_tables
@@ -32,8 +31,8 @@ CANONICAL_BUSINESS_SPECS: Final[tuple[iceberg_tables.TableSpec, ...]] = (
 """All canonical Iceberg specs that hold business rows.
 
 After M1.12 retirement, the canonical business surface is the
-`canonical_v2.*` namespace alone — the 9 v2 specs cover the original
-8 mart tables plus stock_basic.
+`canonical_v2.*` namespace alone — the v2 specs cover the promoted mart
+tables plus stock_basic.
 """
 
 FORBIDDEN_RAW_LINEAGE_FIELDS: Final[frozenset[str]] = frozenset(

@@ -246,6 +246,12 @@ class TushareInterfaceRegistryEntry:
         if self.production_selectable and self.raw_dataset is None:
             msg = f"production-selectable interface requires raw_dataset: {self.source_interface_id}"
             raise ValueError(msg)
+        if self.production_selectable and self.canonical_table is None:
+            msg = (
+                "production-selectable interface requires canonical_table: "
+                f"{self.source_interface_id}"
+            )
+            raise ValueError(msg)
 
 
 class AmbiguousProviderInterface(ValueError):
@@ -702,6 +708,48 @@ CANONICAL_DATASETS: Final[dict[str, CanonicalDataset]] = {
             entity_scope="security/company",
         ),
         _dataset(
+            "holding_position",
+            description="Provider-neutral security ownership and holder-position facts.",
+            primary_key=(
+                "holding_source",
+                "holder_id",
+                "security_id",
+                "report_date",
+                "announced_date",
+            ),
+            fields=(
+                _field("holding_source", "enum", "Top-holder, fund, or northbound source."),
+                _field("holder_id", "canonical identifier", "Holder, fund, or northbound channel id."),
+                _field("security_id", "canonical identifier", "Held security id."),
+                _field("report_date", "date", "Report period or holding date."),
+                _field("announced_date", "date", "Disclosure or provider announcement date."),
+                _field("holding_amount", "shares", "Reported holding amount."),
+                _field("holding_ratio", "percent", "Reported holding ratio."),
+            ),
+            date_policy="report period for filings; trade date for northbound holdings",
+            adjustment_policy="reported share counts and percentages; no price adjustment",
+            update_policy="quarterly filings and late-arriving daily/quarterly northbound updates",
+            coverage="CN_A securities and public fund holdings",
+            entity_scope="holder/security",
+        ),
+        _dataset(
+            "northbound_turnover_daily",
+            description="Northbound top turnover securities by trading day.",
+            primary_key=("security_id", "trade_date", "market_type", "rank"),
+            fields=(
+                _field("security_id", "canonical identifier", "Traded security id."),
+                _field("trade_date", "date", "Trading day."),
+                _field("market_type", "enum", "Shanghai or Shenzhen connect market type."),
+                _field("rank", "integer", "Daily top-turnover rank."),
+                _field("net_amount", "currency", "Net northbound traded amount."),
+            ),
+            date_policy="trade_date",
+            adjustment_policy="reported turnover amounts; no price adjustment",
+            update_policy="daily refresh with late correction support",
+            coverage="CN_A northbound top turnover securities",
+            entity_scope="security/market",
+        ),
+        _dataset(
             "market_leverage_daily",
             description="Market-level financing and securities lending summary.",
             primary_key=("market", "trade_date"),
@@ -1042,6 +1090,81 @@ PROVIDER_MAPPINGS: Final[tuple[ProviderDatasetMapping, ...]] = (
         update_policy="event-time with version retention",
         coverage="CN_A",
     ),
+    *(
+        _mapping(
+            doc_api,
+            "holding_position",
+            field_mapping=(
+                ("ts_code", "security_id"),
+                ("holder_name", "holder_id"),
+                ("end_date", "report_date"),
+                ("ann_date", "announced_date"),
+                ("hold_amount", "holding_amount"),
+                ("hold_ratio", "holding_ratio"),
+            ),
+            source_primary_key=("ts_code", "end_date", "holder_name", "ann_date"),
+            unit_policy="reported shares and percent ratios",
+            date_policy="quarterly report period plus announcement date",
+            adjustment_policy="reported values; no market adjustment",
+            update_policy="quarterly filings with late corrections",
+            coverage="CN_A top shareholders",
+        )
+        for doc_api in ("top10_holders", "top10_floatholders")
+    ),
+    _mapping(
+        "fund_portfolio",
+        "holding_position",
+        field_mapping=(
+            ("ts_code", "holder_id"),
+            ("symbol", "security_id"),
+            ("end_date", "report_date"),
+            ("ann_date", "announced_date"),
+            ("amount", "holding_amount"),
+            ("stk_float_ratio", "holding_ratio"),
+        ),
+        source_primary_key=("ts_code", "end_date", "symbol", "ann_date"),
+        unit_policy="reported fund market value, shares, and percent ratios",
+        date_policy="quarterly report period plus announcement date",
+        adjustment_policy="reported values; no market adjustment",
+        update_policy="quarterly fund filings with late corrections",
+        coverage="CN_A public fund portfolios",
+    ),
+    _mapping(
+        "hsgt_top10",
+        "northbound_turnover_daily",
+        field_mapping=(
+            ("ts_code", "security_id"),
+            ("trade_date", "trade_date"),
+            ("market_type", "market_type"),
+            ("rank", "rank"),
+            ("net_amount", "net_amount"),
+        ),
+        source_primary_key=("trade_date", "ts_code", "market_type", "rank"),
+        unit_policy="reported CNY turnover amounts",
+        date_policy="trade_date",
+        adjustment_policy="reported values; no market adjustment",
+        update_policy="daily refresh with late corrections",
+        coverage="CN_A northbound top turnover",
+    ),
+    _mapping(
+        "hk_hold",
+        "holding_position",
+        source_interface_id="hsgt_hold_top10",
+        field_mapping=(
+            ("exchange", "holder_id"),
+            ("ts_code", "security_id"),
+            ("trade_date", "report_date"),
+            ("trade_date", "announced_date"),
+            ("vol", "holding_amount"),
+            ("ratio", "holding_ratio"),
+        ),
+        source_primary_key=("trade_date", "ts_code", "exchange"),
+        unit_policy="reported shares and percent ratios",
+        date_policy="trade_date; official daily northbound publication stopped after 2024-08-20",
+        adjustment_policy="reported values; no market adjustment",
+        update_policy="daily through 2024-08-20; quarterly northbound disclosure thereafter with late corrections",
+        coverage="CN_A northbound holdings",
+    ),
 )
 
 
@@ -1119,6 +1242,7 @@ _RAW_DATASET_BY_SOURCE_INTERFACE_ID: Final[dict[str, str]] = {
     mapping.source_interface_id: mapping.doc_api for mapping in PROVIDER_MAPPINGS
 }
 _RAW_DATASET_BY_SOURCE_INTERFACE_ID["trade_cal_stock"] = "trade_cal"
+_RAW_DATASET_BY_SOURCE_INTERFACE_ID["hsgt_hold_top10"] = "hsgt_hold_top10"
 
 _PARTITION_KEY_BY_RAW_DATASET: Final[dict[str, tuple[str, ...]]] = {
     "stock_basic": (),
@@ -1159,6 +1283,11 @@ _PARTITION_KEY_BY_RAW_DATASET: Final[dict[str, tuple[str, ...]]] = {
     "limit_list_ths": ("trade_date",),
     "limit_list_d": ("trade_date",),
     "hm_detail": ("trade_date",),
+    "top10_holders": ("end_date",),
+    "top10_floatholders": ("end_date",),
+    "fund_portfolio": ("end_date",),
+    "hsgt_top10": ("trade_date",),
+    "hsgt_hold_top10": ("trade_date",),
 }
 
 _CANONICAL_TABLE_BY_DATASET: Final[dict[str, str]] = {
@@ -1179,6 +1308,8 @@ _CANONICAL_TABLE_BY_DATASET: Final[dict[str, str]] = {
     "market_leverage_daily": "canonical.fact_market_daily_feature",
     "security_leverage_detail": "canonical.fact_market_daily_feature",
     "business_segment_exposure": "canonical.fact_financial_indicator",
+    "holding_position": "canonical_v2.fact_holding_position",
+    "northbound_turnover_daily": "canonical_v2.fact_northbound_turnover",
 }
 
 

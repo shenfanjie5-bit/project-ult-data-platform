@@ -39,6 +39,7 @@ export DP_ICEBERG_WAREHOUSE_PATH="${DP_ICEBERG_WAREHOUSE_PATH:-${SMOKE_WORK_DIR}
 export DP_DUCKDB_PATH="${DP_DUCKDB_PATH:-${SMOKE_WORK_DIR}/data_platform.duckdb}"
 export DP_ICEBERG_CATALOG_NAME="${DP_ICEBERG_CATALOG_NAME:-data_platform_p1a_smoke}"
 export DP_ENV="${DP_ENV:-}"
+export DP_CANONICAL_USE_V2=1
 export DBT_PROFILES_DIR="${PROFILES_DIR}"
 
 validate_smoke_target() {
@@ -163,8 +164,13 @@ from datetime import date
 import uuid
 
 import pandas as pd
+import pyarrow as pa
 
-from data_platform.adapters.tushare import TushareAdapter
+from data_platform.adapters.tushare import (
+    TUSHARE_NAMECHANGE_ASSET,
+    TUSHARE_STOCK_COMPANY_ASSET,
+    TushareAdapter,
+)
 from data_platform.raw import RawWriter
 
 
@@ -235,7 +241,22 @@ class MockTushareClient:
 
 adapter = TushareAdapter(token="mock-token", client=MockTushareClient())
 table = adapter.fetch("tushare_stock_basic", {})
-artifact = RawWriter().write_arrow(
+writer = RawWriter()
+for empty_asset in (TUSHARE_STOCK_COMPANY_ASSET, TUSHARE_NAMECHANGE_ASSET):
+    writer.write_arrow(
+        adapter.source_id(),
+        empty_asset.dataset,
+        date(2026, 4, 15),
+        str(uuid.uuid4()),
+        pa.table(
+            {
+                field.name: pa.array([], type=field.type)
+                for field in empty_asset.schema
+            },
+            schema=empty_asset.schema,
+        ),
+    )
+artifact = writer.write_arrow(
     adapter.source_id(),
     "stock_basic",
     date(2026, 4, 15),
@@ -252,7 +273,7 @@ from __future__ import annotations
 
 import json
 
-from data_platform.serving.reader import read_canonical
+from data_platform.serving.reader import get_canonical_stock_basic
 
 
 expected_columns = [
@@ -264,16 +285,15 @@ expected_columns = [
     "market",
     "list_date",
     "is_active",
-    "source_run_id",
     "canonical_loaded_at",
 ]
 
-table = read_canonical("stock_basic")
+table = get_canonical_stock_basic()
 if table.num_rows != 3:
-    raise SystemExit(f"expected 3 canonical.stock_basic rows, got {table.num_rows}")
+    raise SystemExit(f"expected 3 canonical_v2.stock_basic rows, got {table.num_rows}")
 if table.schema.names != expected_columns:
     raise SystemExit(
-        "unexpected canonical.stock_basic columns: "
+        "unexpected canonical_v2.stock_basic columns: "
         + json.dumps(table.schema.names, sort_keys=True)
     )
 
@@ -285,7 +305,7 @@ run_step "migrate" "${PYTHON}" -m data_platform.ddl.runner --upgrade
 run_step "init catalog" "${PYTHON}" "${ROOT_DIR}/scripts/init_iceberg_catalog.py"
 run_step "ensure tables" "${PYTHON}" -m data_platform.ddl.iceberg_tables --ensure
 run_step "fetch tushare fixture" seed_tushare_fixture
-run_step "dbt run" "${ROOT_DIR}/scripts/dbt.sh" run --profiles-dir "${PROFILES_DIR}" --target-path "${DBT_TARGET_DIR}" --select stg_stock_basic
+run_step "dbt run" "${ROOT_DIR}/scripts/dbt.sh" run --profiles-dir "${PROFILES_DIR}" --target-path "${DBT_TARGET_DIR}" --select +mart_stock_basic_v2 +mart_lineage_stock_basic
 run_step "canonical write" "${PYTHON}" -m data_platform.serving.canonical_writer --table stock_basic
 run_step "reader query" query_canonical_with_duckdb
 

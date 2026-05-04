@@ -128,9 +128,10 @@ ENTITY_ALIAS_SPEC: Final[TableSpec] = TableSpec(
 # (`assembly/reports/stabilization/canonical-v2-lineage-separation-design-20260428.md`)
 # and M1-B spike (`p1-iceberg-write-chain-spike-proof-20260428.md`).
 #
-# Coverage: 9 mart tables (dim_security, stock_basic, dim_index,
+# Coverage: 11 mart tables (dim_security, stock_basic, dim_index,
 # fact_price_bar, fact_financial_indicator, fact_market_daily_feature,
-# fact_index_price_bar, fact_forecast_event, fact_event). fact_event currently
+# fact_index_price_bar, fact_forecast_event, fact_event,
+# fact_holding_position, fact_northbound_turnover). fact_event currently
 # covers 8 source interfaces after M1.8 block_trade promotion. Legacy
 # `canonical.*` namespace remains active until retirement readiness
 # pre-conditions close (see m1-legacy-canonical-retirement-readiness-20260428.md).
@@ -413,6 +414,50 @@ CANONICAL_V2_FACT_EVENT_SPEC: Final[TableSpec] = TableSpec(
     ),
 )
 
+CANONICAL_V2_FACT_HOLDING_POSITION_SPEC: Final[TableSpec] = TableSpec(
+    namespace=CANONICAL_V2_NAMESPACE,
+    name="fact_holding_position",
+    schema=pa.schema(
+        [
+            pa.field("holding_source", pa.string()),
+            pa.field("holder_id", pa.string()),
+            pa.field("holder_name", pa.string()),
+            pa.field("holder_type", pa.string()),
+            pa.field("security_id", pa.string()),
+            pa.field("report_date", pa.date32()),
+            pa.field("announced_date", pa.date32()),
+            pa.field("holding_amount", DECIMAL_TYPE),
+            pa.field("holding_ratio", DECIMAL_TYPE),
+            pa.field("holding_float_ratio", DECIMAL_TYPE),
+            pa.field("holding_change", DECIMAL_TYPE),
+            pa.field("market_value", DECIMAL_TYPE),
+            pa.field("exchange", pa.string()),
+            pa.field("canonical_loaded_at", TIMESTAMP_TYPE),
+        ]
+    ),
+)
+
+CANONICAL_V2_FACT_NORTHBOUND_TURNOVER_SPEC: Final[TableSpec] = TableSpec(
+    namespace=CANONICAL_V2_NAMESPACE,
+    name="fact_northbound_turnover",
+    schema=pa.schema(
+        [
+            pa.field("security_id", pa.string()),
+            pa.field("trade_date", pa.date32()),
+            pa.field("security_name", pa.string()),
+            pa.field("market_type", pa.string()),
+            pa.field("rank", pa.int32()),
+            pa.field("close", DECIMAL_TYPE),
+            pa.field("change", DECIMAL_TYPE),
+            pa.field("amount", DECIMAL_TYPE),
+            pa.field("net_amount", DECIMAL_TYPE),
+            pa.field("buy_amount", DECIMAL_TYPE),
+            pa.field("sell_amount", DECIMAL_TYPE),
+            pa.field("canonical_loaded_at", TIMESTAMP_TYPE),
+        ]
+    ),
+)
+
 CANONICAL_V2_TABLE_SPECS: Final[tuple[TableSpec, ...]] = (
     CANONICAL_V2_DIM_SECURITY_SPEC,
     CANONICAL_V2_STOCK_BASIC_SPEC,
@@ -423,6 +468,8 @@ CANONICAL_V2_TABLE_SPECS: Final[tuple[TableSpec, ...]] = (
     CANONICAL_V2_FACT_INDEX_PRICE_BAR_SPEC,
     CANONICAL_V2_FACT_FORECAST_EVENT_SPEC,
     CANONICAL_V2_FACT_EVENT_SPEC,
+    CANONICAL_V2_FACT_HOLDING_POSITION_SPEC,
+    CANONICAL_V2_FACT_NORTHBOUND_TURNOVER_SPEC,
 )
 
 # ---------------------------------------------------------------------------
@@ -595,6 +642,43 @@ CANONICAL_LINEAGE_FACT_EVENT_SPEC: Final[TableSpec] = TableSpec(
     ),
 )
 
+CANONICAL_LINEAGE_FACT_HOLDING_POSITION_SPEC: Final[TableSpec] = TableSpec(
+    namespace=CANONICAL_LINEAGE_NAMESPACE,
+    name="lineage_fact_holding_position",
+    schema=pa.schema(
+        [
+            pa.field("holding_source", pa.string()),
+            pa.field("holder_id", pa.string()),
+            pa.field("security_id", pa.string()),
+            pa.field("report_date", pa.date32()),
+            pa.field("announced_date", pa.date32()),
+            pa.field("source_provider", pa.string()),
+            pa.field("source_interface_id", pa.string()),
+            pa.field("source_run_id", pa.string()),
+            pa.field("raw_loaded_at", TIMESTAMP_TYPE),
+            pa.field("canonical_loaded_at", TIMESTAMP_TYPE),
+        ]
+    ),
+)
+
+CANONICAL_LINEAGE_FACT_NORTHBOUND_TURNOVER_SPEC: Final[TableSpec] = TableSpec(
+    namespace=CANONICAL_LINEAGE_NAMESPACE,
+    name="lineage_fact_northbound_turnover",
+    schema=pa.schema(
+        [
+            pa.field("security_id", pa.string()),
+            pa.field("trade_date", pa.date32()),
+            pa.field("market_type", pa.string()),
+            pa.field("rank", pa.int32()),
+            pa.field("source_provider", pa.string()),
+            pa.field("source_interface_id", pa.string()),
+            pa.field("source_run_id", pa.string()),
+            pa.field("raw_loaded_at", TIMESTAMP_TYPE),
+            pa.field("canonical_loaded_at", TIMESTAMP_TYPE),
+        ]
+    ),
+)
+
 CANONICAL_LINEAGE_TABLE_SPECS: Final[tuple[TableSpec, ...]] = (
     CANONICAL_LINEAGE_DIM_SECURITY_SPEC,
     CANONICAL_LINEAGE_STOCK_BASIC_SPEC,
@@ -605,6 +689,8 @@ CANONICAL_LINEAGE_TABLE_SPECS: Final[tuple[TableSpec, ...]] = (
     CANONICAL_LINEAGE_FACT_INDEX_PRICE_BAR_SPEC,
     CANONICAL_LINEAGE_FACT_FORECAST_EVENT_SPEC,
     CANONICAL_LINEAGE_FACT_EVENT_SPEC,
+    CANONICAL_LINEAGE_FACT_HOLDING_POSITION_SPEC,
+    CANONICAL_LINEAGE_FACT_NORTHBOUND_TURNOVER_SPEC,
 )
 
 DEFAULT_TABLE_SPECS: Final[tuple[TableSpec, ...]] = (
@@ -784,8 +870,10 @@ __all__ = [
     "CANONICAL_LINEAGE_FACT_EVENT_SPEC",
     "CANONICAL_LINEAGE_FACT_FINANCIAL_INDICATOR_SPEC",
     "CANONICAL_LINEAGE_FACT_FORECAST_EVENT_SPEC",
+    "CANONICAL_LINEAGE_FACT_HOLDING_POSITION_SPEC",
     "CANONICAL_LINEAGE_FACT_INDEX_PRICE_BAR_SPEC",
     "CANONICAL_LINEAGE_FACT_MARKET_DAILY_FEATURE_SPEC",
+    "CANONICAL_LINEAGE_FACT_NORTHBOUND_TURNOVER_SPEC",
     "CANONICAL_LINEAGE_FACT_PRICE_BAR_SPEC",
     "CANONICAL_LINEAGE_NAMESPACE",
     "CANONICAL_LINEAGE_STOCK_BASIC_SPEC",
@@ -795,8 +883,10 @@ __all__ = [
     "CANONICAL_V2_FACT_EVENT_SPEC",
     "CANONICAL_V2_FACT_FINANCIAL_INDICATOR_SPEC",
     "CANONICAL_V2_FACT_FORECAST_EVENT_SPEC",
+    "CANONICAL_V2_FACT_HOLDING_POSITION_SPEC",
     "CANONICAL_V2_FACT_INDEX_PRICE_BAR_SPEC",
     "CANONICAL_V2_FACT_MARKET_DAILY_FEATURE_SPEC",
+    "CANONICAL_V2_FACT_NORTHBOUND_TURNOVER_SPEC",
     "CANONICAL_V2_FACT_PRICE_BAR_SPEC",
     "CANONICAL_V2_NAMESPACE",
     "CANONICAL_V2_STOCK_BASIC_SPEC",
