@@ -222,6 +222,22 @@ def test_holdings_registry_points_to_canonical_v2_serving_tables() -> None:
     )
 
 
+def test_hk_hold_catalog_policy_does_not_claim_post_cutoff_daily_freshness() -> None:
+    mapping = mapping_for_source_interface_id("tushare", "hsgt_hold_top10")
+    assert mapping is not None
+
+    assert "2024-08-20" in mapping.date_policy
+    assert "stopped" in mapping.date_policy
+    assert mapping.update_policy == (
+        "daily through 2024-08-20; quarterly northbound disclosure thereafter "
+        "with late corrections"
+    )
+    assert TUSHARE_INTERFACE_REGISTRY["hsgt_hold_top10"].refresh_policy == (
+        "daily through 2024-08-20; quarterly northbound disclosure thereafter "
+        "with late corrections"
+    )
+
+
 def test_holding_position_catalog_uses_v2_announced_date_identity() -> None:
     canonical = CANONICAL_DATASETS["holding_position"]
 

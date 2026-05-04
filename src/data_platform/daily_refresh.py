@@ -54,6 +54,8 @@ TRUTHY_VALUES = frozenset({"1", "true", "yes", "on"})
 DEFAULT_REFRESH_LOCK_STALE_AFTER = timedelta(hours=6)
 REFRESH_LOCK_STALE_SECONDS_ENV = "DP_DAILY_REFRESH_LOCK_STALE_SECONDS"
 TOP10_TS_CODES_ENV = "DP_TUSHARE_TOP10_TS_CODES"
+HK_HOLD_DAILY_REFRESH_DATASET = "hsgt_hold_top10"
+HK_HOLD_DAILY_PUBLICATION_LAST_DATE = date(2024, 8, 20)
 DATE_FIELD_NAMES = frozenset(
     {
         "actual_date",
@@ -235,6 +237,12 @@ class _DailyRefreshLock:
                 os.close(self.fd)
 
 
+@dataclass(frozen=True)
+class _RefreshAssetPlan:
+    assets: tuple[AssetSpec, ...]
+    skipped_assets: tuple[dict[str, Any], ...]
+
+
 class _JsonArgumentParser(argparse.ArgumentParser):
     def error(self, message: str) -> NoReturn:
         raise ValueError(message)
@@ -284,9 +292,23 @@ def run_daily_refresh(
         adapter = _build_adapter(mock=mock)
         all_assets = adapter.get_assets()
         selected_assets = _select_assets(all_assets, select)
+        refresh_plan = _refresh_asset_plan(selected_assets, partition_date, mock=mock)
         asset_specs = build_assets([adapter])
     except Exception as exc:
         _append_failed_step(steps, "config", exc, started_at=perf_counter())
+        result = _result(partition_date, steps)
+        _write_report_if_requested(json_report, result)
+        return result
+
+    if not refresh_plan.assets:
+        skip_metadata = _no_refreshable_assets_metadata(
+            mock=mock,
+            asset_specs_count=len(asset_specs),
+            skipped_assets=refresh_plan.skipped_assets,
+        )
+        _append_skipped_step(steps, "adapter", skip_metadata)
+        for step_name in ("dbt_run", "dbt_test", "canonical", "raw_health"):
+            _append_skipped_step(steps, step_name, skip_metadata)
         result = _result(partition_date, steps)
         _write_report_if_requested(json_report, result)
         return result
@@ -308,8 +330,9 @@ def run_daily_refresh(
                 adapter,
                 settings,
                 partition_date,
-                selected_assets,
+                refresh_plan.assets,
                 asset_specs_count=len(asset_specs),
+                skipped_assets=refresh_plan.skipped_assets,
                 mock=mock,
             ),
         ):
@@ -317,7 +340,7 @@ def run_daily_refresh(
             _write_report_if_requested(json_report, result)
             return result
 
-        dbt_selectors = _dbt_selectors(selected_assets, all_assets)
+        dbt_selectors = _dbt_selectors(refresh_plan.assets, all_assets)
         if not _append_step(
             steps,
             "dbt_run",
@@ -349,7 +372,7 @@ def run_daily_refresh(
         if not _append_step(
             steps,
             "canonical",
-            lambda: _run_canonical_step(settings, selected_assets, all_assets),
+            lambda: _run_canonical_step(settings, refresh_plan.assets, all_assets),
         ):
             result = _result(partition_date, steps)
             _write_report_if_requested(json_report, result)
@@ -361,7 +384,7 @@ def run_daily_refresh(
             lambda: _run_raw_health_step(
                 settings,
                 partition_date,
-                selected_assets,
+                refresh_plan.assets,
                 source_id=adapter.source_id(),
             ),
         )
@@ -429,6 +452,75 @@ def _build_adapter(*, mock: bool) -> FetchableAdapter:
     return TushareAdapter()
 
 
+def _refresh_asset_plan(
+    selected_assets: Sequence[AssetSpec],
+    partition_date: date,
+    *,
+    mock: bool,
+) -> _RefreshAssetPlan:
+    refreshable_assets: list[AssetSpec] = []
+    skipped_assets: list[dict[str, Any]] = []
+    for asset in selected_assets:
+        skip_metadata = _daily_refresh_skip_for_asset(
+            asset,
+            partition_date,
+            mock=mock,
+        )
+        if skip_metadata is None:
+            refreshable_assets.append(asset)
+        else:
+            skipped_assets.append(skip_metadata)
+    return _RefreshAssetPlan(tuple(refreshable_assets), tuple(skipped_assets))
+
+
+def _daily_refresh_skip_for_asset(
+    asset: AssetSpec,
+    partition_date: date,
+    *,
+    mock: bool,
+) -> dict[str, Any] | None:
+    if mock:
+        return None
+    if asset.dataset != HK_HOLD_DAILY_REFRESH_DATASET:
+        return None
+    if partition_date <= HK_HOLD_DAILY_PUBLICATION_LAST_DATE:
+        return None
+
+    return {
+        "asset": asset.name,
+        "dataset": asset.dataset,
+        "source_interface_id": asset.metadata.get("source_interface_id", asset.dataset),
+        "doc_api": asset.metadata.get("doc_api", "hk_hold"),
+        "partition_date": f"{partition_date:%Y%m%d}",
+        "status": "skipped",
+        "reason_type": "daily_publication_discontinued",
+        "reason": (
+            "Tushare hk_hold daily northbound publication ended after "
+            f"{HK_HOLD_DAILY_PUBLICATION_LAST_DATE:%Y-%m-%d}; the daily refresh "
+            "does not fetch post-cutoff current-date hk_hold pages"
+        ),
+        "daily_publication_last_date": HK_HOLD_DAILY_PUBLICATION_LAST_DATE.isoformat(),
+        "replacement_cadence": "quarterly_disclosure",
+        "skip_policy": "fail_closed_no_daily_live_freshness_claim",
+    }
+
+
+def _no_refreshable_assets_metadata(
+    *,
+    mock: bool,
+    asset_specs_count: int,
+    skipped_assets: Sequence[Mapping[str, Any]],
+) -> dict[str, Any]:
+    return {
+        "mock": mock,
+        "asset_specs_count": asset_specs_count,
+        "artifact_count": 0,
+        "artifacts": [],
+        "skipped_assets": list(skipped_assets),
+        "reason": "no refreshable assets remain after applying daily refresh gates",
+    }
+
+
 def _run_adapter_step(
     adapter: FetchableAdapter,
     settings: Settings,
@@ -436,6 +528,7 @@ def _run_adapter_step(
     selected_assets: Sequence[AssetSpec],
     *,
     asset_specs_count: int,
+    skipped_assets: Sequence[Mapping[str, Any]] = (),
     mock: bool,
 ) -> dict[str, Any]:
     artifacts: list[RawArtifact] = []
@@ -472,6 +565,7 @@ def _run_adapter_step(
         "asset_specs_count": asset_specs_count,
         "artifact_count": len(artifacts),
         "artifacts": [_raw_artifact_metadata(artifact) for artifact in artifacts],
+        "skipped_assets": list(skipped_assets),
     }
 
 
@@ -865,6 +959,21 @@ def _append_step(
         )
     )
     return True
+
+
+def _append_skipped_step(
+    steps: list[DailyRefreshStepResult],
+    name: str,
+    metadata: Mapping[str, Any],
+) -> None:
+    steps.append(
+        DailyRefreshStepResult(
+            name=name,
+            status="skipped",
+            duration_ms=0,
+            metadata=_json_safe(metadata),
+        )
+    )
 
 
 def _append_failed_step(

@@ -41,6 +41,10 @@ Known planning constraints:
 - `hk_hold` / `hsgt_hold_top10` handles Tushare's row cap by splitting
   unscoped calls across `SH` and `SZ`, then paginating each exchange with
   `limit` / `offset`.
+- Tushare `hk_hold` daily northbound publication stopped after 2024-08-20.
+  Live daily refresh gates `hsgt_hold_top10` after that cutoff and reports an
+  explicit skip instead of writing empty current-date Raw artifacts or claiming
+  daily live freshness; quarterly disclosure/backfill handling is separate work.
 - The provider-neutral `holding_position` mart identity includes
   `announced_date`: `(holding_source, holder_id, security_id, report_date,
   announced_date)`.

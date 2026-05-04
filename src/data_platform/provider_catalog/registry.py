@@ -1160,9 +1160,9 @@ PROVIDER_MAPPINGS: Final[tuple[ProviderDatasetMapping, ...]] = (
         ),
         source_primary_key=("trade_date", "ts_code", "exchange"),
         unit_policy="reported shares and percent ratios",
-        date_policy="trade_date; official source switched northbound cadence after 2024-08-20",
+        date_policy="trade_date; official daily northbound publication stopped after 2024-08-20",
         adjustment_policy="reported values; no market adjustment",
-        update_policy="daily/quarterly northbound disclosure with late corrections",
+        update_policy="daily through 2024-08-20; quarterly northbound disclosure thereafter with late corrections",
         coverage="CN_A northbound holdings",
     ),
 )

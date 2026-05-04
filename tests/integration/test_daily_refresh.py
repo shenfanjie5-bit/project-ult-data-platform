@@ -185,6 +185,96 @@ def test_live_top10_refresh_uses_configured_ts_codes(
     }
 
 
+def test_live_hk_hold_daily_refresh_skips_after_publication_cutoff(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    _set_daily_refresh_env(monkeypatch, tmp_path)
+    monkeypatch.setenv("DP_TUSHARE_TOKEN", "test-token")
+
+    def fail_if_called(*_args: Any, **_kwargs: Any) -> None:
+        raise AssertionError("post-cutoff hk_hold daily refresh must be gated")
+
+    monkeypatch.setattr(daily_refresh, "run_tushare_asset", fail_if_called)
+
+    result = daily_refresh.run_daily_refresh(
+        date(2026, 5, 4),
+        mock=False,
+        select=["hsgt_hold_top10"],
+    )
+
+    assert result.ok is True
+    assert [(step.name, step.status) for step in result.steps] == [
+        ("adapter", "skipped"),
+        ("dbt_run", "skipped"),
+        ("dbt_test", "skipped"),
+        ("canonical", "skipped"),
+        ("raw_health", "skipped"),
+    ]
+    adapter_metadata = result.steps[0].metadata
+    assert adapter_metadata["artifact_count"] == 0
+    assert adapter_metadata["artifacts"] == []
+    assert adapter_metadata["skipped_assets"] == [
+        {
+            "asset": "tushare_hsgt_hold_top10",
+            "dataset": "hsgt_hold_top10",
+            "source_interface_id": "hsgt_hold_top10",
+            "doc_api": "hk_hold",
+            "partition_date": "20260504",
+            "status": "skipped",
+            "reason_type": "daily_publication_discontinued",
+            "reason": (
+                "Tushare hk_hold daily northbound publication ended after "
+                "2024-08-20; the daily refresh does not fetch post-cutoff "
+                "current-date hk_hold pages"
+            ),
+            "daily_publication_last_date": "2024-08-20",
+            "replacement_cadence": "quarterly_disclosure",
+            "skip_policy": "fail_closed_no_daily_live_freshness_claim",
+        }
+    ]
+    assert list((tmp_path / "raw").rglob("*.parquet")) == []
+
+
+def test_hk_hold_daily_refresh_cutoff_keeps_last_publication_date_live() -> None:
+    asset = next(
+        asset for asset in daily_refresh.TUSHARE_ASSETS if asset.dataset == "hsgt_hold_top10"
+    )
+
+    assert (
+        daily_refresh._daily_refresh_skip_for_asset(
+            asset,
+            date(2024, 8, 20),
+            mock=False,
+        )
+        is None
+    )
+    assert daily_refresh._daily_refresh_skip_for_asset(
+        asset,
+        date(2024, 8, 21),
+        mock=False,
+    )["reason_type"] == "daily_publication_discontinued"
+
+
+def test_hk_hold_skip_plan_makes_full_live_refresh_partial_after_cutoff() -> None:
+    all_assets = daily_refresh.TUSHARE_ASSETS
+
+    plan = daily_refresh._refresh_asset_plan(
+        all_assets,
+        date(2026, 5, 4),
+        mock=False,
+    )
+
+    assert "hsgt_hold_top10" not in {asset.dataset for asset in plan.assets}
+    assert [item["dataset"] for item in plan.skipped_assets] == ["hsgt_hold_top10"]
+    assert daily_refresh._dbt_selectors(plan.assets, all_assets) != (
+        "staging",
+        "intermediate",
+        "marts_v2",
+        "marts_lineage",
+    )
+
+
 def test_mock_adapter_values_cover_dbt_cast_fields() -> None:
     assets_by_dataset = {asset.dataset: asset for asset in daily_refresh.TUSHARE_ASSETS}
 

@@ -425,6 +425,100 @@ def test_partitioned_staging_keeps_latest_artifact_per_partition(
     ]
 
 
+@pytest.mark.parametrize("dataset", ("top10_holders", "top10_floatholders"))
+def test_request_scoped_top10_staging_keeps_latest_artifact_per_symbol(
+    tmp_path: Path,
+    dataset: str,
+) -> None:
+    duckdb = pytest.importorskip("duckdb")
+
+    raw_zone_path = tmp_path / "raw"
+    writer = RawWriter(
+        raw_zone_path=raw_zone_path,
+        iceberg_warehouse_path=tmp_path / "iceberg" / "warehouse",
+    )
+    asset = _asset_by_dataset(dataset)
+    partition_date = date(2026, 3, 31)
+    request_a = {
+        "period": "20260331",
+        "ts_code": "000001.SZ",
+        "fields": ",".join(asset.schema.names),
+    }
+    request_b = {
+        "period": "20260331",
+        "ts_code": "600519.SH",
+        "fields": ",".join(asset.schema.names),
+    }
+
+    writer.write_arrow(
+        "tushare",
+        dataset,
+        partition_date,
+        str(uuid4()),
+        _sample_table_with_values(
+            asset,
+            {
+                "ts_code": "000001.SZ",
+                "end_date": "20260331",
+                "ann_date": "20260430",
+                "holder_name": "OLD_SCOPE_A",
+            },
+        ),
+        request_params=request_a,
+    )
+    latest_a = writer.write_arrow(
+        "tushare",
+        dataset,
+        partition_date,
+        str(uuid4()),
+        _sample_table_with_values(
+            asset,
+            {
+                "ts_code": "000001.SZ",
+                "end_date": "20260331",
+                "ann_date": "20260430",
+                "holder_name": "LATEST_SCOPE_A",
+            },
+        ),
+        request_params=request_a,
+    )
+    latest_b = writer.write_arrow(
+        "tushare",
+        dataset,
+        partition_date,
+        str(uuid4()),
+        _sample_table_with_values(
+            asset,
+            {
+                "ts_code": "600519.SH",
+                "end_date": "20260331",
+                "ann_date": "20260430",
+                "holder_name": "LATEST_SCOPE_B",
+            },
+        ),
+        request_params=request_b,
+    )
+
+    model_sql = _render_staging_model(f"stg_{dataset}", raw_zone_path)
+    connection = duckdb.connect(":memory:")
+    try:
+        connection.execute(f'create view "stg_{dataset}" as {model_sql}')
+        rows = connection.execute(
+            f"""
+            select ts_code, end_date, holder_name, source_run_id
+            from "stg_{dataset}"
+            order by ts_code
+            """
+        ).fetchall()
+    finally:
+        connection.close()
+
+    assert rows == [
+        ("000001.SZ", partition_date, "LATEST_SCOPE_A", latest_a.run_id),
+        ("600519.SH", partition_date, "LATEST_SCOPE_B", latest_b.run_id),
+    ]
+
+
 def test_static_staging_keeps_latest_artifact_globally(
     tmp_path: Path,
 ) -> None:

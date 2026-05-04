@@ -24,5 +24,6 @@
         "cast(nullif(trim(cast(\"hold_float_ratio\" as varchar)), '') as varchar) as \"hold_float_ratio\"",
         "cast(nullif(trim(cast(\"hold_change\" as varchar)), '') as varchar) as \"hold_change\"",
         "cast(nullif(trim(cast(\"holder_type\" as varchar)), '') as varchar) as \"holder_type\""
-    ]
+    ],
+    request_scoped=true
 ) }}

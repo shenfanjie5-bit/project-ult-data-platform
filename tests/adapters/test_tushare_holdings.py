@@ -312,6 +312,28 @@ def test_fetch_hk_hold_splits_unscoped_trade_date_by_exchange_and_paginates(
     ]
 
 
+def test_fetch_hk_hold_empty_page_remains_adapter_error() -> None:
+    asset = TUSHARE_HSGT_HOLD_TOP10_ASSET
+    client = _client_for_asset(asset, _holdings_frame(asset, 0))
+    adapter = TushareAdapter(token="test-token", client=client)
+
+    with pytest.raises(tushare_adapter_module.AdapterFetchError, match="empty table"):
+        adapter.fetch(asset.name, {"trade_date": "20260504", "exchange": "SH"})
+
+    assert client.calls == [
+        (
+            "hk_hold",
+            {
+                "trade_date": "20260504",
+                "exchange": "SH",
+                "fields": _fields_csv(asset),
+                "limit": tushare_adapter_module.HK_HOLD_PAGE_LIMIT,
+                "offset": 0,
+            },
+        )
+    ]
+
+
 def test_fetch_fund_portfolio_rejects_non_advancing_pagination(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
