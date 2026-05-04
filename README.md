@@ -53,17 +53,36 @@ Known planning constraints:
   snapshot computation are graph-engine-owned.
 - Live holdings smoke stays blocked unless both `DP_TUSHARE_TOKEN` and
   `DP_TUSHARE_LIVE_HOLDINGS_SMOKE=1` are present.
-- The P1a positive PostgreSQL evidence is still required: `make smoke-p1a`
-  and the Iceberg write-chain spike must run against a real PG DSN without
-  skipping before broader canonical/Iceberg production claims.
+- Post-merge P1a real-PG evidence was produced on 2026-05-04 from `main`
+  merge commit `91038f69127677153f7bc4d1bab19859841915f8`; raw logs remain
+  under `/tmp` only and are not committed.
+
+## Post-merge P1a evidence (2026-05-04)
+
+- P1a smoke ran with `DP_ENV=test`,
+  `DP_SMOKE_P1A_CONFIRM_DESTRUCTIVE=1`,
+  `DP_PG_DSN=postgresql://dp:<redacted>@localhost:5432/dp_p1a_smoke_20260504`,
+  `DP_ICEBERG_CATALOG_NAME=data_platform_p1a_smoke_20260504`,
+  `DP_SMOKE_WORK_DIR=/tmp/data-platform-p1a-smoke-20260504`, and
+  `DP_RAW_ZONE_PATH`, `DP_ICEBERG_WAREHOUSE_PATH`, and `DP_DUCKDB_PATH`
+  under that work dir, then `make smoke-p1a`.
+  Result: `P1a smoke OK duration_s=8 log_dir=/tmp/data-platform-p1a-smoke-20260504/logs`;
+  wrapper duration was 9s.
+- Iceberg write-chain spike ran as
+  `DATABASE_URL=<redacted> DP_PG_DSN=<redacted> .venv/bin/pytest -m spike tests/spike/test_iceberg_write_chain.py -v`.
+  Result: 3 passed, 0 failed, 0 skipped, 0 errors in 1.25s. Covered
+  `test_add_column_backward_compat`, `test_time_travel_by_snapshot`, and
+  `test_concurrent_overwrite`. It used the local `.env` PG DSN with temporary
+  schema behavior because `CREATE DATABASE` privilege was unavailable; no
+  primary worktree artifacts were created.
 
 ## Next planning focus
 
 Order the next data-platform work as:
 
-1. **Remaining real PG evidence**: produce non-skipped P1a smoke and
-   Iceberg spike proof. P1c queue/freeze smoke evidence already exists for
-   the M4 bridge.
+1. **Keep P1a evidence reproducible**: the 2026-05-04 post-merge P1a smoke
+   and Iceberg spike are non-skipped real-PG proof for the current merge.
+   Do not commit raw smoke logs; keep them in `/tmp`.
 2. **Holdings evidence**: run real Tushare smoke for the promoted holdings
    interfaces when `DP_TUSHARE_TOKEN` is available, then add historical
    backfill orchestration.
@@ -83,12 +102,14 @@ Execution rule:
 Spike checks:
 
 ```bash
-pytest -m spike tests/spike/test_iceberg_write_chain.py -v
+DATABASE_URL=<redacted> DP_PG_DSN=<redacted> .venv/bin/pytest -m spike tests/spike/test_iceberg_write_chain.py -v
 cat docs/spike/iceberg-write-chain.md
 ```
 
 The Iceberg write-chain spike requires `DATABASE_URL` or `DP_PG_DSN` to point at
 a PostgreSQL database where the test user can create and drop temporary schemas.
+The 2026-05-04 evidence used temporary schema behavior after `CREATE DATABASE`
+was unavailable.
 
 ## Data storage layout
 

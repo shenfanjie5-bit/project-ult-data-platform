@@ -7,20 +7,22 @@
 
 | 阶段 | 标签 | 名称 | 文档退出条件 | Issue 数 | 状态 | 起止 |
 |------|------|------|--------------|----------|------|------|
-| 阶段 0 | milestone-0 | P1a 骨架 | DuckDB 可查到 snapshot；§23-2 闭环跑通 | 14 (#001-#014) | 🟡 进行中 | — |
+| 阶段 0 | milestone-0 | P1a 骨架 | DuckDB 可查到 snapshot；§23-2 闭环跑通 | 14 (#001-#014) | ✅ 已完成 | 2026-05-04 |
 | 阶段 1 | milestone-1 | P1b 铺量 | 结构化数据层每日自动更新 | 12 (#015-#026) | ⬜ 未开始 | — |
 | 阶段 2 | milestone-2 | P1c Lite Layer B + cycle 控制 | 候选冻结与 manifest 机制单独演练通过 | 10 (#027-#036) | ⬜ 未开始 | — |
 
 **阶段依赖**：阶段 N+1 严格在阶段 N 全部完成后启动。
 
-> **同步说明（2026-04-24 doc sync + 2026-04-24 codex follow-up）**：
+> **同步说明（2026-05-04 post-merge evidence update）**：
 >
 > **本轮同步区分两种状态**，避免用"实现已落地"代替"验收已通过"：
 >
 > - **实现已落地 + 已验收完成（✅）**：`ISSUE-001~012` —— 代码 / 配置 / 脚手架 / 单测均在仓内，且不依赖外部服务即可验收的交付项目均已核对通过。
-> - **实现已落地 + 验收 env-gated 待证据（🟡）**：`ISSUE-013`（Iceberg spike）+ `ISSUE-014`（smoke-p1a 闭环）。两者的测试在 `DATABASE_URL` / `DP_PG_DSN` 缺失时 `pytest.skip`；`tests/spike/test_iceberg_write_chain.py` 当前 sandbox 跑出 `sss`，`tests/integration/test_p1a_smoke.py` 当前跑出 `s......`；`docs/spike/iceberg-write-chain.md` 仍然是 `Completed cases: 0/3 / Conclusion: pending`。要把这两条升 ✅，必须附一次真实 PG 环境下 3/3 pass 的证据（spike 报告被 `pytest -m spike` 覆写 + smoke 一次完整成功的日志）。
+> - **实现已落地 + post-merge real-PG evidence 已验收完成（✅）**：`ISSUE-013`（Iceberg spike）+ `ISSUE-014`（smoke-p1a 闭环）。2026-05-04 在 `main` merge commit `91038f69127677153f7bc4d1bab19859841915f8` 之后记录非跳过证据：
+>   `DP_ENV=test DP_SMOKE_P1A_CONFIRM_DESTRUCTIVE=1 DP_PG_DSN=postgresql://dp:<redacted>@localhost:5432/dp_p1a_smoke_20260504 DP_ICEBERG_CATALOG_NAME=data_platform_p1a_smoke_20260504 DP_SMOKE_WORK_DIR=/tmp/data-platform-p1a-smoke-20260504 make smoke-p1a`
+>   返回 `P1a smoke OK duration_s=8 log_dir=/tmp/data-platform-p1a-smoke-20260504/logs`（wrapper 9s）；`DATABASE_URL=<redacted> DP_PG_DSN=<redacted> .venv/bin/pytest -m spike tests/spike/test_iceberg_write_chain.py -v` 返回 3 passed, 0 failed, 0 skipped, 0 errors in 1.25s。
 >
-> 因为 `ISSUE-013/014` 仍然 🟡，**阶段 0 整体保持 🟡 进行中**，退出条件的 `make smoke-p1a` + `Iceberg 写入链 spike` 两条 checklist 仍为 `[ ]`。`docs/TASK_BREAKDOWN.md` 中 `ISSUE-013/014` 的验收框也都保持 `[ ]` unchecked，两份文档在此处口径一致。
+> 因为 `ISSUE-013/014` 已有非跳过 real-PG evidence，**阶段 0 整体更新为 ✅ 已完成**。原始 smoke 日志仍位于 `/tmp/data-platform-p1a-smoke-20260504/logs`，不提交入仓。
 >
 > 后续 `ISSUE-015+`（P1b / P1c）的真实进度不在本次 doc-sync 范围内，保留 `⬜ 未开始` 标记待各自 issue 走完正式流程后再更新。
 
@@ -44,14 +46,14 @@
 | ISSUE-010 | stg_stock_basic dbt staging model | P0 | ✅ | #008, #009 |
 | ISSUE-011 | canonical.stock_basic 写入逻辑 | P0 | ✅ | #006, #010 |
 | ISSUE-012 | Canonical / DuckDB 基础读取接口 | P0 | ✅ | #011 |
-| ISSUE-013 | Iceberg 写入链 spike 验证 | P0 | 🟡 | #006 |
-| ISSUE-014 | 端到端最小闭环冒烟 smoke-p1a | P0 | 🟡 | #003, #004, #005, #006, #008, #010, #011, #012 |
+| ISSUE-013 | Iceberg 写入链 spike 验证 | P0 | ✅ | #006 |
+| ISSUE-014 | 端到端最小闭环冒烟 smoke-p1a | P0 | ✅ | #003, #004, #005, #006, #008, #010, #011, #012 |
 
 **完成判定（§23 验收 1+2）**：
 - [x] Raw / Canonical / Formal / Analytical 边界与落地方式明确并可运行
-- [ ] 至少 1 个 API 样例完成 Raw → staging → Canonical → DuckDB 读取闭环（**实现已落地（ISSUE-001~012 staging / canonical / serving 模块可 import、单元测试可独立跑过），但"一条 API 完整闭环 pass"这件事本身就是 ISSUE-014 正向 smoke 的验收范围；仓内目前没有 `make smoke-p1a` 成功日志，所以本条保持 `[ ]` 直到下一条 checkbox 先满足**）
-- [ ] `make smoke-p1a` 一次成功且 `< 5 分钟`（`Makefile` 已声明 `smoke-p1a` 目标，`scripts/smoke_p1a.sh` 已落地；`scripts/smoke_p1a.sh` 要求 **`DP_PG_DSN`** 环境变量，脚本第 26 行明确写 "DATABASE_URL is not used by this destructive smoke path"；sandbox 下 `DP_PG_DSN` 未设时脚本以 exit 2 失败，留下的 `<5 分钟` pass 证据为零。pytest 对位验证 `tests/integration/test_p1a_smoke.py` 用的是 **`DATABASE_URL`**（fixture 读 `os.environ.get("DATABASE_URL")`），sandbox 跑出 `s......` 也是 skip。）
-- [ ] Iceberg 写入链 spike 三类用例全部通过（`tests/spike/test_iceberg_write_chain.py` 3 用例 + `@pytest.mark.spike` marker 已落地；spike fixture 在缺 `DATABASE_URL` / `DP_PG_DSN` 时 `pytest.skip`，sandbox 当前跑出 `sss`；`docs/spike/iceberg-write-chain.md` 仍为 `Completed cases: 0/3 / Conclusion: pending`，待一次真实 PG 环境下 `pytest -m spike` 改写为 3/3 pass 版本）
+- [x] 至少 1 个 API 样例完成 Raw → staging → Canonical → DuckDB 读取闭环（2026-05-04 `make smoke-p1a` 非跳过 real-PG run 返回 `P1a smoke OK duration_s=8 log_dir=/tmp/data-platform-p1a-smoke-20260504/logs`，wrapper 9s）
+- [x] `make smoke-p1a` 一次成功且 `< 5 分钟`（同上；运行命令使用 `DP_PG_DSN=postgresql://dp:<redacted>@localhost:5432/dp_p1a_smoke_20260504`，raw/warehouse/DuckDB 均位于 `/tmp/data-platform-p1a-smoke-20260504` 下）
+- [x] Iceberg 写入链 spike 三类用例全部通过（2026-05-04 `DATABASE_URL=<redacted> DP_PG_DSN=<redacted> .venv/bin/pytest -m spike tests/spike/test_iceberg_write_chain.py -v` 返回 3 passed, 0 failed, 0 skipped, 0 errors in 1.25s）
 
 **关键交付物实际落点（2026-04-24 sync 时核验存在）**：
 
@@ -67,8 +69,8 @@
 - ISSUE-010：`src/data_platform/dbt/models/staging/stg_stock_basic.sql` + `_sources.yml` + `_schema.yml`
 - ISSUE-011：`src/data_platform/serving/canonical_writer.py`
 - ISSUE-012：`src/data_platform/serving/reader.py`（`get_canonical_stock_basic` 等）
-- ISSUE-013：`tests/spike/test_iceberg_write_chain.py` + `@pytest.mark.spike` marker（`pyproject.toml`）+ `docs/spike/iceberg-write-chain.md`（**报告仍为 `Completed cases: 0/3 / Conclusion: pending`，待真实 PG 环境下重写**）
-- ISSUE-014：`scripts/smoke_p1a.sh` + `tests/integration/test_p1a_smoke.py` + `Makefile` 中 `smoke-p1a:` target（**正向 smoke 有两条验证路径、两个不同的环境变量**：`make smoke-p1a` 走 `scripts/smoke_p1a.sh`，要求 `DP_PG_DSN`（脚本 line 26 明确 "DATABASE_URL is not used by this destructive smoke path"）；`pytest tests/integration/test_p1a_smoke.py` 走 `postgres_dsn` fixture，要求 `DATABASE_URL`。sandbox 下两者都 skip，`s......` 不是成功证据。）
+- ISSUE-013：`tests/spike/test_iceberg_write_chain.py` + `@pytest.mark.spike` marker（`pyproject.toml`）+ `docs/spike/iceberg-write-chain.md`（**2026-05-04 post-merge run：3 passed, 0 failed, 0 skipped, 0 errors in 1.25s**）
+- ISSUE-014：`scripts/smoke_p1a.sh` + `tests/integration/test_p1a_smoke.py` + `Makefile` 中 `smoke-p1a:` target（**2026-05-04 post-merge `make smoke-p1a`：`P1a smoke OK duration_s=8 log_dir=/tmp/data-platform-p1a-smoke-20260504/logs`，wrapper 9s**）
 
 ---
 

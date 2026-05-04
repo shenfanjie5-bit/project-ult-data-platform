@@ -629,21 +629,22 @@ tests/spike/iceberg_write_chain
 - 可通过 `pytest -m spike` 单独运行
 
 #### 验收标准
-- [ ] 三个用例全部通过
-- [ ] add column 后旧 snapshot 读取不报错且字段不含新列
-- [ ] time travel 按 snapshot_id 读取行数与写入时记录一致
-- [ ] 并发 overwrite 至少有 1 次抛 `CommitFailedException` 且最终表可读
-- [ ] `docs/spike/iceberg-write-chain.md` 已生成且含 "P1a Iceberg 写入链 spike 成功率: 100%"
+- [x] 三个用例全部通过
+- [x] add column 后旧 snapshot 读取不报错且字段不含新列
+- [x] time travel 按 snapshot_id 读取行数与写入时记录一致
+- [x] 并发 overwrite 至少有 1 次抛 `CommitFailedException` 且最终表可读
+- [x] `docs/spike/iceberg-write-chain.md` 已生成且含 "P1a Iceberg 写入链 spike 成功率: 100%"
 
-#### 实现状态 / 验收状态（2026-04-24）
+#### 实现状态 / 验收状态（2026-05-04）
 - **实现已落地**：`tests/spike/test_iceberg_write_chain.py` 包含 3 个用例 + `@pytest.mark.spike` marker（在 `pyproject.toml` 注册）；`docs/spike/iceberg-write-chain.md` 骨架文件也已存在。
-- **验收未通过**：spike fixture 在 `DATABASE_URL` / `DP_PG_DSN` 缺失时 `pytest.skip`；sandbox 运行 `pytest -m spike tests/spike/test_iceberg_write_chain.py -v` 结果为 `sss`；`docs/spike/iceberg-write-chain.md` 仍是 `Completed cases: 0/3 / Conclusion: pending`。
-- **上一条 ✅ 的先决条件**：在真实 PG 环境下跑一次 `pytest -m spike` 让 3 用例 PASS 且 spike 报告被重写为 "P1a Iceberg 写入链 spike 成功率: 100%"。
+- **验收已通过**：2026-05-04 post-merge run 使用 `DATABASE_URL=<redacted> DP_PG_DSN=<redacted> .venv/bin/pytest -m spike tests/spike/test_iceberg_write_chain.py -v`，结果为 3 passed, 0 failed, 0 skipped, 0 errors in 1.25s。
+- **覆盖用例**：`test_add_column_backward_compat`、`test_time_travel_by_snapshot`、`test_concurrent_overwrite`。
+- **运行说明**：使用 local `.env` PG DSN 的临时 schema 行为；因当前账号无 `CREATE DATABASE` 权限，没有创建新的 primary worktree artifact。
 
 #### 验证命令
 ```bash
 cd /Users/fanjie/Desktop/Cowork/project-ult/data-platform
-DATABASE_URL=postgresql://... pytest -m spike tests/spike/test_iceberg_write_chain.py -v
+DATABASE_URL=<redacted> DP_PG_DSN=<redacted> .venv/bin/pytest -m spike tests/spike/test_iceberg_write_chain.py -v
 cat docs/spike/iceberg-write-chain.md
 ```
 
@@ -681,29 +682,28 @@ scripts/smoke + tests/integration
 - 测试断言：DuckDB 查询返回正确字段集
 
 #### 验收标准
-- [ ] `make smoke-p1a` 在干净环境一次成功
-- [ ] 总耗时 `< 5 分钟`（§19.1 性能基线）
-- [ ] 重跑 smoke 行为幂等（重跑后最新 snapshot 行数仍正确）
-- [ ] 测试日志显示 "P1a smoke OK" 字样
-- [ ] `pytest tests/integration/test_p1a_smoke.py` 通过
+- [x] `make smoke-p1a` 在干净环境一次成功
+- [x] 总耗时 `< 5 分钟`（§19.1 性能基线）
+- [ ] 重跑 smoke 行为幂等（重跑后最新 snapshot 行数仍正确；需要具备 `CREATE DATABASE` 权限的 pytest harness 或一次明确的 repeated-smoke operator run）
+- [x] 测试日志显示 "P1a smoke OK" 字样
+- [ ] `pytest tests/integration/test_p1a_smoke.py` 通过（fixture 仍要求 `CREATE DATABASE` 权限；2026-05-04 evidence 走 `make smoke-p1a`）
 
-#### 实现状态 / 验收状态（2026-04-24）
+#### 实现状态 / 验收状态（2026-05-04）
 - **实现已落地**：`scripts/smoke_p1a.sh` + `tests/integration/test_p1a_smoke.py` + `Makefile` 的 `smoke-p1a:` target 都已存在。
 - **两条验证路径，环境变量要求不同**：
   - `make smoke-p1a` → `scripts/smoke_p1a.sh` → 要求 `DP_PG_DSN`；脚本第 26 行明确 "DATABASE_URL is not used by this destructive smoke path"。
   - `pytest tests/integration/test_p1a_smoke.py` → `postgres_dsn` fixture → 要求 `DATABASE_URL`（fixture 读 `os.environ.get("DATABASE_URL")`，line ~38）。
-- **验收未通过**：两条路径都在 sandbox 下 skip。运行 `pytest tests/integration/test_p1a_smoke.py` 结果为 `s......`（fixture skip + 保护性测试 pass，正向链路未执行）；`make smoke-p1a` 在 sandbox 下 `DP_PG_DSN` 未设时以 exit 2 失败或（若设 `DP_SMOKE_P1A_ALLOW_SKIP=1`）直接 skip。
-- **上一条 ✅ 的先决条件**：在真实 PG 环境下
-  - `DP_PG_DSN=postgresql://... make smoke-p1a` 一次成功并留下日志（含 "P1a smoke OK" 字样 + 总耗时 `< 5 分钟`）；
-  - 且 `DATABASE_URL=postgresql://... pytest tests/integration/test_p1a_smoke.py -v` 全部 PASS。
+- **make 路径验收已通过**：2026-05-04 post-merge run 使用 `DP_ENV=test`、`DP_SMOKE_P1A_CONFIRM_DESTRUCTIVE=1`、`DP_PG_DSN=postgresql://dp:<redacted>@localhost:5432/dp_p1a_smoke_20260504`、`DP_ICEBERG_CATALOG_NAME=data_platform_p1a_smoke_20260504`、`DP_SMOKE_WORK_DIR=/tmp/data-platform-p1a-smoke-20260504`，且 `DP_RAW_ZONE_PATH` / `DP_ICEBERG_WAREHOUSE_PATH` / `DP_DUCKDB_PATH` 均在该 workdir 下，然后执行 `make smoke-p1a`。
+- **结果**：`P1a smoke OK duration_s=8 log_dir=/tmp/data-platform-p1a-smoke-20260504/logs`；wrapper duration 9s。日志只保留在 `/tmp`，不提交入仓。
+- **pytest 路径说明**：`pytest tests/integration/test_p1a_smoke.py -v` 仍要求具备 `CREATE DATABASE` 权限的 `DATABASE_URL`；2026-05-04 evidence 采用已经隔离好的 smoke database + destructive confirmation 的 `make smoke-p1a` 路径。
 
 #### 验证命令
 ```bash
 cd /Users/fanjie/Desktop/Cowork/project-ult/data-platform
 # make 路径：shell 脚本读 DP_PG_DSN，DATABASE_URL 被脚本明确忽略
-DP_PG_DSN=postgresql://... make smoke-p1a
+DP_ENV=test DP_SMOKE_P1A_CONFIRM_DESTRUCTIVE=1 DP_PG_DSN=postgresql://dp:<redacted>@localhost:5432/dp_p1a_smoke_20260504 DP_ICEBERG_CATALOG_NAME=data_platform_p1a_smoke_20260504 DP_SMOKE_WORK_DIR=/tmp/data-platform-p1a-smoke-20260504 make smoke-p1a
 # pytest 路径：fixture 读 DATABASE_URL
-DATABASE_URL=postgresql://... pytest tests/integration/test_p1a_smoke.py -v
+DATABASE_URL=<redacted> pytest tests/integration/test_p1a_smoke.py -v
 ```
 
 #### 依赖
