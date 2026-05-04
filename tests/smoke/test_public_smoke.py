@@ -18,6 +18,12 @@ class TestSmokeFastPath:
         elapsed = time.monotonic() - start
 
         assert result["status"] in {"healthy", "degraded"}
+        # Assert both the probe's own latency and the outer smoke-call wall time.
+        # The probe should stay inside the 1s health budget without cold-loading
+        # heavy runtime dependencies; smoke_hook covers callable imports below.
+        assert result["latency_ms"] < 1000.0, (
+            f"health_probe reported {result['latency_ms']:.3f}ms"
+        )
         assert elapsed < 1.0, f"health_probe took {elapsed:.3f}s"
 
     def test_smoke_hook_passes_for_lite_local(self) -> None:

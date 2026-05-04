@@ -6,9 +6,9 @@ singletons referenced by ``assembly/module-registry.yaml``
 ``module_id: data-platform``:
 
 - ``health_probe`` — verifies the data_platform package boundary loads
-  and the four key API namespaces (raw / canonical / formal-serving /
-  queue / cycle) all import cleanly. Never tries a real PostgreSQL or
-  Iceberg connection — that is left to runtime / orchestrator.
+  and the key API namespace packages are discoverable without importing
+  heavy runtime dependencies. Never tries a real PostgreSQL or Iceberg
+  connection — that is left to runtime / orchestrator.
 - ``smoke_hook`` — verifies the five headline public API functions
   (list_cycles, get_formal_latest, get_formal_by_id, submit_candidate,
   freeze_cycle_candidates) are importable + callable shape, without
@@ -31,6 +31,7 @@ Boundary (data-platform CLAUDE.md):
 from __future__ import annotations
 
 import argparse
+import importlib.util
 import time
 from typing import Any
 
@@ -45,15 +46,24 @@ _MODULE_ID = "data-platform"
 # (assembly/scripts/stage_3_compat_audit.py + Stage 4 §4.1 registry).
 _CONTRACT_VERSION = "v0.1.3"
 _COMPATIBLE_CONTRACT_RANGE = ">=0.1.0,<0.2.0"
+_PUBLIC_NAMESPACE_SPECS = (
+    "data_platform.serving",
+    "data_platform.queue",
+    "data_platform.cycle",
+    "data_platform.raw",
+)
 
 
 class _HealthProbe:
     """Health probe — confirms the data_platform package is importable
-    and the four key public-API submodules (raw, canonical-serving,
-    queue, cycle) load cleanly.
+    and the key public-API namespaces (serving, queue, cycle, raw) are
+    discoverable.
 
     Never attempts a real PG/Iceberg/DuckDB connection; degrades to
     ``status="degraded"`` so ``make smoke`` can run without infra.
+    The smoke hook below imports the headline callables; keeping this
+    probe at namespace-spec resolution avoids cold-loading PyArrow and
+    other runtime dependencies inside the 1-second health budget.
     """
 
     _PROBE_NAME = "data-platform.import"
@@ -62,21 +72,21 @@ class _HealthProbe:
         start = time.monotonic()
         details: dict[str, Any] = {"timeout_sec": timeout_sec}
         try:
-            # Touch the four public namespaces but don't construct any
-            # client. Each is just a module import.
-            import data_platform.serving.formal  # noqa: F401
-            import data_platform.queue.api  # noqa: F401
-            import data_platform.cycle.freeze  # noqa: F401
-            import data_platform.raw  # noqa: F401
-
-            details["public_namespaces"] = [
-                "data_platform.serving.formal",
-                "data_platform.queue.api",
-                "data_platform.cycle.freeze",
-                "data_platform.raw",
+            missing_namespaces = [
+                name
+                for name in _PUBLIC_NAMESPACE_SPECS
+                if importlib.util.find_spec(name) is None
             ]
-            status = "healthy"
-            message = "data-platform package import healthy"
+
+            details["public_namespaces"] = list(_PUBLIC_NAMESPACE_SPECS)
+            details["namespace_check"] = "module_spec"
+            if missing_namespaces:
+                status = "degraded"
+                message = "data-platform public namespace missing"
+                details["missing_public_namespaces"] = missing_namespaces
+            else:
+                status = "healthy"
+                message = "data-platform package boundary healthy"
         except Exception as exc:  # pragma: no cover - degraded path
             status = "degraded"
             message = f"data-platform import degraded: {exc!s}"
