@@ -27,6 +27,16 @@ def test_top_holder_qoq_change_uses_canonical_lag_and_pairs_lineage() -> None:
             "holder-a",
             "000001.SZ",
             date(2025, 12, 31),
+            date(2026, 1, 15),
+            90,
+            9,
+        )
+        _insert_holding_row(
+            connection,
+            "top_holder",
+            "holder-a",
+            "000001.SZ",
+            date(2025, 12, 31),
             date(2026, 1, 31),
             100,
             10,
@@ -65,6 +75,13 @@ def test_top_holder_qoq_change_uses_canonical_lag_and_pairs_lineage() -> None:
             where report_date = date '2026-03-31'
             """
         ).fetchone()
+        qoq_rows = connection.execute(
+            """
+            select report_date, announced_date, previous_report_date
+            from mart_deriv_top_holder_qoq_change
+            order by report_date, announced_date
+            """
+        ).fetchall()
         key_diff_count = _key_diff_count(
             connection,
             "mart_deriv_top_holder_qoq_change",
@@ -82,6 +99,10 @@ def test_top_holder_qoq_change_uses_canonical_lag_and_pairs_lineage() -> None:
         connection.close()
 
     assert qoq_row == (date(2025, 12, 31), date(2026, 1, 31), 25, 0.25, 2)
+    assert qoq_rows == [
+        (date(2025, 12, 31), date(2026, 1, 31), None),
+        (date(2026, 3, 31), date(2026, 4, 30), date(2025, 12, 31)),
+    ]
     assert key_diff_count == 0
     assert lineage_row == ("mart_fact_holding_position_v2", "top10_holders", 2)
 
@@ -158,6 +179,73 @@ def test_fund_co_holding_orders_pairs_and_dedupes_inverse_pairs() -> None:
     ]
     assert inverse_pair_count == 0
     assert key_diff_count == 0
+
+
+def test_fund_co_holding_lineage_only_counts_contributing_pair_rows() -> None:
+    duckdb = pytest.importorskip("duckdb")
+
+    connection = duckdb.connect(":memory:")
+    try:
+        _create_holding_fixture_tables(connection)
+        for holder_id, security_id in [
+            ("fund-1", "000001.SZ"),
+            ("fund-1", "000002.SZ"),
+            ("fund-2", "000001.SZ"),
+            ("fund-2", "000002.SZ"),
+        ]:
+            _insert_holding_row(
+                connection,
+                "fund_portfolio",
+                holder_id,
+                security_id,
+                date(2026, 3, 31),
+                date(2026, 4, 30),
+                10,
+                1,
+                source_run_id=f"run-{holder_id}-{security_id}",
+            )
+        _insert_holding_row(
+            connection,
+            "fund_portfolio",
+            "fund-side-only",
+            "000001.SZ",
+            date(2026, 3, 31),
+            date(2026, 4, 30),
+            10,
+            1,
+            source_run_id="run-side-only",
+        )
+
+        _create_mart_table(
+            connection,
+            "mart_deriv_fund_co_holding",
+            MARTS_DERIVATIONS_DIR,
+        )
+        _create_mart_table(
+            connection,
+            "mart_deriv_lineage_fund_co_holding",
+            MARTS_DERIVATION_LINEAGE_DIR,
+        )
+
+        lineage_row = connection.execute(
+            """
+            select source_row_count, source_lineage_row_count, source_run_ids
+            from mart_deriv_lineage_fund_co_holding
+            where report_date = date '2026-03-31'
+              and security_id_left = '000001.SZ'
+              and security_id_right = '000002.SZ'
+            """
+        ).fetchone()
+    finally:
+        connection.close()
+
+    assert lineage_row[0:2] == (4, 4)
+    assert set(lineage_row[2].split(",")) == {
+        "run-fund-1-000001.SZ",
+        "run-fund-1-000002.SZ",
+        "run-fund-2-000001.SZ",
+        "run-fund-2-000002.SZ",
+    }
 
 
 def test_northbound_z_score_nulls_when_window_stddev_is_null_or_zero() -> None:
@@ -278,6 +366,7 @@ def _insert_holding_row(
     announced_date: date,
     holding_amount: int,
     holding_ratio: int,
+    source_run_id: str | None = None,
 ) -> None:
     source_interface_id = {
         "top_holder": "top10_holders",
@@ -321,7 +410,7 @@ def _insert_holding_row(
             announced_date,
             "fixture",
             source_interface_id,
-            f"run-{source_interface_id}",
+            source_run_id or f"run-{source_interface_id}",
             datetime(2026, 5, 1, 0, 0, 0),
         ],
     )

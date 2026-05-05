@@ -8,25 +8,58 @@ with top_holder_positions as (
         report_date,
         announced_date,
         holding_amount,
+        holding_ratio
+    from {{ ref('mart_fact_holding_position_v2') }}
+    where holding_source in ('top_holder', 'top_float_holder')
+),
+
+latest_report_positions as (
+    select
+        holding_source,
+        holder_id,
+        security_id,
+        report_date,
+        announced_date,
+        holding_amount,
+        holding_ratio
+    from (
+        select
+            top_holder_positions.*,
+            row_number() over (
+                partition by holding_source, holder_id, security_id, report_date
+                order by announced_date desc
+            ) as announcement_rank
+        from top_holder_positions
+    ) as ranked_positions
+    where announcement_rank = 1
+),
+
+period_changes as (
+    select
+        holding_source,
+        holder_id,
+        security_id,
+        report_date,
+        announced_date,
+        holding_amount,
         holding_ratio,
         lag(report_date) over (
             partition by holding_source, holder_id, security_id
-            order by report_date, announced_date
+            order by report_date
         ) as previous_report_date,
         lag(announced_date) over (
             partition by holding_source, holder_id, security_id
-            order by report_date, announced_date
+            order by report_date
         ) as previous_announced_date,
         lag(holding_amount) over (
             partition by holding_source, holder_id, security_id
-            order by report_date, announced_date
+            order by report_date
         ) as previous_holding_amount,
         lag(holding_ratio) over (
             partition by holding_source, holder_id, security_id
-            order by report_date, announced_date
+            order by report_date
         ) as previous_holding_ratio
-    from {{ ref('mart_fact_holding_position_v2') }}
-    where holding_source in ('top_holder', 'top_float_holder')
+    from latest_report_positions
 )
 
 select
@@ -48,4 +81,4 @@ select
     holding_ratio,
     previous_holding_ratio,
     holding_ratio - previous_holding_ratio as holding_ratio_delta
-from top_holder_positions
+from period_changes

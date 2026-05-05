@@ -1,6 +1,32 @@
 {{ config(materialized="table") }}
 
-with source_rows as (
+with fund_security_positions as (
+    select
+        report_date,
+        holder_id,
+        security_id,
+        max(announced_date) as latest_announced_date
+    from {{ ref('mart_fact_holding_position_v2') }}
+    where holding_source = 'fund_portfolio'
+    group by report_date, holder_id, security_id
+),
+
+fund_pairs as (
+    select
+        left_position.report_date,
+        left_position.security_id as security_id_left,
+        right_position.security_id as security_id_right,
+        left_position.holder_id,
+        left_position.latest_announced_date as left_announced_date,
+        right_position.latest_announced_date as right_announced_date
+    from fund_security_positions as left_position
+    inner join fund_security_positions as right_position
+        on left_position.report_date = right_position.report_date
+        and left_position.holder_id = right_position.holder_id
+        and left_position.security_id < right_position.security_id
+),
+
+source_rows as (
     select
         co_holding.report_date,
         co_holding.security_id_left,
@@ -10,13 +36,38 @@ with source_rows as (
         lineage.source_run_id,
         lineage.raw_loaded_at
     from {{ ref('mart_deriv_fund_co_holding') }} as co_holding
+    inner join fund_pairs
+        on co_holding.report_date = fund_pairs.report_date
+        and co_holding.security_id_left = fund_pairs.security_id_left
+        and co_holding.security_id_right = fund_pairs.security_id_right
     inner join {{ ref('mart_lineage_fact_holding_position') }} as lineage
-        on co_holding.report_date = lineage.report_date
+        on fund_pairs.report_date = lineage.report_date
+        and fund_pairs.holder_id = lineage.holder_id
         and lineage.holding_source = 'fund_portfolio'
-        and lineage.security_id in (
-            co_holding.security_id_left,
-            co_holding.security_id_right
-        )
+        and fund_pairs.security_id_left = lineage.security_id
+        and fund_pairs.left_announced_date = lineage.announced_date
+
+    union all
+
+    select
+        co_holding.report_date,
+        co_holding.security_id_left,
+        co_holding.security_id_right,
+        lineage.report_date as source_report_date,
+        lineage.source_interface_id,
+        lineage.source_run_id,
+        lineage.raw_loaded_at
+    from {{ ref('mart_deriv_fund_co_holding') }} as co_holding
+    inner join fund_pairs
+        on co_holding.report_date = fund_pairs.report_date
+        and co_holding.security_id_left = fund_pairs.security_id_left
+        and co_holding.security_id_right = fund_pairs.security_id_right
+    inner join {{ ref('mart_lineage_fact_holding_position') }} as lineage
+        on fund_pairs.report_date = lineage.report_date
+        and fund_pairs.holder_id = lineage.holder_id
+        and lineage.holding_source = 'fund_portfolio'
+        and fund_pairs.security_id_right = lineage.security_id
+        and fund_pairs.right_announced_date = lineage.announced_date
 )
 
 select
