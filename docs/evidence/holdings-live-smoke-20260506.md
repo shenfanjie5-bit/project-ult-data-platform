@@ -7,18 +7,16 @@
   (`main`, PR #100 merge; includes PR #99 merge
   `8e43608e496adaad228d3259f760db303637c95e`)
 - Evidence type: live Tushare holdings smoke plus daily cutoff regression tests
-- Secret handling: root `.env` was loaded in-process only. Token status was
-  `SET/redacted`; configured TS code scope was `SET/redacted`. No token value,
-  TS code list, DSN, raw provider response, or raw pytest log is recorded here.
+- Secret handling: environment was loaded out-of-band. Token status was
+  `SET/redacted`; configured TS code scope was `SET/redacted`. No secret
+  values, provider responses, or runtime transcripts are recorded here.
 
 ## Commands
 
 Command shape for the live holdings smoke:
 
 ```bash
-set -a
-source /Users/fanjie/Desktop/Cowork/project-ult/.env
-set +a
+# environment loaded out-of-band; token=SET/redacted; ts_code_scope=SET/redacted
 PYTHONDONTWRITEBYTECODE=1 PYTHONPATH=src:../contracts/src \
   .venv/bin/python -m pytest -p no:cacheprovider \
   tests/adapters/test_tushare_holdings.py::test_live_tushare_holdings_smoke_requires_token \
@@ -28,9 +26,7 @@ PYTHONDONTWRITEBYTECODE=1 PYTHONPATH=src:../contracts/src \
 Command shape for the daily cutoff checks:
 
 ```bash
-set -a
-source /Users/fanjie/Desktop/Cowork/project-ult/.env
-set +a
+# environment loaded out-of-band; token=SET/redacted; ts_code_scope=SET/redacted
 PYTHONDONTWRITEBYTECODE=1 PYTHONPATH=src:../contracts/src \
   .venv/bin/python -m pytest -p no:cacheprovider \
   tests/integration/test_daily_refresh.py::test_live_hk_hold_daily_refresh_skips_after_publication_cutoff \
@@ -84,7 +80,7 @@ The cutoff regression tests covered:
 
 ## Noise And Secret Controls
 
-- No raw provider responses were copied into this repository.
-- No raw pytest output file or runtime log was committed.
-- No `.env` file was committed.
-- Token, TS code scope, and DSN values are not present in this evidence.
+- No provider response payloads were copied into this repository.
+- No runtime transcript artifact was committed.
+- No local environment file was committed.
+- No secret values are present in this evidence.
