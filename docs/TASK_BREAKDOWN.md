@@ -394,7 +394,7 @@ data_platform.adapters.tushare
 cd /Users/fanjie/Desktop/Cowork/project-ult/data-platform
 pytest tests/adapters/test_tushare.py -q
 # 真实拉取（需要 token，可选）
-DP_TUSHARE_TOKEN=$TUSHARE_TOKEN DP_DATA_STORAGE_ROOT_PATH=/tmp/dp_data \
+DP_TUSHARE_TOKEN="${DP_TUSHARE_TOKEN:?set DP_TUSHARE_TOKEN}" DP_DATA_STORAGE_ROOT_PATH=/tmp/dp_data \
   python -m data_platform.adapters.tushare.adapter --asset tushare_stock_basic --date 20260415
 ```
 

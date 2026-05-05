@@ -134,6 +134,11 @@ should use the processed directory. Existing deployments may still set
 `DP_RAW_ZONE_PATH` directly; that override remains supported for backward
 compatibility.
 
+In the local `project-ult` workspace, `data-platform/.env` is a symlink to
+`../.env`. Keep real credentials and local DP overrides in the workspace-level
+`project-ult/.env`; the subproject `.env` path is retained for settings code
+and tests that default to reading `.env` from this repository root.
+
 The default `.env.example` layout is:
 
 ```env
