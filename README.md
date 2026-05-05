@@ -53,6 +53,12 @@ Known planning constraints:
   snapshot computation are graph-engine-owned.
 - Live holdings smoke stays blocked unless both `DP_TUSHARE_TOKEN` and
   `DP_TUSHARE_LIVE_HOLDINGS_SMOKE=1` are present.
+- Holdings live smoke evidence passed on 2026-05-06 from `main` commit
+  `0192dbc72222fb32062d944b6bbea75f53d3c159`; curated evidence is tracked in
+  `docs/evidence/holdings-live-smoke-20260506.md`. Raw pytest output,
+  provider responses, `.env`, token values, TS code lists, and DSNs were not
+  committed. Next holdings work is historical backfill orchestration plus
+  derivations.
 - Post-merge P1a real-PG evidence was produced on 2026-05-04 from `main`
   merge commit `91038f69127677153f7bc4d1bab19859841915f8`; raw logs remain
   under `/tmp` only and are not committed.
@@ -83,9 +89,9 @@ Order the next data-platform work as:
 1. **Keep P1a evidence reproducible**: the 2026-05-04 post-merge P1a smoke
    and Iceberg spike are non-skipped real-PG proof for the current merge.
    Do not commit raw smoke logs; keep them in `/tmp`.
-2. **Holdings evidence**: run real Tushare smoke for the promoted holdings
-   interfaces when `DP_TUSHARE_TOKEN` is available, then add historical
-   backfill orchestration.
+2. **Holdings backfill orchestration**: live smoke evidence for the promoted
+   holdings interfaces is recorded for 2026-05-06; add historical backfill
+   orchestration next.
 3. **Holdings derivations**: extend the minimal holding/northbound marts into
    top-holder QoQ change, fund co-holding, and northbound holding z-score.
    Reuse existing pledge marts instead of rebuilding pledge extraction.
