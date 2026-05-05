@@ -215,6 +215,9 @@ def execute_holdings_backfill_plan(
         msg = f"holdings backfill plan has rejected item(s): {reasons}"
         raise HoldingsBackfillPlanError(msg)
 
+    for item in plan.planned_items:
+        _validate_planned_item_for_execution(item)
+
     assets_by_dataset = _assets_by_dataset(adapter.get_assets())
     execution_items: list[HoldingsBackfillExecutionItem] = []
     for item in plan.items:
@@ -234,7 +237,6 @@ def execute_holdings_backfill_plan(
         if item.partition_date is None:
             msg = f"planned holdings backfill item lacks partition_date: {item.dataset}"
             raise HoldingsBackfillPlanError(msg)
-        _validate_planned_item_for_execution(item)
 
         asset = assets_by_dataset[item.dataset]
         result = adapter.fetch(asset.name, item.fetch_params)
@@ -752,41 +754,88 @@ def _json_safe_public_value(value: Any) -> Any:
 
 
 def _validate_planned_item_for_execution(item: HoldingsBackfillPlanItem) -> None:
-    if item.dataset not in HSGT_BACKFILL_DATASETS:
+    if item.partition_date is None:
+        msg = f"planned holdings backfill item lacks partition_date: {item.dataset}"
+        raise HoldingsBackfillPlanError(msg)
+
+    if item.dataset in STOCK_CODE_DATASETS | FUND_CODE_DATASETS:
+        _require_non_empty_scalar_param(item, "ts_code")
+        period = _parse_fetch_date_param(
+            item,
+            "period",
+            partition_label="report period",
+        )
+        if period != item.partition_date:
+            msg = (
+                f"planned {item.dataset} backfill item requires a period matching "
+                "partition_date before execution"
+            )
+            raise HoldingsBackfillPlanError(msg)
         return
 
-    ts_code = item.fetch_params.get("ts_code")
-    if not isinstance(ts_code, str) or not ts_code.strip():
+    if item.dataset in HSGT_BACKFILL_DATASETS:
+        _require_non_empty_scalar_param(item, "ts_code")
+        trade_date = _parse_fetch_date_param(
+            item,
+            "trade_date",
+            partition_label="trade_date",
+        )
+        if trade_date != item.partition_date:
+            msg = (
+                f"planned {item.dataset} backfill item requires a trade_date matching "
+                "partition_date before execution"
+            )
+            raise HoldingsBackfillPlanError(msg)
+        if item.dataset == "hsgt_top10":
+            _require_non_empty_scalar_param(item, "market_type")
+            return
+        if item.dataset == "hsgt_hold_top10":
+            _require_non_empty_scalar_param(item, "exchange")
+            if trade_date > HSGT_HOLD_TOP10_BACKFILL_LAST_DATE:
+                msg = (
+                    "planned hsgt_hold_top10 backfill item is after the supported "
+                    f"{HSGT_HOLD_TOP10_BACKFILL_LAST_DATE:%Y-%m-%d} cutoff"
+                )
+                raise HoldingsBackfillPlanError(msg)
+            return
+
+    msg = f"planned holdings backfill item has unsupported dataset: {item.dataset}"
+    raise HoldingsBackfillPlanError(msg)
+
+
+def _require_non_empty_scalar_param(
+    item: HoldingsBackfillPlanItem,
+    param_name: str,
+) -> str:
+    value = item.fetch_params.get(param_name)
+    if (
+        not isinstance(value, str)
+        or not value.strip()
+        or value != value.strip()
+    ):
         msg = (
-            f"planned {item.dataset} backfill item requires a non-empty scalar ts_code "
+            f"planned {item.dataset} backfill item requires a non-empty scalar "
+            f"{param_name} before execution"
+        )
+        raise HoldingsBackfillPlanError(msg)
+    return value
+
+
+def _parse_fetch_date_param(
+    item: HoldingsBackfillPlanItem,
+    param_name: str,
+    *,
+    partition_label: str,
+) -> date:
+    value = _require_non_empty_scalar_param(item, param_name)
+    parsed = _parse_yyyymmdd(value)
+    if parsed is None:
+        msg = (
+            f"planned {item.dataset} backfill item requires a valid {partition_label} "
             "before execution"
         )
         raise HoldingsBackfillPlanError(msg)
-
-    trade_date = item.fetch_params.get("trade_date")
-    parsed_trade_date = _parse_fetch_trade_date(trade_date)
-    if parsed_trade_date is None or parsed_trade_date != item.partition_date:
-        msg = (
-            f"planned {item.dataset} backfill item requires a trade_date matching "
-            "partition_date before execution"
-        )
-        raise HoldingsBackfillPlanError(msg)
-
-    if (
-        item.dataset == "hsgt_hold_top10"
-        and parsed_trade_date > HSGT_HOLD_TOP10_BACKFILL_LAST_DATE
-    ):
-        msg = (
-            "planned hsgt_hold_top10 backfill item is after the supported "
-            f"{HSGT_HOLD_TOP10_BACKFILL_LAST_DATE:%Y-%m-%d} cutoff"
-        )
-        raise HoldingsBackfillPlanError(msg)
-
-
-def _parse_fetch_trade_date(value: Any) -> date | None:
-    if not isinstance(value, str):
-        return None
-    return _parse_yyyymmdd(value)
+    return parsed
 
 
 def _looks_like_public_identifier(value: str) -> bool:

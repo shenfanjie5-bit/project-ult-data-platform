@@ -209,6 +209,33 @@ def test_execute_refuses_rejected_plan(tmp_path: Path) -> None:
     [
         (
             HoldingsBackfillPlanItem(
+                dataset="top10_holders",
+                status="planned",
+                partition_date=date(2024, 3, 31),
+                fetch_params={"ts_code": "000001.SZ", "period": "20240430"},
+            ),
+            "period matching partition_date",
+        ),
+        (
+            HoldingsBackfillPlanItem(
+                dataset="top10_floatholders",
+                status="planned",
+                partition_date=date(2024, 3, 31),
+                fetch_params={"ts_code": "000001.SZ"},
+            ),
+            "non-empty scalar period",
+        ),
+        (
+            HoldingsBackfillPlanItem(
+                dataset="fund_portfolio",
+                status="planned",
+                partition_date=date(2024, 3, 31),
+                fetch_params={},
+            ),
+            "non-empty scalar ts_code",
+        ),
+        (
+            HoldingsBackfillPlanItem(
                 dataset="hsgt_top10",
                 status="planned",
                 partition_date=date(2024, 4, 2),
@@ -228,6 +255,33 @@ def test_execute_refuses_rejected_plan(tmp_path: Path) -> None:
                 },
             ),
             "non-empty scalar ts_code",
+        ),
+        (
+            HoldingsBackfillPlanItem(
+                dataset="hsgt_top10",
+                status="planned",
+                partition_date=date(2024, 4, 2),
+                fetch_params={"trade_date": "20240403", "market_type": "1", "ts_code": "000001.SZ"},
+            ),
+            "trade_date matching partition_date",
+        ),
+        (
+            HoldingsBackfillPlanItem(
+                dataset="hsgt_top10",
+                status="planned",
+                partition_date=date(2024, 4, 2),
+                fetch_params={"trade_date": "20240402", "ts_code": "000001.SZ"},
+            ),
+            "non-empty scalar market_type",
+        ),
+        (
+            HoldingsBackfillPlanItem(
+                dataset="hsgt_hold_top10",
+                status="planned",
+                partition_date=date(2024, 4, 2),
+                fetch_params={"trade_date": "20240402", "ts_code": "000001.SZ"},
+            ),
+            "non-empty scalar exchange",
         ),
         (
             HoldingsBackfillPlanItem(
@@ -253,6 +307,38 @@ def test_execute_revalidates_malformed_planned_hsgt_items_without_adapter_call(
     plan = HoldingsBackfillPlan((item,))
 
     with pytest.raises(HoldingsBackfillPlanError, match=match):
+        execute_holdings_backfill_plan(
+            plan,
+            adapter=adapter,  # type: ignore[arg-type]
+            raw_writer=RawWriter(
+                raw_zone_path=tmp_path / "raw",
+                iceberg_warehouse_path=tmp_path / "warehouse",
+            ),
+        )
+
+    assert adapter.calls == []
+
+
+def test_execute_preflights_full_plan_before_first_adapter_call(tmp_path: Path) -> None:
+    adapter = FakeHoldingsAdapter()
+    plan = HoldingsBackfillPlan(
+        (
+            HoldingsBackfillPlanItem(
+                dataset="top10_holders",
+                status="planned",
+                partition_date=date(2024, 3, 31),
+                fetch_params={"ts_code": "000001.SZ", "period": "20240331"},
+            ),
+            HoldingsBackfillPlanItem(
+                dataset="hsgt_top10",
+                status="planned",
+                partition_date=date(2024, 4, 2),
+                fetch_params={"trade_date": "20240402", "ts_code": "000001.SZ"},
+            ),
+        )
+    )
+
+    with pytest.raises(HoldingsBackfillPlanError, match="non-empty scalar market_type"):
         execute_holdings_backfill_plan(
             plan,
             adapter=adapter,  # type: ignore[arg-type]
