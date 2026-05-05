@@ -56,20 +56,24 @@ summary only exposed identifier class/count.
 
 Live backfill was not executed.
 
-Blockers observed in the local shell:
+Environment status observed in the local shell:
 
-- `DP_TUSHARE_TOKEN missing`
+- `DP_TUSHARE_TOKEN=SET/redacted`
+
+Live backfill blocker observed in the local shell:
+
 - `DP_TUSHARE_LIVE_HOLDINGS_BACKFILL missing`
 
-The live path remains explicit opt-in only. If both variables are present,
-operators must still pass `--execute-live` plus explicit Raw Zone and warehouse
-paths, and commit only curated execution summaries.
+The live path remains explicit opt-in only. With the token set, operators must
+still set `DP_TUSHARE_LIVE_HOLDINGS_BACKFILL`, pass `--execute-live` plus
+explicit Raw Zone and warehouse paths, and commit only curated execution
+summaries.
 
 ## Derivation Mart Evidence
 
 Fixture shape:
 
-- Local DuckDB profile/database under `/tmp/...`.
+- Local DuckDB profile/database under `<temporary-profile-dir>`.
 - Provider-neutral canonical input tables only:
   `mart_fact_holding_position_v2` and
   `mart_lineage_fact_holding_position`.
@@ -80,10 +84,10 @@ Fixture shape:
 dbt command shapes:
 
 ```bash
-./scripts/dbt.sh parse --profiles-dir /tmp/... --target-path /tmp/... --log-path /tmp/... --no-use-colors
-./scripts/dbt.sh run --profiles-dir /tmp/... --target-path /tmp/... --log-path /tmp/... \
+./scripts/dbt.sh parse --profiles-dir <temporary-profile-dir> --target-path <temporary-target-dir> --log-path <temporary-log-dir> --no-use-colors
+./scripts/dbt.sh run --profiles-dir <temporary-profile-dir> --target-path <temporary-target-dir> --log-path <temporary-log-dir> \
   --select path:models/marts_derivations path:models/marts_derivation_lineage --no-use-colors
-./scripts/dbt.sh test --profiles-dir /tmp/... --target-path /tmp/... --log-path /tmp/... \
+./scripts/dbt.sh test --profiles-dir <temporary-profile-dir> --target-path <temporary-target-dir> --log-path <temporary-log-dir> \
   --select path:models/marts_derivations path:models/marts_derivation_lineage --no-use-colors
 ```
 
