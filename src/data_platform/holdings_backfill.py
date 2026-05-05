@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import re
 import uuid
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass, field
@@ -28,14 +29,27 @@ SUPPORTED_HOLDINGS_BACKFILL_DATASETS: tuple[str, ...] = (
 )
 STOCK_CODE_DATASETS = frozenset({"top10_holders", "top10_floatholders"})
 FUND_CODE_DATASETS = frozenset({"fund_portfolio"})
-SENSITIVE_BOUND_KEYS = frozenset({"stock_code", "fund_code", "ts_code", "symbol", "code"})
-SENSITIVE_BOUND_CLASSES = {
+HSGT_BACKFILL_DATASETS = frozenset({"hsgt_top10", "hsgt_hold_top10"})
+PUBLIC_IDENTIFIER_BOUND_CLASSES = {
     "stock_code": "stock_code",
     "fund_code": "fund_code",
-    "ts_code": "stock_code",
-    "symbol": "security_symbol",
-    "code": "security_code",
 }
+PUBLIC_SAFE_BOUND_KEYS = frozenset(
+    {
+        "exchange",
+        "market_type",
+        "max_plan_items",
+        "missing",
+        "period",
+        "planned_count",
+        "start_date",
+        "end_date",
+        "trade_date",
+    }
+)
+PUBLIC_IDENTIFIER_VALUE_RE = re.compile(
+    r"^(?:\d{5}\.HK|\d{6}\.(?:BJ|OF|SH|SZ)|[A-Z0-9]{1,12}\.(?:BJ|HK|OF|SH|SZ))$"
+)
 # Keep this aligned with daily_refresh.HK_HOLD_DAILY_PUBLICATION_LAST_DATE
 # without importing daily_refresh into the plan-only API surface.
 HSGT_HOLD_TOP10_BACKFILL_LAST_DATE = date(2024, 8, 20)
@@ -220,6 +234,7 @@ def execute_holdings_backfill_plan(
         if item.partition_date is None:
             msg = f"planned holdings backfill item lacks partition_date: {item.dataset}"
             raise HoldingsBackfillPlanError(msg)
+        _validate_planned_item_for_execution(item)
 
         asset = assets_by_dataset[item.dataset]
         result = adapter.fetch(asset.name, item.fetch_params)
@@ -683,12 +698,12 @@ def _public_bounds(bounds: Mapping[str, Any]) -> dict[str, Any]:
     public: dict[str, Any] = {}
     for key, value in bounds.items():
         public_key = str(key)
-        if public_key in SENSITIVE_BOUND_KEYS:
+        if public_key in PUBLIC_IDENTIFIER_BOUND_CLASSES:
             identifier_values = _bound_identifier_values(value)
-            public[f"{public_key}_class"] = SENSITIVE_BOUND_CLASSES[public_key]
+            public[f"{public_key}_class"] = PUBLIC_IDENTIFIER_BOUND_CLASSES[public_key]
             public[f"{public_key}_count"] = len(identifier_values)
             continue
-        if public_key.startswith("_"):
+        if public_key not in PUBLIC_SAFE_BOUND_KEYS:
             continue
         if isinstance(value, Mapping):
             public[public_key] = _public_bounds(value)
@@ -721,7 +736,7 @@ def _json_safe_public_value(value: Any) -> Any:
         return {
             str(key): _json_safe_public_value(item)
             for key, item in value.items()
-            if not str(key).startswith("_")
+            if str(key) in PUBLIC_SAFE_BOUND_KEYS
         }
     if isinstance(value, list | tuple):
         return [_json_safe_public_value(item) for item in value]
@@ -729,9 +744,53 @@ def _json_safe_public_value(value: Any) -> Any:
         return f"{value:%Y%m%d}"
     if isinstance(value, Decimal):
         return str(value)
+    if isinstance(value, str) and _looks_like_public_identifier(value):
+        return "[redacted]"
     if isinstance(value, str | int | float | bool) or value is None:
         return value
     return str(value)
+
+
+def _validate_planned_item_for_execution(item: HoldingsBackfillPlanItem) -> None:
+    if item.dataset not in HSGT_BACKFILL_DATASETS:
+        return
+
+    ts_code = item.fetch_params.get("ts_code")
+    if not isinstance(ts_code, str) or not ts_code.strip():
+        msg = (
+            f"planned {item.dataset} backfill item requires a non-empty scalar ts_code "
+            "before execution"
+        )
+        raise HoldingsBackfillPlanError(msg)
+
+    trade_date = item.fetch_params.get("trade_date")
+    parsed_trade_date = _parse_fetch_trade_date(trade_date)
+    if parsed_trade_date is None or parsed_trade_date != item.partition_date:
+        msg = (
+            f"planned {item.dataset} backfill item requires a trade_date matching "
+            "partition_date before execution"
+        )
+        raise HoldingsBackfillPlanError(msg)
+
+    if (
+        item.dataset == "hsgt_hold_top10"
+        and parsed_trade_date > HSGT_HOLD_TOP10_BACKFILL_LAST_DATE
+    ):
+        msg = (
+            "planned hsgt_hold_top10 backfill item is after the supported "
+            f"{HSGT_HOLD_TOP10_BACKFILL_LAST_DATE:%Y-%m-%d} cutoff"
+        )
+        raise HoldingsBackfillPlanError(msg)
+
+
+def _parse_fetch_trade_date(value: Any) -> date | None:
+    if not isinstance(value, str):
+        return None
+    return _parse_yyyymmdd(value)
+
+
+def _looks_like_public_identifier(value: str) -> bool:
+    return bool(PUBLIC_IDENTIFIER_VALUE_RE.fullmatch(value.strip().upper()))
 
 
 def _assets_by_dataset(assets: Sequence[AssetSpec]) -> dict[str, AssetSpec]:

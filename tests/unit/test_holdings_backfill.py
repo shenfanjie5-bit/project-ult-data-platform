@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import importlib.util
 import json
+from datetime import date
 from decimal import Decimal
 from pathlib import Path
 from types import ModuleType
@@ -21,7 +22,9 @@ from data_platform.adapters.tushare import (  # noqa: E402
 )
 from data_platform.holdings_backfill import (  # noqa: E402
     SUPPORTED_HOLDINGS_BACKFILL_DATASETS,
+    HoldingsBackfillPlan,
     HoldingsBackfillPlanError,
+    HoldingsBackfillPlanItem,
     build_holdings_backfill_plan,
     execute_holdings_backfill_plan,
     public_plan_summary,
@@ -201,6 +204,67 @@ def test_execute_refuses_rejected_plan(tmp_path: Path) -> None:
     assert adapter.calls == []
 
 
+@pytest.mark.parametrize(
+    ("item", "match"),
+    [
+        (
+            HoldingsBackfillPlanItem(
+                dataset="hsgt_top10",
+                status="planned",
+                partition_date=date(2024, 4, 2),
+                fetch_params={"trade_date": "20240402", "market_type": "1"},
+            ),
+            "non-empty scalar ts_code",
+        ),
+        (
+            HoldingsBackfillPlanItem(
+                dataset="hsgt_top10",
+                status="planned",
+                partition_date=date(2024, 4, 2),
+                fetch_params={
+                    "trade_date": "20240402",
+                    "market_type": "1",
+                    "ts_code": ["000001.SZ"],
+                },
+            ),
+            "non-empty scalar ts_code",
+        ),
+        (
+            HoldingsBackfillPlanItem(
+                dataset="hsgt_hold_top10",
+                status="planned",
+                partition_date=date(2024, 8, 21),
+                fetch_params={
+                    "trade_date": "20240821",
+                    "exchange": "SH",
+                    "ts_code": "000001.SZ",
+                },
+            ),
+            "2024-08-20 cutoff",
+        ),
+    ],
+)
+def test_execute_revalidates_malformed_planned_hsgt_items_without_adapter_call(
+    tmp_path: Path,
+    item: HoldingsBackfillPlanItem,
+    match: str,
+) -> None:
+    adapter = FakeHoldingsAdapter()
+    plan = HoldingsBackfillPlan((item,))
+
+    with pytest.raises(HoldingsBackfillPlanError, match=match):
+        execute_holdings_backfill_plan(
+            plan,
+            adapter=adapter,  # type: ignore[arg-type]
+            raw_writer=RawWriter(
+                raw_zone_path=tmp_path / "raw",
+                iceberg_warehouse_path=tmp_path / "warehouse",
+            ),
+        )
+
+    assert adapter.calls == []
+
+
 def test_public_plan_summary_does_not_leak_raw_provider_or_private_fields() -> None:
     summary = public_plan_summary(_full_plan())
     encoded = json.dumps(summary, sort_keys=True)
@@ -224,6 +288,32 @@ def test_public_plan_summary_does_not_leak_raw_provider_or_private_fields() -> N
         "_",
     }
     assert not forbidden_terms.intersection(encoded.split('"'))
+    assert "ts_code" not in encoded
+
+
+def test_public_plan_summary_drops_unknown_identifier_bounds() -> None:
+    plan = HoldingsBackfillPlan(
+        (
+            HoldingsBackfillPlanItem(
+                dataset="top10_holders",
+                status="rejected",
+                bounds={
+                    "period": "20240331",
+                    "requested_identifiers": ["000001.SZ"],
+                    "_raw_params": {"ts_code": "000001.SZ"},
+                },
+                reason_type="example",
+                reason="example rejection",
+            ),
+        )
+    )
+
+    summary = public_plan_summary(plan)
+    encoded = json.dumps(summary, sort_keys=True)
+
+    assert summary["items"][0]["bounds"] == {"period": "20240331"}
+    assert "000001.SZ" not in encoded
+    assert "requested_identifiers" not in encoded
     assert "ts_code" not in encoded
 
 
