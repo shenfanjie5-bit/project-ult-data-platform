@@ -45,9 +45,23 @@ Known planning constraints:
   Live daily refresh gates `hsgt_hold_top10` after that cutoff and reports an
   explicit skip instead of writing empty current-date Raw artifacts or claiming
   daily live freshness; quarterly disclosure/backfill handling is separate work.
+- Holdings live smoke is complete for all five promoted interfaces:
+  `top10_holders`, `top10_floatholders`, `fund_portfolio`, `hsgt_top10`, and
+  `hsgt_hold_top10` over Tushare `hk_hold`. HSGT smoke uses a historical
+  verifiable publication date. Evidence records only `SET/redacted` style
+  environment status and never records token values or concrete code scopes.
+- Holdings backfill orchestration is available and defaults to plan-only.
+  Bounded inputs are required for stock, fund, HSGT market, exchange, period,
+  and trade-date scopes; live execution requires explicit opt-in plus Raw Zone
+  and warehouse paths. `hsgt_hold_top10` is fail-closed after the 2024-08-20
+  cutoff and must skip/fail rather than write empty post-cutoff Raw artifacts.
 - The provider-neutral `holding_position` mart identity includes
   `announced_date`: `(holding_source, holder_id, security_id, report_date,
   announced_date)`.
+- Holdings derivation marts are available as read-only inputs for later
+  `subsystem-holdings` work: top-holder quarter-over-quarter change, fund
+  co-holding pairs, and northbound holding z-scores. Producers must consume
+  data-platform canonical/derivation marts and must not call Tushare directly.
 - Graph boundary: data-platform provides Phase 1 read adapters, the queue,
   and canonical intake surfaces only. Graph promotion write-back and graph
   snapshot computation are graph-engine-owned.
@@ -57,8 +71,11 @@ Known planning constraints:
   `0192dbc72222fb32062d944b6bbea75f53d3c159`; curated evidence is tracked in
   `docs/evidence/holdings-live-smoke-20260506.md`. Raw pytest output,
   provider responses, `.env`, token values, TS code lists, and DSNs were not
-  committed. Next holdings work is historical backfill orchestration plus
-  derivations.
+  committed.
+- Holdings backfill and derivation evidence is tracked in
+  `docs/evidence/holdings-backfill-derivation-evidence-20260506.md`. It covers
+  a redacted bounded plan dry run, blocked live backfill gate status, local
+  dbt derivation mart parse/run/test, row counts, and lineage parity.
 - Post-merge P1a real-PG evidence was produced on 2026-05-04 from `main`
   merge commit `91038f69127677153f7bc4d1bab19859841915f8`; raw logs remain
   under `/tmp` only and are not committed.
@@ -90,11 +107,13 @@ Order the next data-platform work as:
    and Iceberg spike are non-skipped real-PG proof for the current merge.
    Do not commit raw smoke logs; keep them in `/tmp`.
 2. **Holdings backfill orchestration**: live smoke evidence for the promoted
-   holdings interfaces is recorded for 2026-05-06; add historical backfill
-   orchestration next.
+   holdings interfaces is recorded for 2026-05-06; bounded historical backfill
+   orchestration is implemented and documented with plan-only default behavior.
 3. **Holdings derivations**: extend the minimal holding/northbound marts into
    top-holder QoQ change, fund co-holding, and northbound holding z-score.
-   Reuse existing pledge marts instead of rebuilding pledge extraction.
+   These derivation marts are implemented as read-only data-platform outputs
+   for later subsystem consumption. Reuse existing pledge marts instead of
+   rebuilding pledge extraction.
 4. **`fina_mainbz` adapter**: promote the structured business-segment path
    before any financial-doc NLP work tries to extract the same signal.
 
