@@ -28,6 +28,14 @@ SUPPORTED_HOLDINGS_BACKFILL_DATASETS: tuple[str, ...] = (
 )
 STOCK_CODE_DATASETS = frozenset({"top10_holders", "top10_floatholders"})
 FUND_CODE_DATASETS = frozenset({"fund_portfolio"})
+SENSITIVE_BOUND_KEYS = frozenset({"stock_code", "fund_code", "ts_code", "symbol", "code"})
+SENSITIVE_BOUND_CLASSES = {
+    "stock_code": "stock_code",
+    "fund_code": "fund_code",
+    "ts_code": "stock_code",
+    "symbol": "security_symbol",
+    "code": "security_code",
+}
 # Keep this aligned with daily_refresh.HK_HOLD_DAILY_PUBLICATION_LAST_DATE
 # without importing daily_refresh into the plan-only API surface.
 HSGT_HOLD_TOP10_BACKFILL_LAST_DATE = date(2024, 8, 20)
@@ -291,9 +299,9 @@ def _plan_dataset(
     if dataset in FUND_CODE_DATASETS:
         return _plan_fund_code_dataset(dataset, fund_codes, periods)
     if dataset == "hsgt_top10":
-        return _plan_hsgt_top10_dataset(trade_dates, market_types)
+        return _plan_hsgt_top10_dataset(trade_dates, market_types, stock_codes)
     if dataset == "hsgt_hold_top10":
-        return _plan_hsgt_hold_top10_dataset(trade_dates, exchanges)
+        return _plan_hsgt_hold_top10_dataset(trade_dates, exchanges, stock_codes)
     return (
         _rejected_item(
             dataset,
@@ -370,18 +378,21 @@ def _plan_fund_code_dataset(
 def _plan_hsgt_top10_dataset(
     trade_dates: tuple[date, ...],
     market_types: tuple[str, ...],
+    stock_codes: tuple[str, ...],
 ) -> tuple[HoldingsBackfillPlanItem, ...]:
     missing = []
     if not trade_dates:
         missing.append("trade_dates")
     if not market_types:
         missing.append("market_types")
+    if not stock_codes:
+        missing.append("stock_codes")
     if missing:
         return (
             _rejected_item(
                 "hsgt_top10",
                 "missing_bounded_inputs",
-                "hsgt_top10 requires explicit trade_dates/date range and market_types",
+                "hsgt_top10 requires explicit stock_codes, trade_dates/date range, and market_types",
                 bounds={"missing": missing},
             ),
         )
@@ -390,29 +401,44 @@ def _plan_hsgt_top10_dataset(
         _planned_item(
             dataset="hsgt_top10",
             partition_date=trade_date,
-            fetch_params={"trade_date": f"{trade_date:%Y%m%d}", "market_type": market_type},
-            bounds={"trade_date": f"{trade_date:%Y%m%d}", "market_type": market_type},
+            fetch_params={
+                "trade_date": f"{trade_date:%Y%m%d}",
+                "market_type": market_type,
+                "ts_code": stock_code,
+            },
+            bounds={
+                "trade_date": f"{trade_date:%Y%m%d}",
+                "market_type": market_type,
+                "stock_code": stock_code,
+            },
         )
         for trade_date in trade_dates
         for market_type in market_types
+        for stock_code in stock_codes
     )
 
 
 def _plan_hsgt_hold_top10_dataset(
     trade_dates: tuple[date, ...],
     exchanges: tuple[str, ...],
+    stock_codes: tuple[str, ...],
 ) -> tuple[HoldingsBackfillPlanItem, ...]:
     missing = []
     if not trade_dates:
         missing.append("trade_dates")
     if not exchanges:
         missing.append("exchanges")
+    if not stock_codes:
+        missing.append("stock_codes")
     if missing:
         return (
             _rejected_item(
                 "hsgt_hold_top10",
                 "missing_bounded_inputs",
-                "hsgt_hold_top10 requires explicit historical trade_dates/date range and exchanges",
+                (
+                    "hsgt_hold_top10 requires explicit stock_codes, historical "
+                    "trade_dates/date range, and exchanges"
+                ),
                 bounds={"missing": missing},
             ),
         )
@@ -420,29 +446,38 @@ def _plan_hsgt_hold_top10_dataset(
     items: list[HoldingsBackfillPlanItem] = []
     for trade_date in trade_dates:
         for exchange in exchanges:
-            bounds = {"trade_date": f"{trade_date:%Y%m%d}", "exchange": exchange}
-            if trade_date > HSGT_HOLD_TOP10_BACKFILL_LAST_DATE:
+            for stock_code in stock_codes:
+                bounds = {
+                    "trade_date": f"{trade_date:%Y%m%d}",
+                    "exchange": exchange,
+                    "stock_code": stock_code,
+                }
+                if trade_date > HSGT_HOLD_TOP10_BACKFILL_LAST_DATE:
+                    items.append(
+                        _skipped_item(
+                            dataset="hsgt_hold_top10",
+                            partition_date=trade_date,
+                            reason_type="post_publication_cutoff",
+                            reason=(
+                                "northbound holding daily publication is only verifiable through "
+                                f"{HSGT_HOLD_TOP10_BACKFILL_LAST_DATE:%Y-%m-%d}"
+                            ),
+                            bounds=bounds,
+                        )
+                    )
+                    continue
                 items.append(
-                    _skipped_item(
+                    _planned_item(
                         dataset="hsgt_hold_top10",
                         partition_date=trade_date,
-                        reason_type="post_publication_cutoff",
-                        reason=(
-                            "northbound holding daily publication is only verifiable through "
-                            f"{HSGT_HOLD_TOP10_BACKFILL_LAST_DATE:%Y-%m-%d}"
-                        ),
+                        fetch_params={
+                            "trade_date": f"{trade_date:%Y%m%d}",
+                            "exchange": exchange,
+                            "ts_code": stock_code,
+                        },
                         bounds=bounds,
                     )
                 )
-                continue
-            items.append(
-                _planned_item(
-                    dataset="hsgt_hold_top10",
-                    partition_date=trade_date,
-                    fetch_params={"trade_date": f"{trade_date:%Y%m%d}", "exchange": exchange},
-                    bounds=bounds,
-                )
-            )
     return tuple(items)
 
 
@@ -639,9 +674,37 @@ def _public_plan_item(item: HoldingsBackfillPlanItem) -> dict[str, Any]:
     if item.partition_date is not None:
         payload["partition_date"] = f"{item.partition_date:%Y%m%d}"
     if item.bounds:
-        payload["bounds"] = _json_safe_public_value(item.bounds)
+        payload["bounds"] = _public_bounds(item.bounds)
     payload.update(_reason_fields(item.reason_type, item.reason))
     return payload
+
+
+def _public_bounds(bounds: Mapping[str, Any]) -> dict[str, Any]:
+    public: dict[str, Any] = {}
+    for key, value in bounds.items():
+        public_key = str(key)
+        if public_key in SENSITIVE_BOUND_KEYS:
+            identifier_values = _bound_identifier_values(value)
+            public[f"{public_key}_class"] = SENSITIVE_BOUND_CLASSES[public_key]
+            public[f"{public_key}_count"] = len(identifier_values)
+            continue
+        if public_key.startswith("_"):
+            continue
+        if isinstance(value, Mapping):
+            public[public_key] = _public_bounds(value)
+            continue
+        public[public_key] = _json_safe_public_value(value)
+    return public
+
+
+def _bound_identifier_values(value: Any) -> tuple[str, ...]:
+    if isinstance(value, str):
+        return (value,) if value else ()
+    if isinstance(value, Sequence) and not isinstance(value, bytes | bytearray):
+        return tuple(str(item) for item in value if str(item))
+    if value is None:
+        return ()
+    return (str(value),)
 
 
 def _reason_fields(reason_type: str | None, reason: str | None) -> dict[str, Any]:

@@ -1,8 +1,10 @@
 from __future__ import annotations
 
+import importlib.util
 import json
 from decimal import Decimal
 from pathlib import Path
+from types import ModuleType
 from typing import Any
 
 import pytest
@@ -85,6 +87,11 @@ def test_five_holdings_interfaces_generate_bounded_plan() -> None:
             {"market_types": ["1"]},
             "missing_bounded_inputs",
         ),
+        (
+            ["hsgt_hold_top10"],
+            {"trade_dates": ["20240402"], "exchanges": ["SH"]},
+            "missing_bounded_inputs",
+        ),
     ],
 )
 def test_missing_code_or_date_boundaries_are_rejected(
@@ -100,15 +107,39 @@ def test_missing_code_or_date_boundaries_are_rejected(
     assert plan.planned_items == ()
 
 
+@pytest.mark.parametrize(
+    ("dataset", "kwargs"),
+    [
+        ("hsgt_top10", {"trade_dates": ["20240402"], "market_types": ["1"]}),
+        ("hsgt_hold_top10", {"trade_dates": ["20240402"], "exchanges": ["SH"]}),
+    ],
+)
+def test_hsgt_backfill_rejects_unbounded_market_or_exchange_scope(
+    dataset: str,
+    kwargs: dict[str, list[str]],
+) -> None:
+    plan = build_holdings_backfill_plan(datasets=[dataset], **kwargs)
+
+    assert plan.ok is False
+    assert plan.planned_items == ()
+    assert plan.rejected_items[0].reason_type == "missing_bounded_inputs"
+    assert "stock_codes" in plan.rejected_items[0].bounds["missing"]
+
+
 def test_hsgt_hold_top10_skips_after_cutoff_without_calling_live_path() -> None:
     plan = build_holdings_backfill_plan(
         datasets=["hsgt_hold_top10"],
+        stock_codes=["000001.SZ"],
         trade_dates=["20240820", "20240821"],
         exchanges=["SH"],
     )
 
     assert [item.status for item in plan.items] == ["planned", "skipped"]
-    assert plan.items[0].fetch_params == {"trade_date": "20240820", "exchange": "SH"}
+    assert plan.items[0].fetch_params == {
+        "trade_date": "20240820",
+        "exchange": "SH",
+        "ts_code": "000001.SZ",
+    }
     assert plan.items[1].reason_type == "post_publication_cutoff"
     assert "2024-08-20" in str(plan.items[1].reason)
 
@@ -135,8 +166,14 @@ def test_execute_uses_adapter_params_from_plan_and_writes_raw(tmp_path: Path) ->
             {"ts_code": "000001.SZ", "period": "20240331"},
         ),
         (TUSHARE_FUND_PORTFOLIO_ASSET.name, {"ts_code": "001753.OF", "period": "20240331"}),
-        (TUSHARE_HSGT_TOP10_ASSET.name, {"trade_date": "20240402", "market_type": "1"}),
-        (TUSHARE_HSGT_HOLD_TOP10_ASSET.name, {"trade_date": "20240402", "exchange": "SH"}),
+        (
+            TUSHARE_HSGT_TOP10_ASSET.name,
+            {"trade_date": "20240402", "market_type": "1", "ts_code": "000001.SZ"},
+        ),
+        (
+            TUSHARE_HSGT_HOLD_TOP10_ASSET.name,
+            {"trade_date": "20240402", "exchange": "SH", "ts_code": "000001.SZ"},
+        ),
     ]
     assert {
         artifact.path.parent.name
@@ -168,6 +205,10 @@ def test_public_plan_summary_does_not_leak_raw_provider_or_private_fields() -> N
     summary = public_plan_summary(_full_plan())
     encoded = json.dumps(summary, sort_keys=True)
 
+    assert "000001.SZ" not in encoded
+    assert "001753.OF" not in encoded
+    assert "stock_code_count" in encoded
+    assert "fund_code_count" in encoded
     forbidden_terms = {
         "asset",
         "doc_api",
@@ -186,6 +227,37 @@ def test_public_plan_summary_does_not_leak_raw_provider_or_private_fields() -> N
     assert "ts_code" not in encoded
 
 
+def test_cli_json_report_sanitizes_identifier_bounds(tmp_path: Path) -> None:
+    report_path = tmp_path / "reports" / "holdings.json"
+    cli = _load_holdings_backfill_cli()
+
+    exit_code = cli.main(
+        [
+            "--dataset",
+            "top10_holders",
+            "--stock-code",
+            "000001.SZ",
+            "--period",
+            "20240331",
+            "--json-report",
+            str(report_path),
+        ]
+    )
+
+    assert exit_code == 0
+    payload = json.loads(report_path.read_text(encoding="utf-8"))
+    encoded = json.dumps(payload, sort_keys=True)
+    assert payload["execute_live"] is False
+    assert "execution" not in payload
+    assert payload["plan"]["items"][0]["bounds"] == {
+        "period": "20240331",
+        "stock_code_class": "stock_code",
+        "stock_code_count": 1,
+    }
+    assert "000001.SZ" not in encoded
+    assert "ts_code" not in encoded
+
+
 def _full_plan() -> Any:
     return build_holdings_backfill_plan(
         datasets=SUPPORTED_HOLDINGS_BACKFILL_DATASETS,
@@ -196,6 +268,16 @@ def _full_plan() -> Any:
         market_types=["1"],
         exchanges=["SH"],
     )
+
+
+def _load_holdings_backfill_cli() -> ModuleType:
+    script_path = Path(__file__).parents[2] / "scripts" / "holdings_backfill.py"
+    spec = importlib.util.spec_from_file_location("holdings_backfill_cli", script_path)
+    assert spec is not None
+    assert spec.loader is not None
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module
 
 
 def _table_for_asset(asset: Any, params: dict[str, Any]) -> Any:
