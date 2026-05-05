@@ -82,8 +82,8 @@ LIVE_FETCH_PARAMS_BY_DATASET = {
     "top10_holders": {"ts_code": "000001.SZ", "period": "20240331"},
     "top10_floatholders": {"ts_code": "000001.SZ", "period": "20240331"},
     "fund_portfolio": {"ts_code": "001753.OF", "period": "20240331"},
-    "hsgt_top10": {"trade_date": "20240401", "market_type": "1"},
-    "hsgt_hold_top10": {"trade_date": "20240401", "exchange": "SH"},
+    "hsgt_top10": {"trade_date": "20240402", "market_type": "1"},
+    "hsgt_hold_top10": {"trade_date": "20240402", "exchange": "SH"},
 }
 
 
