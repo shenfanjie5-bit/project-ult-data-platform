@@ -23,3 +23,7 @@ models:
       +materialized: table
     marts:
       +materialized: table
+    marts_derivations:
+      +materialized: table
+    marts_derivation_lineage:
+      +materialized: table

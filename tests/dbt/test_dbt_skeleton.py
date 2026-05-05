@@ -14,6 +14,10 @@ STAGING_DIR = DBT_PROJECT_DIR / "models" / "staging"
 INTERMEDIATE_DIR = DBT_PROJECT_DIR / "models" / "intermediate"
 MARTS_V2_DIR = DBT_PROJECT_DIR / "models" / "marts_v2"
 MARTS_LINEAGE_DIR = DBT_PROJECT_DIR / "models" / "marts_lineage"
+MARTS_DERIVATIONS_DIR = DBT_PROJECT_DIR / "models" / "marts_derivations"
+MARTS_DERIVATION_LINEAGE_DIR = (
+    DBT_PROJECT_DIR / "models" / "marts_derivation_lineage"
+)
 INTERMEDIATE_MODEL_NAMES = [
     "int_event_timeline",
     "int_financial_reports_latest",
@@ -57,6 +61,16 @@ MART_LINEAGE_MODEL_NAMES = [
     "mart_lineage_fact_holding_position",
     "mart_lineage_fact_northbound_turnover",
 ]
+MART_DERIVATION_MODEL_NAMES = [
+    "mart_deriv_top_holder_qoq_change",
+    "mart_deriv_fund_co_holding",
+    "mart_deriv_northbound_holding_z_score",
+]
+MART_DERIVATION_LINEAGE_MODEL_NAMES = [
+    "mart_deriv_lineage_top_holder_qoq_change",
+    "mart_deriv_lineage_fund_co_holding",
+    "mart_deriv_lineage_northbound_holding_z_score",
+]
 
 
 def test_dbt_skeleton_files_are_present() -> None:
@@ -73,12 +87,22 @@ def test_dbt_skeleton_files_are_present() -> None:
         DBT_PROJECT_DIR / "models" / "intermediate" / ".gitkeep",
         MARTS_V2_DIR / "_schema.yml",
         MARTS_LINEAGE_DIR / "_schema.yml",
+        MARTS_DERIVATIONS_DIR / "_schema.yml",
+        MARTS_DERIVATION_LINEAGE_DIR / "_schema.yml",
         DBT_PROJECT_DIR / "seeds" / ".gitkeep",
         PROJECT_ROOT / "scripts" / "dbt.sh",
         *[STAGING_DIR / f"stg_{asset.dataset}.sql" for asset in TUSHARE_ASSETS],
         *[INTERMEDIATE_DIR / f"{model_name}.sql" for model_name in INTERMEDIATE_MODEL_NAMES],
         *[MARTS_V2_DIR / f"{model_name}.sql" for model_name in MART_V2_MODEL_NAMES],
         *[MARTS_LINEAGE_DIR / f"{model_name}.sql" for model_name in MART_LINEAGE_MODEL_NAMES],
+        *[
+            MARTS_DERIVATIONS_DIR / f"{model_name}.sql"
+            for model_name in MART_DERIVATION_MODEL_NAMES
+        ],
+        *[
+            MARTS_DERIVATION_LINEAGE_DIR / f"{model_name}.sql"
+            for model_name in MART_DERIVATION_LINEAGE_MODEL_NAMES
+        ],
     ]
 
     missing_paths = [path for path in required_paths if not path.exists()]
@@ -97,6 +121,14 @@ def test_dbt_skeleton_files_are_present() -> None:
             *(
                 f"models/marts_lineage/{model_name}.sql"
                 for model_name in MART_LINEAGE_MODEL_NAMES
+            ),
+            *(
+                f"models/marts_derivations/{model_name}.sql"
+                for model_name in MART_DERIVATION_MODEL_NAMES
+            ),
+            *(
+                f"models/marts_derivation_lineage/{model_name}.sql"
+                for model_name in MART_DERIVATION_LINEAGE_MODEL_NAMES
             ),
         ]
     )
