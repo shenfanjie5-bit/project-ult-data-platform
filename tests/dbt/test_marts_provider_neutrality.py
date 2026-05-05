@@ -27,6 +27,9 @@ V2_MARTS_DIR: Final[Path] = (
 LINEAGE_MARTS_DIR: Final[Path] = (
     PROJECT_ROOT / "src" / "data_platform" / "dbt" / "models" / "marts_lineage"
 )
+DERIVATION_MARTS_DIR: Final[Path] = (
+    PROJECT_ROOT / "src" / "data_platform" / "dbt" / "models" / "marts_derivations"
+)
 
 FORBIDDEN_LINEAGE_TOKENS: Final[tuple[re.Pattern[str], ...]] = (
     re.compile(r"(?<![A-Za-z0-9_])source_run_id(?![A-Za-z0-9_])"),
@@ -48,6 +51,12 @@ def _lineage_mart_sql_files() -> Iterable[Path]:
     if not LINEAGE_MARTS_DIR.is_dir():
         return ()
     return sorted(p for p in LINEAGE_MARTS_DIR.glob("*.sql") if p.is_file())
+
+
+def _derivation_mart_sql_files() -> Iterable[Path]:
+    if not DERIVATION_MARTS_DIR.is_dir():
+        return ()
+    return sorted(p for p in DERIVATION_MARTS_DIR.glob("*.sql") if p.is_file())
 
 
 @pytest.mark.parametrize(
@@ -142,3 +151,31 @@ def test_dim_security_lineage_mart_discloses_composite_source_interface() -> Non
     assert "stock_company_source_run_id" in body
     assert "namechange_source_run_id" in body
     assert "cast('stock_basic' as varchar) as source_interface_id" not in body
+
+
+@pytest.mark.parametrize(
+    "mart_sql",
+    list(_derivation_mart_sql_files()),
+    ids=lambda p: p.name,
+)
+def test_derivation_business_mart_sql_is_provider_neutral(mart_sql: Path) -> None:
+    """Derivation business marts must only expose provider-neutral fields."""
+
+    body = mart_sql.read_text(encoding="utf-8")
+    lowered = body.lower()
+    forbidden_patterns = (
+        *FORBIDDEN_LINEAGE_TOKENS,
+        *FORBIDDEN_PROVIDER_SHAPED_TOKENS,
+        re.compile(r"ref\(['\"]stg_"),
+        re.compile(r"tushare"),
+    )
+    leaks = sorted(
+        match.group(0)
+        for pattern in forbidden_patterns
+        for match in pattern.finditer(lowered)
+    )
+
+    assert not leaks, (
+        f"{mart_sql.relative_to(PROJECT_ROOT)} (derivation business mart) "
+        f"leaks provider/raw tokens {sorted(set(leaks))}"
+    )
