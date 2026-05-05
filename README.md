@@ -78,18 +78,18 @@ Known planning constraints:
   dbt derivation mart parse/run/test, row counts, and lineage parity.
 - Post-merge P1a real-PG evidence was produced on 2026-05-04 from `main`
   merge commit `91038f69127677153f7bc4d1bab19859841915f8`; raw logs remain
-  under `/tmp` only and are not committed.
+  under a temporary work directory only and are not committed.
 
 ## Post-merge P1a evidence (2026-05-04)
 
 - P1a smoke ran with `DP_ENV=test`,
   `DP_SMOKE_P1A_CONFIRM_DESTRUCTIVE=1`,
-  `DP_PG_DSN=postgresql://dp:<redacted>@localhost:5432/dp_p1a_smoke_20260504`,
+  `DP_PG_DSN=<redacted-dsn>`,
   `DP_ICEBERG_CATALOG_NAME=data_platform_p1a_smoke_20260504`,
-  `DP_SMOKE_WORK_DIR=/tmp/data-platform-p1a-smoke-20260504`, and
+  `DP_SMOKE_WORK_DIR=<temporary-work-dir>`, and
   `DP_RAW_ZONE_PATH`, `DP_ICEBERG_WAREHOUSE_PATH`, and `DP_DUCKDB_PATH`
   under that work dir, then `make smoke-p1a`.
-  Result: `P1a smoke OK duration_s=8 log_dir=/tmp/data-platform-p1a-smoke-20260504/logs`;
+  Result: `P1a smoke OK duration_s=8 log_dir=<temporary-log-dir>`;
   wrapper duration was 9s.
 - Iceberg write-chain spike ran as
   `DATABASE_URL=<redacted> DP_PG_DSN=<redacted> .venv/bin/pytest -m spike tests/spike/test_iceberg_write_chain.py -v`.
@@ -105,7 +105,7 @@ Order the next data-platform work as:
 
 1. **Keep P1a evidence reproducible**: the 2026-05-04 post-merge P1a smoke
    and Iceberg spike are non-skipped real-PG proof for the current merge.
-   Do not commit raw smoke logs; keep them in `/tmp`.
+   Do not commit raw smoke logs; keep them in a temporary log directory.
 2. **Holdings backfill orchestration**: live smoke evidence for the promoted
    holdings interfaces is recorded for 2026-05-06; bounded historical backfill
    orchestration is implemented and documented with plan-only default behavior.

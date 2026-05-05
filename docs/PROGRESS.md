@@ -19,10 +19,10 @@
 >
 > - **实现已落地 + 已验收完成（✅）**：`ISSUE-001~012` —— 代码 / 配置 / 脚手架 / 单测均在仓内，且不依赖外部服务即可验收的交付项目均已核对通过。
 > - **实现已落地 + post-merge real-PG evidence 已验收完成（✅）**：`ISSUE-013`（Iceberg spike）+ `ISSUE-014`（smoke-p1a 闭环）。2026-05-04 在 `main` merge commit `91038f69127677153f7bc4d1bab19859841915f8` 之后记录非跳过证据：
->   `DP_ENV=test DP_SMOKE_P1A_CONFIRM_DESTRUCTIVE=1 DP_PG_DSN=postgresql://dp:<redacted>@localhost:5432/dp_p1a_smoke_20260504 DP_ICEBERG_CATALOG_NAME=data_platform_p1a_smoke_20260504 DP_SMOKE_WORK_DIR=/tmp/data-platform-p1a-smoke-20260504 make smoke-p1a`
->   返回 `P1a smoke OK duration_s=8 log_dir=/tmp/data-platform-p1a-smoke-20260504/logs`（wrapper 9s）；`DATABASE_URL=<redacted> DP_PG_DSN=<redacted> .venv/bin/pytest -m spike tests/spike/test_iceberg_write_chain.py -v` 返回 3 passed, 0 failed, 0 skipped, 0 errors in 1.25s。
+>   `DP_ENV=test DP_SMOKE_P1A_CONFIRM_DESTRUCTIVE=1 DP_PG_DSN=<redacted-dsn> DP_ICEBERG_CATALOG_NAME=data_platform_p1a_smoke_20260504 DP_SMOKE_WORK_DIR=<temporary-work-dir> make smoke-p1a`
+>   返回 `P1a smoke OK duration_s=8 log_dir=<temporary-log-dir>`（wrapper 9s）；`DATABASE_URL=<redacted> DP_PG_DSN=<redacted> .venv/bin/pytest -m spike tests/spike/test_iceberg_write_chain.py -v` 返回 3 passed, 0 failed, 0 skipped, 0 errors in 1.25s。
 >
-> 因为 `ISSUE-013/014` 已有非跳过 real-PG evidence，**阶段 0 整体更新为 ✅ 已完成**。原始 smoke 日志仍位于 `/tmp/data-platform-p1a-smoke-20260504/logs`，不提交入仓。
+> 因为 `ISSUE-013/014` 已有非跳过 real-PG evidence，**阶段 0 整体更新为 ✅ 已完成**。原始 smoke 日志仍位于 `<temporary-log-dir>`，不提交入仓。
 >
 > **Holdings P0 evidence sync（2026-05-06）**：
 >
@@ -40,7 +40,7 @@
 >   northbound z-score 作为 data-platform 只读输入，不直接调用 Tushare。
 > - Curated evidence 见
 >   `docs/evidence/holdings-backfill-derivation-evidence-20260506.md`；raw
->   logs/provider payloads/dbt target/runtime noise 不入仓。
+>   logs/provider payloads/dbt build artifacts/runtime noise 不入仓。
 >
 > 后续 `ISSUE-015+`（P1b / P1c）的真实进度不在本次 doc-sync 范围内，保留 `⬜ 未开始` 标记待各自 issue 走完正式流程后再更新。
 
@@ -69,8 +69,8 @@
 
 **完成判定（§23 验收 1+2）**：
 - [x] Raw / Canonical / Formal / Analytical 边界与落地方式明确并可运行
-- [x] 至少 1 个 API 样例完成 Raw → staging → Canonical → DuckDB 读取闭环（2026-05-04 `make smoke-p1a` 非跳过 real-PG run 返回 `P1a smoke OK duration_s=8 log_dir=/tmp/data-platform-p1a-smoke-20260504/logs`，wrapper 9s）
-- [x] `make smoke-p1a` 一次成功且 `< 5 分钟`（同上；运行命令使用 `DP_PG_DSN=postgresql://dp:<redacted>@localhost:5432/dp_p1a_smoke_20260504`，raw/warehouse/DuckDB 均位于 `/tmp/data-platform-p1a-smoke-20260504` 下）
+- [x] 至少 1 个 API 样例完成 Raw → staging → Canonical → DuckDB 读取闭环（2026-05-04 `make smoke-p1a` 非跳过 real-PG run 返回 `P1a smoke OK duration_s=8 log_dir=<temporary-log-dir>`，wrapper 9s）
+- [x] `make smoke-p1a` 一次成功且 `< 5 分钟`（同上；运行命令使用 `DP_PG_DSN=<redacted-dsn>`，raw/warehouse/DuckDB 均位于 `<temporary-work-dir>` 下）
 - [x] Iceberg 写入链 spike 三类用例全部通过（2026-05-04 `DATABASE_URL=<redacted> DP_PG_DSN=<redacted> .venv/bin/pytest -m spike tests/spike/test_iceberg_write_chain.py -v` 返回 3 passed, 0 failed, 0 skipped, 0 errors in 1.25s）
 
 **关键交付物实际落点（2026-04-24 sync 时核验存在）**：
@@ -88,7 +88,7 @@
 - ISSUE-011：`src/data_platform/serving/canonical_writer.py`
 - ISSUE-012：`src/data_platform/serving/reader.py`（`get_canonical_stock_basic` 等）
 - ISSUE-013：`tests/spike/test_iceberg_write_chain.py` + `@pytest.mark.spike` marker（`pyproject.toml`）+ `docs/spike/iceberg-write-chain.md`（**2026-05-04 post-merge run：3 passed, 0 failed, 0 skipped, 0 errors in 1.25s**）
-- ISSUE-014：`scripts/smoke_p1a.sh` + `tests/integration/test_p1a_smoke.py` + `Makefile` 中 `smoke-p1a:` target（**2026-05-04 post-merge `make smoke-p1a`：`P1a smoke OK duration_s=8 log_dir=/tmp/data-platform-p1a-smoke-20260504/logs`，wrapper 9s**）
+- ISSUE-014：`scripts/smoke_p1a.sh` + `tests/integration/test_p1a_smoke.py` + `Makefile` 中 `smoke-p1a:` target（**2026-05-04 post-merge `make smoke-p1a`：`P1a smoke OK duration_s=8 log_dir=<temporary-log-dir>`，wrapper 9s**）
 
 ---
 
