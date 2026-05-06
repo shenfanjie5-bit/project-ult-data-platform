@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import os
 import re
 import uuid
 from collections.abc import Mapping, Sequence
@@ -55,6 +56,7 @@ PUBLIC_IDENTIFIER_VALUE_RE = re.compile(
 HSGT_HOLD_TOP10_BACKFILL_LAST_DATE = date(2024, 8, 20)
 DEFAULT_MAX_PLAN_ITEMS = 5_000
 DATE_FORMAT = "%Y%m%d"
+LIVE_HOLDINGS_BACKFILL_ENV = "DP_TUSHARE_LIVE_HOLDINGS_BACKFILL"
 
 
 class HoldingsBackfillPlanError(ValueError):
@@ -205,8 +207,11 @@ def execute_holdings_backfill_plan(
     *,
     adapter: FetchableAdapter,
     raw_writer: RawWriter,
+    execute_live: bool = False,
 ) -> HoldingsBackfillExecutionResult:
     """Execute planned holdings backfill items through an adapter into Raw Zone."""
+
+    validate_holdings_backfill_live_gate(execute_live=execute_live)
 
     if plan.has_rejections:
         reasons = ", ".join(
@@ -264,6 +269,17 @@ def execute_holdings_backfill_plan(
         )
 
     return HoldingsBackfillExecutionResult(tuple(execution_items))
+
+
+def validate_holdings_backfill_live_gate(*, execute_live: bool) -> None:
+    """Fail closed unless both the code path and environment opt in to live writes."""
+
+    if not execute_live:
+        msg = "live holdings backfill requires execute_live=True"
+        raise HoldingsBackfillPlanError(msg)
+    if os.environ.get(LIVE_HOLDINGS_BACKFILL_ENV) != "1":
+        msg = f"live holdings backfill requires {LIVE_HOLDINGS_BACKFILL_ENV}=1"
+        raise HoldingsBackfillPlanError(msg)
 
 
 def public_plan_summary(plan: HoldingsBackfillPlan) -> dict[str, Any]:
@@ -873,10 +889,12 @@ __all__ = [
     "HoldingsBackfillPlan",
     "HoldingsBackfillPlanError",
     "HoldingsBackfillPlanItem",
+    "LIVE_HOLDINGS_BACKFILL_ENV",
     "SUPPORTED_HOLDINGS_BACKFILL_DATASETS",
     "build_holdings_backfill_plan",
     "default_holdings_assets_by_dataset",
     "execute_holdings_backfill_plan",
     "public_execution_summary",
     "public_plan_summary",
+    "validate_holdings_backfill_live_gate",
 ]

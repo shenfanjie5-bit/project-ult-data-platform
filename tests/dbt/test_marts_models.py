@@ -28,6 +28,7 @@ PROJECT_ROOT = Path(__file__).resolve().parents[2]
 DBT_PROJECT_DIR = PROJECT_ROOT / "src" / "data_platform" / "dbt"
 MARTS_V2_DIR = DBT_PROJECT_DIR / "models" / "marts_v2"
 MARTS_LINEAGE_DIR = DBT_PROJECT_DIR / "models" / "marts_lineage"
+TEST_STOCK_CODE = "TESTSTK.SZ"
 
 
 
@@ -276,7 +277,7 @@ def _write_same_day_block_trade_rows(raw_zone_path: Path, tmp_path: Path) -> Non
             _sample_table_with_values(
                 asset,
                 {
-                    "ts_code": "000001.SZ",
+                    "ts_code": TEST_STOCK_CODE,
                     "trade_date": "20260415",
                     "buyer": "buyer-a",
                     "seller": "seller-a",
@@ -288,7 +289,7 @@ def _write_same_day_block_trade_rows(raw_zone_path: Path, tmp_path: Path) -> Non
             _sample_table_with_values(
                 asset,
                 {
-                    "ts_code": "000001.SZ",
+                    "ts_code": TEST_STOCK_CODE,
                     "trade_date": "20260415",
                     "buyer": "buyer-b",
                     "seller": "seller-b",
@@ -495,6 +496,12 @@ def test_holdings_marts_preserve_promoted_holdings_fixtures(tmp_path: Path) -> N
             "mart_lineage_fact_northbound_turnover",
             MARTS_LINEAGE_DIR,
         )
+        expected_hsgt_top10_security_id = connection.execute(
+            "select ts_code from stg_hsgt_top10"
+        ).fetchone()[0]
+        expected_hsgt_hold_security_id = connection.execute(
+            "select ts_code from stg_hsgt_hold_top10"
+        ).fetchone()[0]
 
         holding_sources = {
             row[0]
@@ -516,6 +523,18 @@ def test_holdings_marts_preserve_promoted_holdings_fixtures(tmp_path: Path) -> N
             )
             """
         ).fetchone()[0]
+        holding_position_duplicate_count = connection.execute(
+            """
+            select count(*)
+            from (
+                select position_id
+                from mart_fact_holding_position_v2
+                group by position_id
+                having count(*) > 1
+            )
+            """
+        ).fetchone()[0]
+        holding_columns = _table_columns(connection, "mart_fact_holding_position_v2")
         northbound_row = connection.execute(
             """
             select security_id, trade_date, market_type, rank
@@ -547,7 +566,23 @@ def test_holdings_marts_preserve_promoted_holdings_fixtures(tmp_path: Path) -> N
         "northbound_hold",
     }
     assert holding_duplicate_count == 0
-    assert northbound_row == ("000001.SZ", date(2026, 4, 15), "market_type-fixture", 1)
+    assert holding_position_duplicate_count == 0
+    assert {
+        "position_id",
+        "holder_id",
+        "security_id",
+        "report_date",
+        "holding_ratio",
+        "dataset",
+        "snapshot_id",
+        "as_of_date",
+    }.issubset(holding_columns)
+    assert northbound_row == (
+        expected_hsgt_top10_security_id,
+        date(2026, 4, 15),
+        "market_type-fixture",
+        1,
+    )
     assert holding_lineage_sources == {
         "top10_holders",
         "top10_floatholders",
@@ -555,7 +590,7 @@ def test_holdings_marts_preserve_promoted_holdings_fixtures(tmp_path: Path) -> N
         "hsgt_hold_top10",
     }
     assert northbound_lineage_row == (
-        "000001.SZ",
+        expected_hsgt_hold_security_id,
         date(2026, 4, 15),
         "market_type-fixture",
         1,

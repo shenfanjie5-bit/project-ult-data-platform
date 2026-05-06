@@ -63,6 +63,16 @@ period_changes as (
 )
 
 select
+    md5(
+        concat_ws(
+            '|',
+            holding_source,
+            holder_id,
+            security_id,
+            cast(report_date as varchar),
+            cast(announced_date as varchar)
+        )
+    ) as mart_key,
     holding_source,
     holder_id,
     security_id,

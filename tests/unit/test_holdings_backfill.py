@@ -82,7 +82,7 @@ def test_five_holdings_interfaces_generate_bounded_plan() -> None:
         ),
         (
             ["fund_portfolio"],
-            {"fund_codes": ["001753.OF"]},
+            {"fund_codes": ["TESTFUND.OF"]},
             "missing_bounded_inputs",
         ),
         (
@@ -132,7 +132,7 @@ def test_hsgt_backfill_rejects_unbounded_market_or_exchange_scope(
 def test_hsgt_hold_top10_skips_after_cutoff_without_calling_live_path() -> None:
     plan = build_holdings_backfill_plan(
         datasets=["hsgt_hold_top10"],
-        stock_codes=["000001.SZ"],
+        stock_codes=["TESTSTK.SZ"],
         trade_dates=["20240820", "20240821"],
         exchanges=["SH"],
     )
@@ -141,41 +141,47 @@ def test_hsgt_hold_top10_skips_after_cutoff_without_calling_live_path() -> None:
     assert plan.items[0].fetch_params == {
         "trade_date": "20240820",
         "exchange": "SH",
-        "ts_code": "000001.SZ",
+        "ts_code": "TESTSTK.SZ",
     }
     assert plan.items[1].reason_type == "post_publication_cutoff"
     assert "2024-08-20" in str(plan.items[1].reason)
 
 
-def test_execute_uses_adapter_params_from_plan_and_writes_raw(tmp_path: Path) -> None:
+def test_execute_uses_adapter_params_from_plan_and_writes_raw(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
     adapter = FakeHoldingsAdapter()
     writer = RawWriter(
         raw_zone_path=tmp_path / "raw",
         iceberg_warehouse_path=tmp_path / "warehouse",
     )
 
+    monkeypatch.setenv("DP_TUSHARE_LIVE_HOLDINGS_BACKFILL", "1")
+
     result = execute_holdings_backfill_plan(
         _full_plan(),
         adapter=adapter,  # type: ignore[arg-type]
         raw_writer=writer,
+        execute_live=True,
     )
 
     assert result.ok is True
     assert len(result.artifacts) == 5
     assert adapter.calls == [
-        (TUSHARE_TOP10_HOLDERS_ASSET.name, {"ts_code": "000001.SZ", "period": "20240331"}),
+        (TUSHARE_TOP10_HOLDERS_ASSET.name, {"ts_code": "TESTSTK.SZ", "period": "20240331"}),
         (
             TUSHARE_TOP10_FLOATHOLDERS_ASSET.name,
-            {"ts_code": "000001.SZ", "period": "20240331"},
+            {"ts_code": "TESTSTK.SZ", "period": "20240331"},
         ),
-        (TUSHARE_FUND_PORTFOLIO_ASSET.name, {"ts_code": "001753.OF", "period": "20240331"}),
+        (TUSHARE_FUND_PORTFOLIO_ASSET.name, {"ts_code": "TESTFUND.OF", "period": "20240331"}),
         (
             TUSHARE_HSGT_TOP10_ASSET.name,
-            {"trade_date": "20240402", "market_type": "1", "ts_code": "000001.SZ"},
+            {"trade_date": "20240402", "market_type": "1", "ts_code": "TESTSTK.SZ"},
         ),
         (
             TUSHARE_HSGT_HOLD_TOP10_ASSET.name,
-            {"trade_date": "20240402", "exchange": "SH", "ts_code": "000001.SZ"},
+            {"trade_date": "20240402", "exchange": "SH", "ts_code": "TESTSTK.SZ"},
         ),
     ]
     assert {
@@ -184,8 +190,49 @@ def test_execute_uses_adapter_params_from_plan_and_writes_raw(tmp_path: Path) ->
     } == {"dt=20240331", "dt=20240402"}
 
 
-def test_execute_refuses_rejected_plan(tmp_path: Path) -> None:
+@pytest.mark.parametrize(
+    ("execute_live", "env_value", "match"),
+    [
+        (False, "1", "execute_live=True"),
+        (True, None, "DP_TUSHARE_LIVE_HOLDINGS_BACKFILL=1"),
+        (True, "0", "DP_TUSHARE_LIVE_HOLDINGS_BACKFILL=1"),
+    ],
+)
+def test_execute_requires_double_live_gate_before_adapter_or_writer_call(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+    execute_live: bool,
+    env_value: str | None,
+    match: str,
+) -> None:
     adapter = FakeHoldingsAdapter()
+    writer = RecordingRawWriter(
+        raw_zone_path=tmp_path / "raw",
+        iceberg_warehouse_path=tmp_path / "warehouse",
+    )
+    if env_value is None:
+        monkeypatch.delenv("DP_TUSHARE_LIVE_HOLDINGS_BACKFILL", raising=False)
+    else:
+        monkeypatch.setenv("DP_TUSHARE_LIVE_HOLDINGS_BACKFILL", env_value)
+
+    with pytest.raises(HoldingsBackfillPlanError, match=match):
+        execute_holdings_backfill_plan(
+            _full_plan(),
+            adapter=adapter,  # type: ignore[arg-type]
+            raw_writer=writer,
+            execute_live=execute_live,
+        )
+
+    assert adapter.calls == []
+    assert writer.write_arrow_calls == 0
+
+
+def test_execute_refuses_rejected_plan(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    adapter = FakeHoldingsAdapter()
+    monkeypatch.setenv("DP_TUSHARE_LIVE_HOLDINGS_BACKFILL", "1")
     plan = build_holdings_backfill_plan(
         datasets=["top10_holders"],
         periods=["20240331"],
@@ -199,6 +246,7 @@ def test_execute_refuses_rejected_plan(tmp_path: Path) -> None:
                 raw_zone_path=tmp_path / "raw",
                 iceberg_warehouse_path=tmp_path / "warehouse",
             ),
+            execute_live=True,
         )
 
     assert adapter.calls == []
@@ -212,7 +260,7 @@ def test_execute_refuses_rejected_plan(tmp_path: Path) -> None:
                 dataset="top10_holders",
                 status="planned",
                 partition_date=date(2024, 3, 31),
-                fetch_params={"ts_code": "000001.SZ", "period": "20240430"},
+                fetch_params={"ts_code": "TESTSTK.SZ", "period": "20240430"},
             ),
             "period matching partition_date",
         ),
@@ -221,7 +269,7 @@ def test_execute_refuses_rejected_plan(tmp_path: Path) -> None:
                 dataset="top10_floatholders",
                 status="planned",
                 partition_date=date(2024, 3, 31),
-                fetch_params={"ts_code": "000001.SZ"},
+                fetch_params={"ts_code": "TESTSTK.SZ"},
             ),
             "non-empty scalar period",
         ),
@@ -251,7 +299,7 @@ def test_execute_refuses_rejected_plan(tmp_path: Path) -> None:
                 fetch_params={
                     "trade_date": "20240402",
                     "market_type": "1",
-                    "ts_code": ["000001.SZ"],
+                    "ts_code": ["TESTSTK.SZ"],
                 },
             ),
             "non-empty scalar ts_code",
@@ -261,7 +309,7 @@ def test_execute_refuses_rejected_plan(tmp_path: Path) -> None:
                 dataset="hsgt_top10",
                 status="planned",
                 partition_date=date(2024, 4, 2),
-                fetch_params={"trade_date": "20240403", "market_type": "1", "ts_code": "000001.SZ"},
+                fetch_params={"trade_date": "20240403", "market_type": "1", "ts_code": "TESTSTK.SZ"},
             ),
             "trade_date matching partition_date",
         ),
@@ -270,7 +318,7 @@ def test_execute_refuses_rejected_plan(tmp_path: Path) -> None:
                 dataset="hsgt_top10",
                 status="planned",
                 partition_date=date(2024, 4, 2),
-                fetch_params={"trade_date": "20240402", "ts_code": "000001.SZ"},
+                fetch_params={"trade_date": "20240402", "ts_code": "TESTSTK.SZ"},
             ),
             "non-empty scalar market_type",
         ),
@@ -279,7 +327,7 @@ def test_execute_refuses_rejected_plan(tmp_path: Path) -> None:
                 dataset="hsgt_hold_top10",
                 status="planned",
                 partition_date=date(2024, 4, 2),
-                fetch_params={"trade_date": "20240402", "ts_code": "000001.SZ"},
+                fetch_params={"trade_date": "20240402", "ts_code": "TESTSTK.SZ"},
             ),
             "non-empty scalar exchange",
         ),
@@ -291,7 +339,7 @@ def test_execute_refuses_rejected_plan(tmp_path: Path) -> None:
                 fetch_params={
                     "trade_date": "20240821",
                     "exchange": "SH",
-                    "ts_code": "000001.SZ",
+                    "ts_code": "TESTSTK.SZ",
                 },
             ),
             "2024-08-20 cutoff",
@@ -299,11 +347,13 @@ def test_execute_refuses_rejected_plan(tmp_path: Path) -> None:
     ],
 )
 def test_execute_revalidates_malformed_planned_hsgt_items_without_adapter_call(
+    monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,
     item: HoldingsBackfillPlanItem,
     match: str,
 ) -> None:
     adapter = FakeHoldingsAdapter()
+    monkeypatch.setenv("DP_TUSHARE_LIVE_HOLDINGS_BACKFILL", "1")
     plan = HoldingsBackfillPlan((item,))
 
     with pytest.raises(HoldingsBackfillPlanError, match=match):
@@ -314,26 +364,31 @@ def test_execute_revalidates_malformed_planned_hsgt_items_without_adapter_call(
                 raw_zone_path=tmp_path / "raw",
                 iceberg_warehouse_path=tmp_path / "warehouse",
             ),
+            execute_live=True,
         )
 
     assert adapter.calls == []
 
 
-def test_execute_preflights_full_plan_before_first_adapter_call(tmp_path: Path) -> None:
+def test_execute_preflights_full_plan_before_first_adapter_call(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
     adapter = FakeHoldingsAdapter()
+    monkeypatch.setenv("DP_TUSHARE_LIVE_HOLDINGS_BACKFILL", "1")
     plan = HoldingsBackfillPlan(
         (
             HoldingsBackfillPlanItem(
                 dataset="top10_holders",
                 status="planned",
                 partition_date=date(2024, 3, 31),
-                fetch_params={"ts_code": "000001.SZ", "period": "20240331"},
+                fetch_params={"ts_code": "TESTSTK.SZ", "period": "20240331"},
             ),
             HoldingsBackfillPlanItem(
                 dataset="hsgt_top10",
                 status="planned",
                 partition_date=date(2024, 4, 2),
-                fetch_params={"trade_date": "20240402", "ts_code": "000001.SZ"},
+                fetch_params={"trade_date": "20240402", "ts_code": "TESTSTK.SZ"},
             ),
         )
     )
@@ -346,6 +401,7 @@ def test_execute_preflights_full_plan_before_first_adapter_call(tmp_path: Path) 
                 raw_zone_path=tmp_path / "raw",
                 iceberg_warehouse_path=tmp_path / "warehouse",
             ),
+            execute_live=True,
         )
 
     assert adapter.calls == []
@@ -355,8 +411,8 @@ def test_public_plan_summary_does_not_leak_raw_provider_or_private_fields() -> N
     summary = public_plan_summary(_full_plan())
     encoded = json.dumps(summary, sort_keys=True)
 
-    assert "000001.SZ" not in encoded
-    assert "001753.OF" not in encoded
+    assert "TESTSTK.SZ" not in encoded
+    assert "TESTFUND.OF" not in encoded
     assert "stock_code_count" in encoded
     assert "fund_code_count" in encoded
     forbidden_terms = {
@@ -385,8 +441,8 @@ def test_public_plan_summary_drops_unknown_identifier_bounds() -> None:
                 status="rejected",
                 bounds={
                     "period": "20240331",
-                    "requested_identifiers": ["000001.SZ"],
-                    "_raw_params": {"ts_code": "000001.SZ"},
+                    "requested_identifiers": ["TESTSTK.SZ"],
+                    "_raw_params": {"ts_code": "TESTSTK.SZ"},
                 },
                 reason_type="example",
                 reason="example rejection",
@@ -398,7 +454,7 @@ def test_public_plan_summary_drops_unknown_identifier_bounds() -> None:
     encoded = json.dumps(summary, sort_keys=True)
 
     assert summary["items"][0]["bounds"] == {"period": "20240331"}
-    assert "000001.SZ" not in encoded
+    assert "TESTSTK.SZ" not in encoded
     assert "requested_identifiers" not in encoded
     assert "ts_code" not in encoded
 
@@ -412,7 +468,7 @@ def test_cli_json_report_sanitizes_identifier_bounds(tmp_path: Path) -> None:
             "--dataset",
             "top10_holders",
             "--stock-code",
-            "000001.SZ",
+            "TESTSTK.SZ",
             "--period",
             "20240331",
             "--json-report",
@@ -430,15 +486,64 @@ def test_cli_json_report_sanitizes_identifier_bounds(tmp_path: Path) -> None:
         "stock_code_class": "stock_code",
         "stock_code_count": 1,
     }
-    assert "000001.SZ" not in encoded
+    assert "TESTSTK.SZ" not in encoded
     assert "ts_code" not in encoded
+
+
+def test_cli_execute_live_requires_env_gate_before_live_objects(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    cli = _load_holdings_backfill_cli()
+    monkeypatch.delenv("DP_TUSHARE_LIVE_HOLDINGS_BACKFILL", raising=False)
+    monkeypatch.setattr(
+        cli,
+        "RawWriter",
+        lambda *_args, **_kwargs: pytest.fail("RawWriter must not be constructed"),
+    )
+    monkeypatch.setattr(
+        cli,
+        "execute_holdings_backfill_plan",
+        lambda *_args, **_kwargs: pytest.fail("execution must not be called"),
+    )
+
+    exit_code = cli.main(
+        [
+            "--dataset",
+            "top10_holders",
+            "--stock-code",
+            "TESTSTK.SZ",
+            "--period",
+            "20240331",
+            "--execute-live",
+            "--raw-zone-path",
+            str(tmp_path / "raw"),
+            "--iceberg-warehouse-path",
+            str(tmp_path / "warehouse"),
+        ]
+    )
+
+    assert exit_code == 2
+
+
+class RecordingRawWriter(RawWriter):
+    def __init__(self, *, raw_zone_path: Path, iceberg_warehouse_path: Path) -> None:
+        super().__init__(
+            raw_zone_path=raw_zone_path,
+            iceberg_warehouse_path=iceberg_warehouse_path,
+        )
+        self.write_arrow_calls = 0
+
+    def write_arrow(self, *args: Any, **kwargs: Any) -> Any:
+        self.write_arrow_calls += 1
+        return super().write_arrow(*args, **kwargs)
 
 
 def _full_plan() -> Any:
     return build_holdings_backfill_plan(
         datasets=SUPPORTED_HOLDINGS_BACKFILL_DATASETS,
-        stock_codes=["000001.SZ"],
-        fund_codes=["001753.OF"],
+        stock_codes=["TESTSTK.SZ"],
+        fund_codes=["TESTFUND.OF"],
         periods=["20240331"],
         trade_dates=["20240402"],
         market_types=["1"],
@@ -469,9 +574,9 @@ def _row_for_asset(asset: Any, params: dict[str, Any]) -> dict[str, Any]:
     date_value = params.get("period") or params.get("trade_date") or "20240331"
     for field in asset.schema:
         if field.name == "ts_code":
-            row[field.name] = params.get("ts_code", "000001.SZ")
+            row[field.name] = params.get("ts_code", "TESTSTK.SZ")
         elif field.name == "symbol":
-            row[field.name] = "000001.SZ"
+            row[field.name] = "TESTSTK.SZ"
         elif field.name in {"ann_date", "end_date", "trade_date"}:
             row[field.name] = date_value
         elif field.name == "market_type":

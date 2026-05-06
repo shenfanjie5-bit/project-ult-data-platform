@@ -6,12 +6,18 @@ models:
     tests:
       - unique_combination_of_columns:
           combination_of_columns:
+            - mart_key
+      - unique_combination_of_columns:
+          combination_of_columns:
             - holding_source
             - holder_id
             - security_id
             - report_date
             - announced_date
     columns:
+      - name: mart_key
+        tests:
+          - not_null
       - name: holding_source
         tests:
           - not_null
@@ -38,10 +44,19 @@ models:
     tests:
       - unique_combination_of_columns:
           combination_of_columns:
+            - mart_key
+      - unique_combination_of_columns:
+          combination_of_columns:
             - report_date
             - security_id_left
             - security_id_right
     columns:
+      - name: mart_key
+        tests:
+          - not_null
+      - name: row_id
+        tests:
+          - not_null
       - name: report_date
         tests:
           - not_null
@@ -66,10 +81,16 @@ models:
       - name: latest_announced_date
         tests:
           - not_null
+      - name: evidence_ref
+        tests:
+          - not_null
 
   - name: mart_deriv_northbound_holding_z_score
     description: Rolling z-score features derived from canonical northbound holdings for holding amount and holding ratio.
     tests:
+      - unique_combination_of_columns:
+          combination_of_columns:
+            - mart_key
       - unique_combination_of_columns:
           combination_of_columns:
             - security_id
@@ -77,6 +98,12 @@ models:
             - report_date
             - z_score_metric
     columns:
+      - name: mart_key
+        tests:
+          - not_null
+      - name: row_id
+        tests:
+          - not_null
       - name: security_id
         tests:
           - not_null
@@ -113,5 +140,14 @@ models:
         tests:
           - not_null
       - name: metric_mean
+        tests:
+          - not_null
+      - name: metric_stddev
+        tests:
+          - not_null
+      - name: metric_z_score
+        tests:
+          - not_null
+      - name: evidence_ref
         tests:
           - not_null

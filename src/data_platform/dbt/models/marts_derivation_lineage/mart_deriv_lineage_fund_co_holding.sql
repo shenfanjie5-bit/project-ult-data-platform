@@ -28,9 +28,11 @@ fund_pairs as (
 
 source_rows as (
     select
+        co_holding.mart_key,
         co_holding.report_date,
         co_holding.security_id_left,
         co_holding.security_id_right,
+        co_holding.latest_announced_date,
         lineage.report_date as source_report_date,
         lineage.source_interface_id,
         lineage.source_run_id,
@@ -50,9 +52,11 @@ source_rows as (
     union all
 
     select
+        co_holding.mart_key,
         co_holding.report_date,
         co_holding.security_id_left,
         co_holding.security_id_right,
+        co_holding.latest_announced_date,
         lineage.report_date as source_report_date,
         lineage.source_interface_id,
         lineage.source_run_id,
@@ -71,9 +75,13 @@ source_rows as (
 )
 
 select
+    mart_key,
     report_date,
     security_id_left,
     security_id_right,
+    cast('fund_co_holding' as varchar) as dataset,
+    concat('fund_co_holding:', mart_key) as snapshot_id,
+    latest_announced_date as as_of_date,
     cast('mart_fact_holding_position_v2' as varchar) as source_mart,
     min(source_report_date) as source_window_start_date,
     max(source_report_date) as source_window_end_date,
@@ -91,6 +99,8 @@ select
     ) as source_lineage_summary
 from source_rows
 group by
+    mart_key,
     report_date,
     security_id_left,
-    security_id_right
+    security_id_right,
+    latest_announced_date

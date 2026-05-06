@@ -41,9 +41,48 @@ windowed_metrics as (
         order by report_date
         rows between 7 preceding and current row
     )
+),
+
+z_score_rows as (
+    select
+        security_id,
+        holder_id,
+        report_date,
+        z_score_metric,
+        lookback_observations,
+        window_start_date,
+        window_end_date,
+        observation_count,
+        metric_value,
+        metric_mean,
+        metric_stddev,
+        case
+            when metric_stddev is null or metric_stddev = 0
+                then cast(null as double)
+            else (metric_value - metric_mean) / metric_stddev
+        end as metric_z_score
+    from windowed_metrics
 )
 
 select
+    md5(
+        concat_ws(
+            '|',
+            security_id,
+            holder_id,
+            cast(report_date as varchar),
+            z_score_metric
+        )
+    ) as mart_key,
+    md5(
+        concat_ws(
+            '|',
+            security_id,
+            holder_id,
+            cast(report_date as varchar),
+            z_score_metric
+        )
+    ) as row_id,
     security_id,
     holder_id,
     report_date,
@@ -55,9 +94,20 @@ select
     metric_value,
     metric_mean,
     metric_stddev,
-    case
-        when metric_stddev is null or metric_stddev = 0
-            then cast(null as double)
-        else (metric_value - metric_mean) / metric_stddev
-    end as metric_z_score
-from windowed_metrics
+    metric_z_score,
+    concat(
+        'mart_deriv_northbound_holding_z_score:',
+        md5(
+            concat_ws(
+                '|',
+                security_id,
+                holder_id,
+                cast(report_date as varchar),
+                z_score_metric
+            )
+        )
+    ) as evidence_ref
+from z_score_rows
+where metric_stddev is not null
+  and metric_stddev <> 0
+  and metric_z_score is not null
