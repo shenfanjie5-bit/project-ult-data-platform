@@ -222,12 +222,18 @@ models:
     tests:
       - unique_combination_of_columns:
           combination_of_columns:
+            - position_id
+      - unique_combination_of_columns:
+          combination_of_columns:
             - holding_source
             - holder_id
             - security_id
             - report_date
             - announced_date
     columns:
+      - name: position_id
+        tests:
+          - not_null
       - name: holding_source
         tests:
           - not_null
@@ -248,6 +254,18 @@ models:
         tests:
           - not_null
       - name: announced_date
+        tests:
+          - not_null
+      - name: holding_ratio
+        tests:
+          - not_null
+      - name: dataset
+        tests:
+          - not_null
+      - name: snapshot_id
+        tests:
+          - not_null
+      - name: as_of_date
         tests:
           - not_null
 

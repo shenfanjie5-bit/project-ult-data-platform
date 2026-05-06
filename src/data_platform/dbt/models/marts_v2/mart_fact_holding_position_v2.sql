@@ -70,9 +70,91 @@ northbound_positions as (
         cast(null as decimal(38, 18)) as market_value,
         exchange as exchange
     from {{ ref('stg_hsgt_hold_top10') }}
+),
+
+holding_positions as (
+    select
+        holding_source,
+        holder_id,
+        holder_name,
+        holder_type,
+        security_id,
+        report_date,
+        announced_date,
+        holding_amount,
+        holding_ratio,
+        holding_float_ratio,
+        holding_change,
+        market_value,
+        exchange
+    from issuer_top_holders
+
+    union all by name
+
+    select
+        holding_source,
+        holder_id,
+        holder_name,
+        holder_type,
+        security_id,
+        report_date,
+        announced_date,
+        holding_amount,
+        holding_ratio,
+        holding_float_ratio,
+        holding_change,
+        market_value,
+        exchange
+    from issuer_top_float_holders
+
+    union all by name
+
+    select
+        holding_source,
+        holder_id,
+        holder_name,
+        holder_type,
+        security_id,
+        report_date,
+        announced_date,
+        holding_amount,
+        holding_ratio,
+        holding_float_ratio,
+        holding_change,
+        market_value,
+        exchange
+    from fund_positions
+
+    union all by name
+
+    select
+        holding_source,
+        holder_id,
+        holder_name,
+        holder_type,
+        security_id,
+        report_date,
+        announced_date,
+        holding_amount,
+        holding_ratio,
+        holding_float_ratio,
+        holding_change,
+        market_value,
+        exchange
+    from northbound_positions
 )
 
 select
+    md5(
+        concat_ws(
+            '|',
+            holding_source,
+            holder_id,
+            security_id,
+            cast(report_date as varchar),
+            cast(announced_date as varchar)
+        )
+    ) as position_id,
     holding_source,
     holder_id,
     holder_name,
@@ -85,59 +167,8 @@ select
     holding_float_ratio,
     holding_change,
     market_value,
-    exchange
-from issuer_top_holders
-
-union all by name
-
-select
-    holding_source,
-    holder_id,
-    holder_name,
-    holder_type,
-    security_id,
-    report_date,
-    announced_date,
-    holding_amount,
-    holding_ratio,
-    holding_float_ratio,
-    holding_change,
-    market_value,
-    exchange
-from issuer_top_float_holders
-
-union all by name
-
-select
-    holding_source,
-    holder_id,
-    holder_name,
-    holder_type,
-    security_id,
-    report_date,
-    announced_date,
-    holding_amount,
-    holding_ratio,
-    holding_float_ratio,
-    holding_change,
-    market_value,
-    exchange
-from fund_positions
-
-union all by name
-
-select
-    holding_source,
-    holder_id,
-    holder_name,
-    holder_type,
-    security_id,
-    report_date,
-    announced_date,
-    holding_amount,
-    holding_ratio,
-    holding_float_ratio,
-    holding_change,
-    market_value,
-    exchange
-from northbound_positions
+    exchange,
+    cast('holding_position' as varchar) as dataset,
+    concat('holding_position:', cast(report_date as varchar)) as snapshot_id,
+    announced_date as as_of_date
+from holding_positions

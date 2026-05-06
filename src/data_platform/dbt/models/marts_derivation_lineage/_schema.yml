@@ -6,20 +6,15 @@ models:
     tests:
       - unique_combination_of_columns:
           combination_of_columns:
-            - holding_source
-            - holder_id
-            - security_id
-            - report_date
-            - announced_date
+            - mart_key
       - derivation_lineage_key_parity:
           business_model: ref('mart_deriv_top_holder_qoq_change')
           key_columns:
-            - holding_source
-            - holder_id
-            - security_id
-            - report_date
-            - announced_date
+            - mart_key
     columns:
+      - name: mart_key
+        tests:
+          - not_null
       - name: holding_source
         tests:
           - not_null
@@ -35,6 +30,15 @@ models:
       - name: announced_date
         tests:
           - not_null
+      - name: dataset
+        tests:
+          - not_null
+      - name: snapshot_id
+        tests:
+          - not_null
+      - name: as_of_date
+        tests:
+          - not_null
       - name: source_mart
         tests:
           - not_null
@@ -60,22 +64,30 @@ models:
       - name: source_lineage_summary
         tests:
           - not_null
+      - name: source_run_ids
+        tests:
+          - not_null
+      - name: raw_loaded_at_min
+        tests:
+          - not_null
+      - name: raw_loaded_at_max
+        tests:
+          - not_null
 
   - name: mart_deriv_lineage_fund_co_holding
     description: Lineage summary paired to mart_deriv_fund_co_holding on the lexicographic pair key.
     tests:
       - unique_combination_of_columns:
           combination_of_columns:
-            - report_date
-            - security_id_left
-            - security_id_right
+            - mart_key
       - derivation_lineage_key_parity:
           business_model: ref('mart_deriv_fund_co_holding')
           key_columns:
-            - report_date
-            - security_id_left
-            - security_id_right
+            - mart_key
     columns:
+      - name: mart_key
+        tests:
+          - not_null
       - name: report_date
         tests:
           - not_null
@@ -85,6 +97,15 @@ models:
       - name: security_id_right
         tests:
           - not_null
+      - name: dataset
+        tests:
+          - not_null
+      - name: snapshot_id
+        tests:
+          - not_null
+      - name: as_of_date
+        tests:
+          - not_null
       - name: source_mart
         tests:
           - not_null
@@ -110,24 +131,30 @@ models:
       - name: source_lineage_summary
         tests:
           - not_null
+      - name: source_run_ids
+        tests:
+          - not_null
+      - name: raw_loaded_at_min
+        tests:
+          - not_null
+      - name: raw_loaded_at_max
+        tests:
+          - not_null
 
   - name: mart_deriv_lineage_northbound_holding_z_score
     description: Lineage summary paired to mart_deriv_northbound_holding_z_score on the metric row key and source rolling window.
     tests:
       - unique_combination_of_columns:
           combination_of_columns:
-            - security_id
-            - holder_id
-            - report_date
-            - z_score_metric
+            - mart_key
       - derivation_lineage_key_parity:
           business_model: ref('mart_deriv_northbound_holding_z_score')
           key_columns:
-            - security_id
-            - holder_id
-            - report_date
-            - z_score_metric
+            - mart_key
     columns:
+      - name: mart_key
+        tests:
+          - not_null
       - name: security_id
         tests:
           - not_null
@@ -145,6 +172,15 @@ models:
                 - 'holding_amount'
                 - 'holding_ratio'
               quote: true
+      - name: dataset
+        tests:
+          - not_null
+      - name: snapshot_id
+        tests:
+          - not_null
+      - name: as_of_date
+        tests:
+          - not_null
       - name: source_mart
         tests:
           - not_null
@@ -168,5 +204,14 @@ models:
         tests:
           - not_null
       - name: source_lineage_summary
+        tests:
+          - not_null
+      - name: source_run_ids
+        tests:
+          - not_null
+      - name: raw_loaded_at_min
+        tests:
+          - not_null
+      - name: raw_loaded_at_max
         tests:
           - not_null

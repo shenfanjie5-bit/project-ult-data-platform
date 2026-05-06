@@ -2,10 +2,12 @@
 
 with source_rows as (
     select
+        z_score.mart_key,
         z_score.security_id,
         z_score.holder_id,
         z_score.report_date,
         z_score.z_score_metric,
+        z_score.window_end_date,
         lineage.report_date as source_report_date,
         lineage.source_interface_id,
         lineage.source_run_id,
@@ -19,10 +21,14 @@ with source_rows as (
 )
 
 select
+    mart_key,
     security_id,
     holder_id,
     report_date,
     z_score_metric,
+    cast('northbound_holding_z_score' as varchar) as dataset,
+    concat('northbound_holding_z_score:', mart_key) as snapshot_id,
+    window_end_date as as_of_date,
     cast('mart_fact_holding_position_v2' as varchar) as source_mart,
     min(source_report_date) as source_window_start_date,
     max(source_report_date) as source_window_end_date,
@@ -40,7 +46,9 @@ select
     ) as source_lineage_summary
 from source_rows
 group by
+    mart_key,
     security_id,
     holder_id,
     report_date,
-    z_score_metric
+    z_score_metric,
+    window_end_date

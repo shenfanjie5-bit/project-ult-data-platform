@@ -16,6 +16,7 @@ from data_platform.holdings_backfill import (
     execute_holdings_backfill_plan,
     public_execution_summary,
     public_plan_summary,
+    validate_holdings_backfill_live_gate,
 )
 from data_platform.raw import RawWriter
 
@@ -44,6 +45,7 @@ def main(argv: Sequence[str] | None = None) -> int:
             _emit_payload(payload, args.json_report)
             return 2
         if args.execute_live:
+            validate_holdings_backfill_live_gate(execute_live=args.execute_live)
             if args.raw_zone_path is None or args.iceberg_warehouse_path is None:
                 msg = "--execute-live requires --raw-zone-path and --iceberg-warehouse-path"
                 raise ValueError(msg)
@@ -56,6 +58,7 @@ def main(argv: Sequence[str] | None = None) -> int:
                     raw_zone_path=args.raw_zone_path,
                     iceberg_warehouse_path=args.iceberg_warehouse_path,
                 ),
+                execute_live=args.execute_live,
             )
             payload["execution"] = public_execution_summary(result)
         _emit_payload(payload, args.json_report)

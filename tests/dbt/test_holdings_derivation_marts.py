@@ -13,6 +13,9 @@ PROJECT_ROOT = Path(__file__).resolve().parents[2]
 DBT_PROJECT_DIR = PROJECT_ROOT / "src" / "data_platform" / "dbt"
 MARTS_DERIVATIONS_DIR = DBT_PROJECT_DIR / "models" / "marts_derivations"
 MARTS_DERIVATION_LINEAGE_DIR = DBT_PROJECT_DIR / "models" / "marts_derivation_lineage"
+TEST_STOCK_A = "TESTSTKA.SZ"
+TEST_STOCK_B = "TESTSTKB.SZ"
+TEST_STOCK_C = "TESTSTKC.SZ"
 
 
 def test_top_holder_qoq_change_uses_canonical_lag_and_pairs_lineage() -> None:
@@ -25,7 +28,7 @@ def test_top_holder_qoq_change_uses_canonical_lag_and_pairs_lineage() -> None:
             connection,
             "top_holder",
             "holder-a",
-            "000001.SZ",
+            TEST_STOCK_A,
             date(2025, 12, 31),
             date(2026, 1, 15),
             90,
@@ -35,7 +38,7 @@ def test_top_holder_qoq_change_uses_canonical_lag_and_pairs_lineage() -> None:
             connection,
             "top_holder",
             "holder-a",
-            "000001.SZ",
+            TEST_STOCK_A,
             date(2025, 12, 31),
             date(2026, 1, 31),
             100,
@@ -45,7 +48,7 @@ def test_top_holder_qoq_change_uses_canonical_lag_and_pairs_lineage() -> None:
             connection,
             "top_holder",
             "holder-a",
-            "000001.SZ",
+            TEST_STOCK_A,
             date(2026, 3, 31),
             date(2026, 4, 30),
             125,
@@ -86,7 +89,31 @@ def test_top_holder_qoq_change_uses_canonical_lag_and_pairs_lineage() -> None:
             connection,
             "mart_deriv_top_holder_qoq_change",
             "mart_deriv_lineage_top_holder_qoq_change",
-            ["holding_source", "holder_id", "security_id", "report_date", "announced_date"],
+            ["mart_key"],
+        )
+        missing_columns = _missing_columns(
+            connection,
+            "mart_deriv_top_holder_qoq_change",
+            {"mart_key"},
+        ) | _missing_columns(
+            connection,
+            "mart_deriv_lineage_top_holder_qoq_change",
+            {
+                "mart_key",
+                "dataset",
+                "snapshot_id",
+                "as_of_date",
+                "source_mart",
+                "source_window_start_date",
+                "source_window_end_date",
+                "source_interface_ids",
+                "source_row_count",
+                "source_lineage_row_count",
+                "source_lineage_summary",
+                "source_run_ids",
+                "raw_loaded_at_min",
+                "raw_loaded_at_max",
+            },
         )
         lineage_row = connection.execute(
             """
@@ -104,6 +131,7 @@ def test_top_holder_qoq_change_uses_canonical_lag_and_pairs_lineage() -> None:
         (date(2026, 3, 31), date(2026, 4, 30), date(2025, 12, 31)),
     ]
     assert key_diff_count == 0
+    assert missing_columns == set()
     assert lineage_row == ("mart_fact_holding_position_v2", "top10_holders", 2)
 
 
@@ -114,11 +142,11 @@ def test_fund_co_holding_orders_pairs_and_dedupes_inverse_pairs() -> None:
     try:
         _create_holding_fixture_tables(connection)
         for holder_id, security_id in [
-            ("fund-1", "000001.SZ"),
-            ("fund-1", "000002.SZ"),
-            ("fund-1", "000003.SZ"),
-            ("fund-2", "000001.SZ"),
-            ("fund-2", "000002.SZ"),
+            ("fund-1", TEST_STOCK_A),
+            ("fund-1", TEST_STOCK_B),
+            ("fund-1", TEST_STOCK_C),
+            ("fund-2", TEST_STOCK_A),
+            ("fund-2", TEST_STOCK_B),
         ]:
             _insert_holding_row(
                 connection,
@@ -167,18 +195,28 @@ def test_fund_co_holding_orders_pairs_and_dedupes_inverse_pairs() -> None:
             connection,
             "mart_deriv_fund_co_holding",
             "mart_deriv_lineage_fund_co_holding",
-            ["report_date", "security_id_left", "security_id_right"],
+            ["mart_key"],
+        )
+        missing_columns = _missing_columns(
+            connection,
+            "mart_deriv_fund_co_holding",
+            {"mart_key", "row_id", "evidence_ref"},
+        ) | _missing_columns(
+            connection,
+            "mart_deriv_lineage_fund_co_holding",
+            {"mart_key", "dataset", "snapshot_id", "as_of_date"},
         )
     finally:
         connection.close()
 
     assert pair_rows == [
-        ("000001.SZ", "000002.SZ", 2, 2, 2, 1.0, date(2026, 4, 30)),
-        ("000001.SZ", "000003.SZ", 1, 2, 1, 0.5, date(2026, 4, 30)),
-        ("000002.SZ", "000003.SZ", 1, 2, 1, 0.5, date(2026, 4, 30)),
+        (TEST_STOCK_A, TEST_STOCK_B, 2, 2, 2, 1.0, date(2026, 4, 30)),
+        (TEST_STOCK_A, TEST_STOCK_C, 1, 2, 1, 0.5, date(2026, 4, 30)),
+        (TEST_STOCK_B, TEST_STOCK_C, 1, 2, 1, 0.5, date(2026, 4, 30)),
     ]
     assert inverse_pair_count == 0
     assert key_diff_count == 0
+    assert missing_columns == set()
 
 
 def test_fund_co_holding_lineage_only_counts_contributing_pair_rows() -> None:
@@ -188,10 +226,10 @@ def test_fund_co_holding_lineage_only_counts_contributing_pair_rows() -> None:
     try:
         _create_holding_fixture_tables(connection)
         for holder_id, security_id in [
-            ("fund-1", "000001.SZ"),
-            ("fund-1", "000002.SZ"),
-            ("fund-2", "000001.SZ"),
-            ("fund-2", "000002.SZ"),
+            ("fund-1", TEST_STOCK_A),
+            ("fund-1", TEST_STOCK_B),
+            ("fund-2", TEST_STOCK_A),
+            ("fund-2", TEST_STOCK_B),
         ]:
             _insert_holding_row(
                 connection,
@@ -208,7 +246,7 @@ def test_fund_co_holding_lineage_only_counts_contributing_pair_rows() -> None:
             connection,
             "fund_portfolio",
             "fund-side-only",
-            "000001.SZ",
+            TEST_STOCK_A,
             date(2026, 3, 31),
             date(2026, 4, 30),
             10,
@@ -232,23 +270,24 @@ def test_fund_co_holding_lineage_only_counts_contributing_pair_rows() -> None:
             select source_row_count, source_lineage_row_count, source_run_ids
             from mart_deriv_lineage_fund_co_holding
             where report_date = date '2026-03-31'
-              and security_id_left = '000001.SZ'
-              and security_id_right = '000002.SZ'
-            """
+              and security_id_left = ?
+              and security_id_right = ?
+            """,
+            [TEST_STOCK_A, TEST_STOCK_B],
         ).fetchone()
     finally:
         connection.close()
 
     assert lineage_row[0:2] == (4, 4)
     assert set(lineage_row[2].split(",")) == {
-        "run-fund-1-000001.SZ",
-        "run-fund-1-000002.SZ",
-        "run-fund-2-000001.SZ",
-        "run-fund-2-000002.SZ",
+        f"run-fund-1-{TEST_STOCK_A}",
+        f"run-fund-1-{TEST_STOCK_B}",
+        f"run-fund-2-{TEST_STOCK_A}",
+        f"run-fund-2-{TEST_STOCK_B}",
     }
 
 
-def test_northbound_z_score_nulls_when_window_stddev_is_null_or_zero() -> None:
+def test_northbound_z_score_filters_rows_when_window_stddev_is_null_or_zero() -> None:
     duckdb = pytest.importorskip("duckdb")
 
     connection = duckdb.connect(":memory:")
@@ -263,7 +302,7 @@ def test_northbound_z_score_nulls_when_window_stddev_is_null_or_zero() -> None:
                 connection,
                 "northbound_hold",
                 "northbound:sh",
-                "000001.SZ",
+                TEST_STOCK_A,
                 report_date,
                 report_date,
                 100,
@@ -281,43 +320,52 @@ def test_northbound_z_score_nulls_when_window_stddev_is_null_or_zero() -> None:
             MARTS_DERIVATION_LINEAGE_DIR,
         )
 
-        amount_latest = connection.execute(
+        amount_row_count = connection.execute(
             """
-            select observation_count, metric_stddev, metric_z_score
+            select count(*)
             from mart_deriv_northbound_holding_z_score
-            where report_date = date '2026-04-03'
-              and z_score_metric = 'holding_amount'
+            where z_score_metric = 'holding_amount'
             """
-        ).fetchone()
-        ratio_first = connection.execute(
+        ).fetchone()[0]
+        ratio_first_row_count = connection.execute(
             """
-            select observation_count, metric_stddev, metric_z_score
+            select count(*)
             from mart_deriv_northbound_holding_z_score
             where report_date = date '2026-04-01'
               and z_score_metric = 'holding_ratio'
             """
-        ).fetchone()
+        ).fetchone()[0]
         ratio_latest_z_score = connection.execute(
             """
-            select round(metric_z_score, 6)
+            select observation_count, round(metric_stddev, 6), round(metric_z_score, 6)
             from mart_deriv_northbound_holding_z_score
             where report_date = date '2026-04-03'
               and z_score_metric = 'holding_ratio'
             """
-        ).fetchone()[0]
+        ).fetchone()
         key_diff_count = _key_diff_count(
             connection,
             "mart_deriv_northbound_holding_z_score",
             "mart_deriv_lineage_northbound_holding_z_score",
-            ["security_id", "holder_id", "report_date", "z_score_metric"],
+            ["mart_key"],
+        )
+        missing_columns = _missing_columns(
+            connection,
+            "mart_deriv_northbound_holding_z_score",
+            {"mart_key", "row_id", "evidence_ref"},
+        ) | _missing_columns(
+            connection,
+            "mart_deriv_lineage_northbound_holding_z_score",
+            {"mart_key", "dataset", "snapshot_id", "as_of_date"},
         )
     finally:
         connection.close()
 
-    assert amount_latest == (3, 0.0, None)
-    assert ratio_first == (1, None, None)
-    assert ratio_latest_z_score == 1.0
+    assert amount_row_count == 0
+    assert ratio_first_row_count == 0
+    assert ratio_latest_z_score == (3, 1.0, 1.0)
     assert key_diff_count == 0
+    assert missing_columns == set()
 
 
 def _create_holding_fixture_tables(connection: Any) -> None:
@@ -439,3 +487,14 @@ def _key_diff_count(
         )
         """
     ).fetchone()[0]
+
+
+def _missing_columns(
+    connection: Any,
+    table_name: str,
+    expected_columns: set[str],
+) -> set[str]:
+    actual_columns = {
+        row[1] for row in connection.execute(f"pragma table_info('{table_name}')").fetchall()
+    }
+    return expected_columns - actual_columns
