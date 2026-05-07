@@ -1,7 +1,7 @@
 # Runbook: External smoke — Tushare corpus
 
 This is the **external smoke lane** for the local Tushare corpus
-mounted at `/Volumes/dockcase2tb/database_all`. It's Phase C of
+mounted at `<external-corpus-root>`. It's Phase C of
 `TUSHARE_TEST_FIXTURE_PLAN.md`.
 
 Unlike the git-tracked fixture lanes (audit-eval shared cases +
@@ -27,7 +27,7 @@ running this under CI produces false failures.
 ## How to run
 
 ```bash
-cd /Users/fanjie/Desktop/Cowork/project-ult/data-platform
+cd <workspace>/data-platform
 ./scripts/external_smoke_tushare_corpus.sh
 ```
 
@@ -41,7 +41,7 @@ PYTHONPATH=src .venv/bin/python scripts/external_smoke_tushare_corpus.py
 
 | Name | Default | Effect |
 |---|---|---|
-| `DP_EXTERNAL_CORPUS_ROOT` | `/Volumes/dockcase2tb/database_all` | Override the corpus root. The target **must be a structural mirror of the default mount**: same dataset paths relative to the root + same audit CSV at `_workspace/_meta/analysis/api_download_completeness_audit_20260420.csv`. The `fixture_traceability` check remaps declared absolute paths into the override root before resolving, so override targets that structurally mirror the default pass cleanly; it fails only if the remapped target doesn't resolve (genuine corpus defect), not on the root string itself differing. |
+| `DP_EXTERNAL_CORPUS_ROOT` | `<external-corpus-root>` | Override the corpus root. The target **must be a structural mirror of the default mount**: same dataset paths relative to the root + same audit CSV at `_workspace/_meta/analysis/api_download_completeness_audit_20260420.csv`. The `fixture_traceability` check remaps declared absolute paths into the override root before resolving, so override targets that structurally mirror the default pass cleanly; it fails only if the remapped target doesn't resolve (genuine corpus defect), not on the root string itself differing. |
 | `DP_EXTERNAL_SMOKE_STRICT` | unset | When `1` / `true` / `yes`, treats "drive unmounted" as a hard failure (exit 1). Default is skip-on-unmount (exit 0) so scheduled runs don't alert when the drive is unplugged. |
 
 **Override caveat**: The script does NOT support an override pointing
@@ -92,9 +92,9 @@ have to re-run to see the second one.
 ## Expected output (green mount + green corpus)
 
 ```
-external smoke — Tushare corpus @ /Volumes/dockcase2tb/database_all
+external smoke — Tushare corpus @ <external-corpus-root>
 ────────────────────────────────────────────────────────────────────────
-  ✓ mount: mounted + readable at /Volumes/dockcase2tb/database_all
+  ✓ mount: mounted + readable at <external-corpus-root>
   ✓ audit_csv_gate: all 12 required datasets are access=available + completeness=未见明显遗漏
   ✓ dataset_presence: all 12 dataset_paths present on disk
   ✓ ts_code_presence: all 6 Phase-B ts_codes resolve in their datasets
@@ -107,9 +107,9 @@ external smoke — Tushare corpus @ /Volumes/dockcase2tb/database_all
 ## Expected output (drive unmounted)
 
 ```
-external smoke — Tushare corpus @ /Volumes/dockcase2tb/database_all
+external smoke — Tushare corpus @ <external-corpus-root>
 ────────────────────────────────────────────────────────────────────────
-  ✗ mount: corpus root /Volumes/dockcase2tb/database_all does not exist (drive not mounted)
+  ✗ mount: corpus root <external-corpus-root> does not exist (drive not mounted)
       This is the expected state in CI and on dev machines where the external drive
       hasn't been plugged in; the caller usually treats this as a skip, not a failure.
 ────────────────────────────────────────────────────────────────────────
@@ -122,7 +122,7 @@ Exit code is **0** by default so a cron / launchd job won't alert.
 
 ## Why this is NOT a pytest test
 
-1. `/Volumes/dockcase2tb/database_all` is a developer-local mount;
+1. `<external-corpus-root>` is a developer-local mount;
    CI containers don't have it and shouldn't pretend they do.
 2. Phase B's fixture assertions already ensure the in-repo fixture
    content is internally consistent. This smoke's job is the
@@ -138,9 +138,9 @@ job (macOS) or cron entry:
 
 ```bash
 # crontab -e (daily 09:00)
-0 9 * * * cd /Users/fanjie/Desktop/Cowork/project-ult/data-platform \
+0 9 * * * cd <workspace>/data-platform \
             && ./scripts/external_smoke_tushare_corpus.sh \
-            > /tmp/dp-external-smoke-$(date +\%Y\%m\%d).log 2>&1 \
+            > <proof-workspace>/dp-external-smoke-$(date +\%Y\%m\%d).log 2>&1 \
             || osascript -e 'display notification "Tushare corpus smoke FAILED" with title "data-platform"'
 ```
 

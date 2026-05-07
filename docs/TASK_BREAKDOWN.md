@@ -48,7 +48,7 @@ data_platform（顶层包）+ pyproject.toml + scripts/
 
 #### 验证命令
 ```bash
-cd /Users/fanjie/Desktop/Cowork/project-ult/data-platform
+cd <workspace>/data-platform
 python -m venv .venv && source .venv/bin/activate
 pip install -e ".[dev]"
 ruff check src tests
@@ -97,9 +97,9 @@ data_platform.config
 
 #### 验证命令
 ```bash
-cd /Users/fanjie/Desktop/Cowork/project-ult/data-platform
+cd <workspace>/data-platform
 cp .env.example .env.test
-DP_PG_DSN="postgresql://u:p@localhost/dp" pytest tests/test_config.py -q
+DP_PG_DSN="<postgres-dsn>" pytest tests/test_config.py -q
 ```
 
 #### 依赖
@@ -145,12 +145,12 @@ data_platform.ddl
 
 #### 验证命令
 ```bash
-cd /Users/fanjie/Desktop/Cowork/project-ult/data-platform
+cd <workspace>/data-platform
 docker run -d --rm --name dp-pg -e POSTGRES_PASSWORD=dp -p 5433:5432 postgres:16
 sleep 3
-DP_PG_DSN="postgresql://postgres:dp@localhost:5433/postgres" python -m data_platform.ddl.runner --upgrade
-DP_PG_DSN="postgresql://postgres:dp@localhost:5433/postgres" python -m data_platform.ddl.runner --upgrade
-psql "postgresql://postgres:dp@localhost:5433/postgres" -c "select * from dp_schema_migrations;"
+DP_PG_DSN="<postgres-dsn>" python -m data_platform.ddl.runner --upgrade
+DP_PG_DSN="<postgres-dsn>" python -m data_platform.ddl.runner --upgrade
+psql "<postgres-dsn>" -c "select * from dp_schema_migrations;"
 docker rm -f dp-pg
 ```
 
@@ -196,10 +196,10 @@ data_platform.ddl + data_platform.serving.catalog
 
 #### 验证命令
 ```bash
-cd /Users/fanjie/Desktop/Cowork/project-ult/data-platform
-mkdir -p /tmp/dp_warehouse
-DP_ICEBERG_WAREHOUSE_PATH=/tmp/dp_warehouse \
-DP_PG_DSN="postgresql://postgres:dp@localhost:5433/postgres" \
+cd <workspace>/data-platform
+mkdir -p <proof-workspace>/dp_warehouse
+DP_ICEBERG_WAREHOUSE_PATH=<proof-workspace>/dp_warehouse \
+DP_PG_DSN="<postgres-dsn>" \
   python scripts/init_iceberg_catalog.py
 python -c "from data_platform.serving.catalog import load_catalog; print(load_catalog().list_namespaces())"
 ```
@@ -247,9 +247,9 @@ data_platform.raw
 
 #### 验证命令
 ```bash
-cd /Users/fanjie/Desktop/Cowork/project-ult/data-platform
-DP_DATA_STORAGE_ROOT_PATH=/tmp/dp_data pytest tests/raw/ -q
-ls /tmp/dp_data/raw
+cd <workspace>/data-platform
+DP_DATA_STORAGE_ROOT_PATH=<proof-workspace>/dp_data pytest tests/raw/ -q
+ls <proof-workspace>/dp_data/raw
 ```
 
 #### 依赖
@@ -294,7 +294,7 @@ data_platform.ddl + data_platform.serving
 
 #### 验证命令
 ```bash
-cd /Users/fanjie/Desktop/Cowork/project-ult/data-platform
+cd <workspace>/data-platform
 python -m data_platform.ddl.iceberg_tables --ensure
 python -c "from data_platform.serving.catalog import load_catalog; \
 c=load_catalog(); print(c.load_table('canonical.stock_basic').schema())"
@@ -343,7 +343,7 @@ data_platform.adapters.base
 
 #### 验证命令
 ```bash
-cd /Users/fanjie/Desktop/Cowork/project-ult/data-platform
+cd <workspace>/data-platform
 pytest tests/adapters/test_base.py -q --cov=data_platform.adapters.base --cov-report=term
 mypy src/data_platform/adapters/base.py
 ```
@@ -391,10 +391,10 @@ data_platform.adapters.tushare
 
 #### 验证命令
 ```bash
-cd /Users/fanjie/Desktop/Cowork/project-ult/data-platform
+cd <workspace>/data-platform
 pytest tests/adapters/test_tushare.py -q
 # 真实拉取（需要 token，可选）
-DP_TUSHARE_TOKEN="${DP_TUSHARE_TOKEN:?set DP_TUSHARE_TOKEN}" DP_DATA_STORAGE_ROOT_PATH=/tmp/dp_data \
+DP_TUSHARE_TOKEN="${DP_TUSHARE_TOKEN:?set DP_TUSHARE_TOKEN}" DP_DATA_STORAGE_ROOT_PATH=<proof-workspace>/dp_data \
   python -m data_platform.adapters.tushare.adapter --asset tushare_stock_basic --date 20260415
 ```
 
@@ -441,7 +441,7 @@ data_platform.dbt（dbt project root）
 
 #### 验证命令
 ```bash
-cd /Users/fanjie/Desktop/Cowork/project-ult/data-platform
+cd <workspace>/data-platform
 cp src/data_platform/dbt/profiles.yml.example src/data_platform/dbt/profiles.yml
 DBT_PROFILES_DIR=src/data_platform/dbt dbt parse --project-dir src/data_platform/dbt
 DBT_PROFILES_DIR=src/data_platform/dbt dbt debug --project-dir src/data_platform/dbt
@@ -489,10 +489,10 @@ data_platform.dbt/models/staging
 
 #### 验证命令
 ```bash
-cd /Users/fanjie/Desktop/Cowork/project-ult/data-platform
-cp -r tests/dbt/fixtures/raw /tmp/dp_data/raw
-DP_DATA_STORAGE_ROOT_PATH=/tmp/dp_data ./scripts/dbt.sh run --select stg_stock_basic
-DP_DATA_STORAGE_ROOT_PATH=/tmp/dp_data ./scripts/dbt.sh test --select stg_stock_basic
+cd <workspace>/data-platform
+cp -r tests/dbt/fixtures/raw <proof-workspace>/dp_data/raw
+DP_DATA_STORAGE_ROOT_PATH=<proof-workspace>/dp_data ./scripts/dbt.sh run --select stg_stock_basic
+DP_DATA_STORAGE_ROOT_PATH=<proof-workspace>/dp_data ./scripts/dbt.sh test --select stg_stock_basic
 duckdb $DP_DUCKDB_PATH "select count(*), min(list_date), max(list_date) from stg_stock_basic"
 ```
 
@@ -540,7 +540,7 @@ data_platform.serving.canonical_writer
 
 #### 验证命令
 ```bash
-cd /Users/fanjie/Desktop/Cowork/project-ult/data-platform
+cd <workspace>/data-platform
 python -m data_platform.serving.canonical_writer --table stock_basic
 duckdb -c "INSTALL iceberg; LOAD iceberg; \
   select count(*) from iceberg_scan('$DP_ICEBERG_WAREHOUSE_PATH/canonical/stock_basic');"
@@ -588,7 +588,7 @@ data_platform.serving.reader
 
 #### 验证命令
 ```bash
-cd /Users/fanjie/Desktop/Cowork/project-ult/data-platform
+cd <workspace>/data-platform
 python -c "from data_platform.serving.reader import get_canonical_stock_basic; \
 print(get_canonical_stock_basic().num_rows)"
 pytest tests/serving/test_reader.py -q
@@ -643,7 +643,7 @@ tests/spike/iceberg_write_chain
 
 #### 验证命令
 ```bash
-cd /Users/fanjie/Desktop/Cowork/project-ult/data-platform
+cd <workspace>/data-platform
 DATABASE_URL=<redacted> DP_PG_DSN=<redacted> .venv/bin/pytest -m spike tests/spike/test_iceberg_write_chain.py -v
 cat docs/spike/iceberg-write-chain.md
 ```
@@ -693,15 +693,15 @@ scripts/smoke + tests/integration
 - **两条验证路径，环境变量要求不同**：
   - `make smoke-p1a` → `scripts/smoke_p1a.sh` → 要求 `DP_PG_DSN`；脚本第 26 行明确 "DATABASE_URL is not used by this destructive smoke path"。
   - `pytest tests/integration/test_p1a_smoke.py` → `postgres_dsn` fixture → 要求 `DATABASE_URL`（fixture 读 `os.environ.get("DATABASE_URL")`，line ~38）。
-- **make 路径验收已通过**：2026-05-04 post-merge run 使用 `DP_ENV=test`、`DP_SMOKE_P1A_CONFIRM_DESTRUCTIVE=1`、`DP_PG_DSN=postgresql://dp:<redacted>@localhost:5432/dp_p1a_smoke_20260504`、`DP_ICEBERG_CATALOG_NAME=data_platform_p1a_smoke_20260504`、`DP_SMOKE_WORK_DIR=/tmp/data-platform-p1a-smoke-20260504`，且 `DP_RAW_ZONE_PATH` / `DP_ICEBERG_WAREHOUSE_PATH` / `DP_DUCKDB_PATH` 均在该 workdir 下，然后执行 `make smoke-p1a`。
-- **结果**：`P1a smoke OK duration_s=8 log_dir=/tmp/data-platform-p1a-smoke-20260504/logs`；wrapper duration 9s。日志只保留在 `/tmp`，不提交入仓。
+- **make 路径验收已通过**：2026-05-04 post-merge run 使用 `DP_ENV=test`、`DP_SMOKE_P1A_CONFIRM_DESTRUCTIVE=1`、`DP_PG_DSN=<postgres-dsn>`、`DP_ICEBERG_CATALOG_NAME=data_platform_p1a_smoke_20260504`、`DP_SMOKE_WORK_DIR=<proof-workspace>`，且 `DP_RAW_ZONE_PATH` / `DP_ICEBERG_WAREHOUSE_PATH` / `DP_DUCKDB_PATH` 均在该 workdir 下，然后执行 `make smoke-p1a`。
+- **结果**：`P1a smoke OK duration_s=8 log_dir=<proof-workspace>/logs`；wrapper duration 9s。日志只保留在 `<proof-workspace>`，不提交入仓。
 - **pytest 路径说明**：`pytest tests/integration/test_p1a_smoke.py -v` 仍要求具备 `CREATE DATABASE` 权限的 `DATABASE_URL`；2026-05-04 evidence 采用已经隔离好的 smoke database + destructive confirmation 的 `make smoke-p1a` 路径。
 
 #### 验证命令
 ```bash
-cd /Users/fanjie/Desktop/Cowork/project-ult/data-platform
+cd <workspace>/data-platform
 # make 路径：shell 脚本读 DP_PG_DSN，DATABASE_URL 被脚本明确忽略
-DP_ENV=test DP_SMOKE_P1A_CONFIRM_DESTRUCTIVE=1 DP_PG_DSN=postgresql://dp:<redacted>@localhost:5432/dp_p1a_smoke_20260504 DP_ICEBERG_CATALOG_NAME=data_platform_p1a_smoke_20260504 DP_SMOKE_WORK_DIR=/tmp/data-platform-p1a-smoke-20260504 make smoke-p1a
+DP_ENV=test DP_SMOKE_P1A_CONFIRM_DESTRUCTIVE=1 DP_PG_DSN=<postgres-dsn> DP_ICEBERG_CATALOG_NAME=data_platform_p1a_smoke_20260504 DP_SMOKE_WORK_DIR=<proof-workspace> make smoke-p1a
 # pytest 路径：fixture 读 DATABASE_URL
 DATABASE_URL=<redacted> pytest tests/integration/test_p1a_smoke.py -v
 ```
