@@ -7,6 +7,9 @@ from pathlib import Path
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
 GUARD_SCRIPT = PROJECT_ROOT / "scripts" / "check_repository_artifacts.py"
+HOLDINGS_QUEUE_FREEZE_RUNBOOK = (
+    PROJECT_ROOT / "docs" / "runbook" / "holdings-queue-freeze-rollout.md"
+)
 
 
 def _load_guard_module() -> object:
@@ -96,3 +99,22 @@ def test_gitignore_excludes_generated_python_artifacts() -> None:
     assert "__pycache__/" in gitignore
     assert "*.py[cod]" in gitignore
     assert "*.egg-info/" in gitignore
+
+
+def test_holdings_queue_freeze_runbook_uses_sanitized_evidence_shape() -> None:
+    text = HOLDINGS_QUEUE_FREEZE_RUNBOOK.read_text(encoding="utf-8")
+
+    assert '"payload":' not in _receipt_json_block(text)
+    assert "provider_payload" not in _receipt_json_block(text)
+    assert "raw_payload_path" not in _receipt_json_block(text)
+    assert "DP_PG_DSN=<redacted-dsn>" in text
+    assert "submitted_by=\"subsystem-holdings\"" in text
+    assert "payload_type=\"Ex-3\"" in text
+    assert "commit hash" in text
+
+
+def _receipt_json_block(text: str) -> str:
+    marker = "```json"
+    start = text.index(marker) + len(marker)
+    end = text.index("```", start)
+    return text[start:end]

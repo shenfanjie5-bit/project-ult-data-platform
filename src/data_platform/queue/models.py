@@ -24,6 +24,64 @@ _FORBIDDEN_PAYLOAD_KEYS: Final[frozenset[str]] = frozenset(("submitted_at", "ing
 
 
 @dataclass(frozen=True, slots=True)
+class CandidateSubmitReceipt:
+    """Sanitized receipt for an idempotent candidate_queue submission."""
+
+    candidate_id: int
+    payload_type: CandidatePayloadType
+    submitted_by: str
+    submitted_at: datetime
+    ingest_seq: int
+    validation_status: ValidationStatus
+    rejection_reason: str | None
+    replayed: bool
+
+    def __post_init__(self) -> None:
+        if self.candidate_id < 1:
+            msg = "candidate_id must be positive"
+            raise ValueError(msg)
+        _validate_payload_type(self.payload_type)
+        _validate_validation_status(self.validation_status)
+        if self.ingest_seq < 1:
+            msg = "ingest_seq must be positive"
+            raise ValueError(msg)
+
+    @classmethod
+    def from_candidate(
+        cls,
+        item: CandidateQueueItem,
+        *,
+        replayed: bool,
+    ) -> CandidateSubmitReceipt:
+        """Build a public receipt without returning producer payload contents."""
+
+        return cls(
+            candidate_id=item.id,
+            payload_type=item.payload_type,
+            submitted_by=item.submitted_by,
+            submitted_at=item.submitted_at,
+            ingest_seq=item.ingest_seq,
+            validation_status=item.validation_status,
+            rejection_reason=item.rejection_reason,
+            replayed=replayed,
+        )
+
+    def as_public_dict(self) -> dict[str, object]:
+        """Return a JSON-shaped receipt safe for runbooks and evidence."""
+
+        return {
+            "candidate_id": self.candidate_id,
+            "payload_type": self.payload_type,
+            "submitted_by": self.submitted_by,
+            "submitted_at": self.submitted_at.isoformat(),
+            "ingest_seq": self.ingest_seq,
+            "validation_status": self.validation_status,
+            "rejection_reason": self.rejection_reason,
+            "replayed": self.replayed,
+        }
+
+
+@dataclass(frozen=True, slots=True)
 class CandidateQueueItem:
     """A row from data_platform.candidate_queue."""
 

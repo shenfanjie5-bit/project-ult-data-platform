@@ -12,9 +12,11 @@ import pytest
 from data_platform.queue import (
     CandidateEnvelope,
     CandidateQueueItem,
+    CandidateSubmitReceipt,
     CandidateValidationError,
     ForbiddenIngestMetadataError,
     submit_candidate,
+    submit_candidate_idempotent,
     validate_candidate_envelope,
 )
 from data_platform.queue import api as queue_api
@@ -125,6 +127,67 @@ def test_submit_candidate_accepts_sdk_bridge_shaped_ex3_envelope(
     ]
 
 
+def test_submit_candidate_idempotent_returns_sanitized_receipt(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    seen_envelopes: list[CandidateEnvelope] = []
+
+    class FakeRepository:
+        def insert_candidate_idempotent(
+            self,
+            envelope: CandidateEnvelope,
+        ) -> CandidateSubmitReceipt:
+            seen_envelopes.append(envelope)
+            return CandidateSubmitReceipt(
+                candidate_id=12,
+                payload_type=envelope.payload_type,
+                submitted_by=envelope.submitted_by,
+                submitted_at=datetime.now(UTC),
+                ingest_seq=101,
+                validation_status="pending",
+                rejection_reason=None,
+                replayed=False,
+            )
+
+        def close(self) -> None:
+            return None
+
+    monkeypatch.setattr(queue_api, "CandidateRepository", FakeRepository)
+
+    payload = {
+        "payload_type": "Ex-3",
+        "submitted_by": "subsystem-holdings",
+        "delta_id": "delta-safe-receipt",
+        "provider_payload": "must not be accepted",
+    }
+
+    with pytest.raises(ForbiddenIngestMetadataError, match="provider_payload"):
+        submit_candidate_idempotent(payload)
+
+    safe_payload = {
+        "payload_type": "Ex-3",
+        "submitted_by": "subsystem-holdings",
+        "delta_id": "delta-safe-receipt",
+        "candidate": {"id": "alpha"},
+    }
+    receipt = submit_candidate_idempotent(safe_payload)
+
+    public_receipt = receipt.as_public_dict()
+    assert receipt.candidate_id == 12
+    assert receipt.replayed is False
+    assert "payload" not in public_receipt
+    assert "provider_payload" not in public_receipt
+    assert "raw_payload_path" not in public_receipt
+    assert "dsn" not in public_receipt
+    assert seen_envelopes == [
+        CandidateEnvelope(
+            payload_type="Ex-3",
+            submitted_by="subsystem-holdings",
+            payload=safe_payload,
+        )
+    ]
+
+
 def test_validate_candidate_envelope_returns_immutable_payload_copy() -> None:
     payload = {
         "payload_type": "Ex-2",
@@ -198,6 +261,31 @@ def test_submit_candidate_rejects_top_level_ingest_metadata(
                 "payload_type": "Ex-1",
                 "submitted_by": "test-subsystem",
                 forbidden_key: "not producer-owned",
+            }
+        )
+
+
+@pytest.mark.parametrize(
+    "forbidden_key",
+    ["layer_b_receipt_id", "ex_type", "produced_at", "raw_payload_path"],
+)
+def test_submit_candidate_rejects_private_receipt_fields_before_insert(
+    monkeypatch: pytest.MonkeyPatch,
+    forbidden_key: str,
+) -> None:
+    class UnexpectedRepository:
+        def __init__(self) -> None:
+            raise AssertionError("repository must not be created for invalid payloads")
+
+    monkeypatch.setattr(queue_api, "CandidateRepository", UnexpectedRepository)
+
+    with pytest.raises(ForbiddenIngestMetadataError, match=forbidden_key):
+        submit_candidate(
+            {
+                "payload_type": "Ex-3",
+                "submitted_by": "subsystem-holdings",
+                "delta_id": "delta-private-receipt",
+                forbidden_key: "private-receipt-value",
             }
         )
 
@@ -313,6 +401,40 @@ def test_repository_maps_pg_returning_fields(migrated_postgres_dsn: str) -> None
     assert item.ingest_seq > 0
     assert item.validation_status == "pending"
     assert item.rejection_reason is None
+
+
+def test_idempotent_ex3_delta_id_replays_existing_row(
+    migrated_postgres_dsn: str,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _set_required_settings_env(monkeypatch, migrated_postgres_dsn)
+
+    payload = {
+        "payload_type": "Ex-3",
+        "submitted_by": "subsystem-holdings",
+        "subsystem_id": "subsystem-holdings",
+        "delta_id": "holdings-delta-replay",
+        "delta_type": "edge_upsert",
+        "source_node": "source",
+        "target_node": "target",
+        "relation_type": "CO_HOLDING",
+        "properties": {"source_mart": "mart_deriv_fund_co_holding"},
+        "evidence": ["proof-row"],
+    }
+    engine = _create_engine(migrated_postgres_dsn)
+    try:
+        before_count = _candidate_count(engine)
+        first = submit_candidate_idempotent(payload)
+        second = submit_candidate_idempotent({**payload, "properties": {"ignored": True}})
+
+        assert _candidate_count(engine) == before_count + 1
+        assert first.replayed is False
+        assert second.replayed is True
+        assert second.candidate_id == first.candidate_id
+        assert second.ingest_seq == first.ingest_seq
+        assert "payload" not in first.as_public_dict()
+    finally:
+        engine.dispose()
 
 
 @pytest.fixture()

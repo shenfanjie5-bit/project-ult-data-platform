@@ -25,7 +25,7 @@ from data_platform.cycle import (
 
 
 EXPECTED_SELECTION_COLUMNS = ["cycle_id", "candidate_id", "selected_at"]
-EXPECTED_MIGRATIONS = ["0001", "0002", "0003", "0004", "0005"]
+EXPECTED_MIGRATIONS = ["0001", "0002", "0003", "0004", "0005", "0006"]
 
 
 def test_cycle_candidate_selection_model_exposes_contract() -> None:
@@ -167,6 +167,48 @@ def test_freeze_selects_only_accepted_candidates_and_sets_cutoffs(
     selected_submitted_at = [row["submitted_at"] for row in accepted]
     assert metadata.cutoff_submitted_at == max(selected_submitted_at)
     assert all(metadata.cutoff_submitted_at >= submitted_at for submitted_at in selected_submitted_at)
+
+
+def test_freeze_filter_selects_only_targeted_holdings_ex3_candidates(
+    cycle_repository_env: str,
+    cycle_engine: Any,
+) -> None:
+    create_cycle(date(2026, 4, 16))
+    with cycle_engine.begin() as connection:
+        selected = _insert_candidate(
+            connection,
+            validation_status="accepted",
+            candidate="holdings-ex3",
+            payload_type="Ex-3",
+            submitted_by="subsystem-holdings",
+            delta_id="holdings-freeze-target",
+        )
+        _insert_candidate(
+            connection,
+            validation_status="accepted",
+            candidate="other-ex3",
+            payload_type="Ex-3",
+            submitted_by="other-subsystem",
+            delta_id="other-freeze-target",
+        )
+        _insert_candidate(
+            connection,
+            validation_status="accepted",
+            candidate="holdings-ex1",
+            payload_type="Ex-1",
+            submitted_by="subsystem-holdings",
+        )
+
+    metadata = freeze_cycle_candidates(
+        "CYCLE_20260416",
+        submitted_by="subsystem-holdings",
+        payload_type="Ex-3",
+    )
+
+    assert metadata.status == "phase0"
+    assert metadata.candidate_count == 1
+    assert metadata.cutoff_ingest_seq == selected["ingest_seq"]
+    assert _selection_ids(cycle_engine, "CYCLE_20260416") == [int(selected["id"])]
 
 
 def test_freeze_metadata_matches_actual_selection_rows(
@@ -429,12 +471,17 @@ def _insert_candidate(
     *,
     validation_status: str,
     candidate: str,
+    payload_type: str = "Ex-1",
+    submitted_by: str = "freeze-test",
+    delta_id: str | None = None,
 ) -> Mapping[str, Any]:
     payload = {
-        "payload_type": "Ex-1",
-        "submitted_by": "freeze-test",
+        "payload_type": payload_type,
+        "submitted_by": submitted_by,
         "candidate": candidate,
     }
+    if delta_id is not None:
+        payload["delta_id"] = delta_id
     return connection.execute(
         _text(
             """
@@ -446,9 +493,9 @@ def _insert_candidate(
                 rejection_reason
             )
             VALUES (
-                'Ex-1',
+                :payload_type,
                 CAST(:payload AS jsonb),
-                'freeze-test',
+                :submitted_by,
                 CAST(:validation_status AS data_platform.validation_status),
                 :rejection_reason
             )
@@ -456,7 +503,9 @@ def _insert_candidate(
             """
         ),
         {
+            "payload_type": payload_type,
             "payload": json.dumps(payload, allow_nan=False),
+            "submitted_by": submitted_by,
             "validation_status": validation_status,
             "rejection_reason": (
                 "rejected by freeze test" if validation_status == "rejected" else None

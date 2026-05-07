@@ -12,7 +12,20 @@ from data_platform.queue.models import CandidatePayloadType, CandidateQueueItem
 
 ExPayload: TypeAlias = Mapping[str, Any]
 FORBIDDEN_PRODUCER_FIELDS: Final[frozenset[str]] = frozenset(
-    {"submitted_at", "ingest_seq"}
+    {
+        "dbt_log_path",
+        "dsn",
+        "ex_type",
+        "ingest_seq",
+        "layer_b_receipt_id",
+        "produced_at",
+        "provider_payload",
+        "provider_response",
+        "raw_payload",
+        "raw_payload_path",
+        "runtime_path",
+        "submitted_at",
+    }
 )
 _CANDIDATE_PAYLOAD_TYPES: Final[frozenset[str]] = frozenset(
     cast(tuple[str, ...], get_args(CandidatePayloadType))

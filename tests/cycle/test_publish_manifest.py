@@ -28,7 +28,7 @@ from data_platform.cycle import (
 )
 
 
-EXPECTED_MIGRATIONS = ["0001", "0002", "0003", "0004", "0005"]
+EXPECTED_MIGRATIONS = ["0001", "0002", "0003", "0004", "0005", "0006"]
 EXPECTED_SNAPSHOT_COLUMNS = ["table", "snapshot_id"]
 EXPECTED_MANIFEST_COLUMNS = [
     "published_cycle_id",

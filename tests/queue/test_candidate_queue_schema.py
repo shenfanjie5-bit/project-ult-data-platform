@@ -106,7 +106,7 @@ def migrated_postgres_dsn(postgres_dsn: str) -> str:
         reason="PostgreSQL candidate queue schema tests require the migration runner",
     )
     applied_versions = runner_module.MigrationRunner().apply_pending(postgres_dsn)
-    assert applied_versions == ["0001", "0002", "0003", "0004", "0005"]
+    assert applied_versions == ["0001", "0002", "0003", "0004", "0005", "0006"]
     assert runner_module.MigrationRunner().apply_pending(postgres_dsn) == []
     return postgres_dsn
 
@@ -277,7 +277,26 @@ def test_migration_creates_candidate_queue_schema(migrated_postgres_dsn: str) ->
                         """
                     )
                 )
-            } >= {"candidate_queue_pkey", "candidate_queue_ingest_seq_key"}
+            } >= {
+                "candidate_queue_pkey",
+                "candidate_queue_ingest_seq_key",
+                "candidate_queue_ex3_delta_id_key",
+            }
+            ex3_delta_index = connection.execute(
+                _text(
+                    """
+                    SELECT indexdef
+                    FROM pg_indexes
+                    WHERE schemaname = 'data_platform'
+                      AND tablename = 'candidate_queue'
+                      AND indexname = 'candidate_queue_ex3_delta_id_key'
+                    """
+                )
+            ).scalar_one()
+            assert "(payload ->> 'delta_id'::text)" in str(ex3_delta_index)
+            assert "WHERE ((payload_type = 'Ex-3'::data_platform.candidate_payload_type)" in str(
+                ex3_delta_index
+            )
     finally:
         engine.dispose()
 

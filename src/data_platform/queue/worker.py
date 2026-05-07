@@ -3,8 +3,9 @@
 from __future__ import annotations
 
 import argparse
-from collections.abc import Sequence
-from dataclasses import asdict, dataclass
+from collections import Counter
+from collections.abc import Mapping, Sequence
+from dataclasses import asdict, dataclass, field
 import json
 import logging
 import sys
@@ -30,6 +31,8 @@ class QueueValidationSummary:
     accepted: int
     rejected: int
     duration_ms: int
+    rejection_counts: Mapping[str, int] = field(default_factory=dict)
+    rejections_by_reason_type: Mapping[str, int] = field(default_factory=dict)
 
 
 def validate_pending_candidates(
@@ -49,6 +52,8 @@ def validate_pending_candidates(
     accepted = 0
     rejected = 0
     scanned = 0
+    rejection_counts: Counter[str] = Counter()
+    rejections_by_reason_type: Counter[str] = Counter()
 
     try:
         with repository.begin() as connection:
@@ -60,10 +65,13 @@ def validate_pending_candidates(
                     candidate_validator.validate(candidate)
                 except CandidateValidationError as exc:
                     rejected += 1
+                    rejection_reason = _format_rejection_reason(exc)
+                    rejection_counts[rejection_reason] += 1
+                    rejections_by_reason_type[exc.__class__.__name__] += 1
                     repository.mark_validation_result(
                         candidate.id,
                         "rejected",
-                        _format_rejection_reason(exc),
+                        rejection_reason,
                         connection,
                     )
                 except Exception:
@@ -91,6 +99,8 @@ def validate_pending_candidates(
         accepted=accepted,
         rejected=rejected,
         duration_ms=duration_ms,
+        rejection_counts=dict(sorted(rejection_counts.items())),
+        rejections_by_reason_type=dict(sorted(rejections_by_reason_type.items())),
     )
 
 

@@ -24,7 +24,7 @@ from data_platform.cycle.repository import create_cycle, get_cycle
 from data_platform.raw import RawWriter
 
 
-EXPECTED_MIGRATIONS = ["0001", "0002", "0003", "0004", "0005"]
+EXPECTED_MIGRATIONS = ["0001", "0002", "0003", "0004", "0005", "0006"]
 
 
 def test_selector_selects_latest_open_trade_day_and_records_evidence(
