@@ -61,6 +61,11 @@ def test_guard_rejects_generated_artifacts_and_missing_sources() -> None:
         [
             "src/data_platform/adapters/__pycache__/adapter.cpython-314.pyc",
             "src/project_ult_data_platform.egg-info/PKG-INFO",
+            "tests/dbt/fixtures/raw/tushare/weekly/dt=20260415/_manifest.json",
+            "tests/dbt/fixtures/raw/tushare/weekly/dt=20260415/run.parquet",
+            "tmp/provider.stdout.txt",
+            "tmp/provider.stderr.txt",
+            "tmp/provider.exitcode",
             "README.md",
         ]
     )
@@ -69,12 +74,22 @@ def test_guard_rejects_generated_artifacts_and_missing_sources() -> None:
     assert check.generated_artifacts == (
         "src/data_platform/adapters/__pycache__/adapter.cpython-314.pyc",
         "src/project_ult_data_platform.egg-info/PKG-INFO",
+        "tests/dbt/fixtures/raw/tushare/weekly/dt=20260415/_manifest.json",
+        "tests/dbt/fixtures/raw/tushare/weekly/dt=20260415/run.parquet",
+        "tmp/provider.stdout.txt",
+        "tmp/provider.stderr.txt",
+        "tmp/provider.exitcode",
     )
     messages = check.error_messages()
-    assert messages[:3] == [
-        "generated Python artifacts are tracked:",
+    assert messages[:8] == [
+        "generated Python or runtime artifacts are tracked:",
         "  - src/data_platform/adapters/__pycache__/adapter.cpython-314.pyc",
         "  - src/project_ult_data_platform.egg-info/PKG-INFO",
+        "  - tests/dbt/fixtures/raw/tushare/weekly/dt=20260415/_manifest.json",
+        "  - tests/dbt/fixtures/raw/tushare/weekly/dt=20260415/run.parquet",
+        "  - tmp/provider.stdout.txt",
+        "  - tmp/provider.stderr.txt",
+        "  - tmp/provider.exitcode",
     ]
     assert "required repository files are missing:" in messages
     assert "  - src/data_platform/adapters/tushare/adapter.py" in messages
@@ -99,6 +114,11 @@ def test_gitignore_excludes_generated_python_artifacts() -> None:
     assert "__pycache__/" in gitignore
     assert "*.py[cod]" in gitignore
     assert "*.egg-info/" in gitignore
+    assert "tests/dbt/fixtures/raw/**/*.parquet" in gitignore
+    assert "tests/dbt/fixtures/raw/**/_manifest.json" in gitignore
+    assert "*stdout*" in gitignore
+    assert "*stderr*" in gitignore
+    assert "*exitcode" in gitignore
 
 
 def test_holdings_queue_freeze_runbook_uses_sanitized_evidence_shape() -> None:
