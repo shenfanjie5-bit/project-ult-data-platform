@@ -124,17 +124,65 @@ def test_gitignore_excludes_generated_python_artifacts() -> None:
 def test_holdings_queue_freeze_runbook_uses_sanitized_evidence_shape() -> None:
     text = HOLDINGS_QUEUE_FREEZE_RUNBOOK.read_text(encoding="utf-8")
 
-    assert '"payload":' not in _receipt_json_block(text)
-    assert "provider_payload" not in _receipt_json_block(text)
-    assert "raw_payload_path" not in _receipt_json_block(text)
+    receipt_block = _fenced_block_after(text, "## Receipt Shape", "json")
+    targeted_freeze_block = _fenced_block_after(
+        text,
+        "## Targeted Freeze Shape",
+        "python",
+    )
+
+    assert '"payload":' not in receipt_block
+    assert "provider_payload" not in receipt_block
+    assert "raw_payload_path" not in receipt_block
+    assert "submit_candidate_idempotent" in text
+    assert "CandidateSubmitReceipt.as_public_dict()" in text
+    assert "`submit_candidate` is not acceptable" in text
     assert "DP_PG_DSN=<redacted-dsn>" in text
+    assert "stdout/stderr" in text
+    assert "rejection_counts" in text
+    assert "rejections_by_reason_type" in text
     assert "submitted_by=\"subsystem-holdings\"" in text
     assert "payload_type=\"Ex-3\"" in text
+    assert "submitted_by=\"subsystem-holdings\"" in targeted_freeze_block
+    assert "payload_type=\"Ex-3\"" in targeted_freeze_block
+    assert "not broad/default rollout" in text
+    assert "does not enable broad/default freeze rollout" in text
     assert "commit hash" in text
+    assert _unexpected_runbook_fragments(text) == []
 
 
-def _receipt_json_block(text: str) -> str:
-    marker = "```json"
-    start = text.index(marker) + len(marker)
+def _fenced_block_after(text: str, heading: str, language: str) -> str:
+    section_start = text.index(heading)
+    marker = f"```{language}"
+    start = text.index(marker, section_start) + len(marker)
     end = text.index("```", start)
     return text[start:end]
+
+
+def _unexpected_runbook_fragments(text: str) -> list[str]:
+    forbidden_fragments = (
+        "/Users/",
+        "/Volumes/",
+        ".parquet",
+        "_manifest.json",
+        "stdout_tail",
+        "stderr_tail",
+        '"stdout"',
+        '"stderr"',
+        "exitcode:",
+        "raw_payload_path",
+        "provider_payload",
+        "DATABASE_URL=",
+        "NEO4J_PASSWORD=",
+        "postgresql://",
+        "bolt://",
+        "neo4j+s://",
+    )
+    matches = [fragment for fragment in forbidden_fragments if fragment in text]
+    non_redacted_pg_dsn = [
+        line.strip()
+        for line in text.splitlines()
+        if "DP_PG_DSN=" in line and "DP_PG_DSN=<redacted-dsn>" not in line
+    ]
+    matches.extend(non_redacted_pg_dsn)
+    return matches

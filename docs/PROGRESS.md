@@ -42,6 +42,15 @@
 >   `docs/evidence/holdings-backfill-derivation-evidence-20260506.md`；raw
 >   logs/provider payloads/dbt build artifacts/runtime noise 不入仓。
 >
+> **Queue/freeze operational hardening sync**：
+>
+> - Holdings queue/freeze runbook hardening now treats idempotent Ex-3 submit,
+>   safe public receipts, worker rejection metrics, and targeted freeze filters
+>   as landed operational checks for bounded holdings rollout evidence.
+> - This sync does **not** mark P1c broad/default rollout complete, does not
+>   enable unfiltered production freezes, and does not introduce financial-doc
+>   scope or contracts subtypes.
+>
 > 后续 `ISSUE-015+`（P1b / P1c）的真实进度不在本次 doc-sync 范围内，保留 `⬜ 未开始` 标记待各自 issue 走完正式流程后再更新。
 
 ---

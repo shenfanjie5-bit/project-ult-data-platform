@@ -27,6 +27,11 @@ Already present and relevant to the next roadmap:
 - M4.3 bridge evidence now includes a non-skipped `make smoke-p1c` run
   against isolated PostgreSQL database `dp_p1c_smoke_m4bridge`, proving
   `candidate_queue` submit/validate/freeze into `cycle_candidate_selection`.
+- Queue/freeze operational hardening for bounded holdings rollout is landed:
+  idempotent-required Ex-3 submit, safe public receipts, worker rejection
+  metrics, and targeted `freeze_cycle_candidates(..., submitted_by=...,
+  payload_type=...)` filters. This supports bounded holdings evidence only; it
+  is not a broad/default rollout.
 
 Known planning constraints:
 
