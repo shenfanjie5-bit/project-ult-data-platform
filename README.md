@@ -101,21 +101,34 @@ Known planning constraints:
 
 ## Next planning focus
 
+The current active data-platform planning horizon is **post-canary production
+rollout operationalization/runbook hardening support**. Holdings bounded
+gated canary/live production evidence has passed, but this does not declare
+default/full propagation enabled or broad production rollout complete.
+
 Order the next data-platform work as:
 
-1. **Keep P1a evidence reproducible**: the 2026-05-04 post-merge P1a smoke
+1. **Support post-canary production rollout runbooks**: keep data-platform
+   rollback, monitoring, incident response, ownership, audit, and evidence
+   handoff procedures aligned with the assembly operationalization track.
+2. **Preserve bounded holdings canary evidence**: live smoke evidence for the
+   promoted holdings interfaces is recorded for 2026-05-06, and the bounded
+   gated canary/live production evidence gate has passed. Keep future evidence
+   redacted, reproducible, and scoped to explicit gates.
+3. **Keep P1a evidence reproducible**: the 2026-05-04 post-merge P1a smoke
    and Iceberg spike are non-skipped real-PG proof for the current merge.
    Do not commit raw smoke logs; keep them in a temporary log directory.
-2. **Holdings backfill orchestration**: live smoke evidence for the promoted
-   holdings interfaces is recorded for 2026-05-06; bounded historical backfill
-   orchestration is implemented and documented with plan-only default behavior.
-3. **Holdings derivations**: extend the minimal holding/northbound marts into
-   top-holder QoQ change, fund co-holding, and northbound holding z-score.
-   These derivation marts are implemented as read-only data-platform outputs
-   for later subsystem consumption. Reuse existing pledge marts instead of
-   rebuilding pledge extraction.
-4. **`fina_mainbz` adapter**: promote the structured business-segment path
-   before any financial-doc NLP work tries to extract the same signal.
+4. **Maintain holdings backfill and derivation boundaries**: bounded
+   historical backfill orchestration remains plan-only by default, and
+   holdings derivation marts remain read-only data-platform outputs for later
+   subsystem consumption. Reuse existing pledge marts instead of rebuilding
+   pledge extraction.
+
+Parked, not active next work:
+
+- `fina_mainbz` adapter promotion.
+- M4.7 real-document validation.
+- Financial-doc scope or subsystem work.
 
 Execution rule:
 
