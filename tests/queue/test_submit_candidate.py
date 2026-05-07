@@ -437,6 +437,43 @@ def test_idempotent_ex3_delta_id_replays_existing_row(
         engine.dispose()
 
 
+@pytest.mark.parametrize("delta_id", ["", 42])
+def test_idempotent_ex3_invalid_delta_id_uses_non_idempotent_insert(
+    migrated_postgres_dsn: str,
+    monkeypatch: pytest.MonkeyPatch,
+    delta_id: object,
+) -> None:
+    _set_required_settings_env(monkeypatch, migrated_postgres_dsn)
+
+    payload = {
+        "payload_type": "Ex-3",
+        "submitted_by": "subsystem-holdings",
+        "subsystem_id": "subsystem-holdings",
+        "delta_id": delta_id,
+        "delta_type": "edge_upsert",
+        "source_node": "source",
+        "target_node": "target",
+        "relation_type": "CO_HOLDING",
+        "properties": {"source_mart": "mart_deriv_fund_co_holding"},
+        "evidence": ["proof-row"],
+    }
+    engine = _create_engine(migrated_postgres_dsn)
+    try:
+        before_count = _candidate_count(engine)
+        first = submit_candidate_idempotent(payload)
+        second = submit_candidate_idempotent({**payload, "properties": {"repeat": True}})
+
+        assert _candidate_count(engine) == before_count + 2
+        assert first.replayed is False
+        assert second.replayed is False
+        assert second.candidate_id != first.candidate_id
+        assert second.ingest_seq > first.ingest_seq
+        assert "payload" not in first.as_public_dict()
+        assert "payload" not in second.as_public_dict()
+    finally:
+        engine.dispose()
+
+
 @pytest.fixture()
 def migrated_postgres_dsn() -> Generator[str]:
     admin_dsn = os.environ.get("DATABASE_URL") or os.environ.get("DP_PG_DSN")

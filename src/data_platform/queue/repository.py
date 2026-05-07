@@ -59,7 +59,8 @@ ON CONFLICT (
     ((payload->>'delta_id'))
 )
 WHERE payload_type = 'Ex-3'
-  AND payload ? 'delta_id'
+  AND jsonb_typeof(payload->'delta_id') = 'string'
+  AND payload->>'delta_id' <> ''
 DO NOTHING
 RETURNING {", ".join(_RETURNING_COLUMNS)}
 """
@@ -68,7 +69,7 @@ SELECT {", ".join(_RETURNING_COLUMNS)}
 FROM {CANDIDATE_QUEUE_TABLE}
 WHERE submitted_by = :submitted_by
   AND payload_type = 'Ex-3'
-  AND payload ? 'delta_id'
+  AND jsonb_typeof(payload->'delta_id') = 'string'
   AND payload->>'delta_id' = :delta_id
 ORDER BY ingest_seq ASC
 LIMIT 1
