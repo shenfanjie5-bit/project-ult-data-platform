@@ -15,10 +15,10 @@ these namespaces:
 ## Initialize Locally
 
 ```bash
-cd /Users/fanjie/Desktop/Cowork/project-ult/data-platform
-mkdir -p /tmp/dp_warehouse
-DP_ICEBERG_WAREHOUSE_PATH=/tmp/dp_warehouse \
-DP_PG_DSN="postgresql://postgres:dp@localhost:5433/postgres" \
+cd <workspace>/data-platform
+mkdir -p <proof-workspace>/dp_warehouse
+DP_ICEBERG_WAREHOUSE_PATH=<proof-workspace>/dp_warehouse \
+DP_PG_DSN="<postgres-dsn>" \
   python scripts/init_iceberg_catalog.py
 ```
 
