@@ -82,7 +82,7 @@ class RepositoryArtifactCheck:
     def error_messages(self) -> list[str]:
         messages: list[str] = []
         if self.generated_artifacts:
-            messages.append("generated Python artifacts are tracked:")
+            messages.append("generated Python or runtime artifacts are tracked:")
             messages.extend(f"  - {path}" for path in self.generated_artifacts)
         if self.missing_required_paths:
             messages.append("required repository files are missing:")
@@ -117,7 +117,7 @@ def check_tracked_paths(paths: Sequence[str]) -> RepositoryArtifactCheck:
     normalized_paths = tuple(_normalize_path(path) for path in paths)
     tracked_path_set = set(normalized_paths)
     generated_artifacts = tuple(
-        path for path in normalized_paths if _is_generated_python_artifact(path)
+        path for path in normalized_paths if _is_generated_or_runtime_artifact(path)
     )
     missing_required_paths = tuple(
         path for path in REQUIRED_REPOSITORY_FILES if path not in tracked_path_set
@@ -136,12 +136,19 @@ def _normalize_path(path: str) -> str:
     return path.replace("\\", "/").strip("/")
 
 
-def _is_generated_python_artifact(path: str) -> bool:
+_RUNTIME_ARTIFACT_SUFFIXES = (".parquet", "_manifest.json")
+_RUNTIME_ARTIFACT_MARKERS = ("stdout", "stderr", "exitcode")
+
+
+def _is_generated_or_runtime_artifact(path: str) -> bool:
     parts = path.split("/")
+    filename = parts[-1]
     return (
         path.endswith((".pyc", ".pyo"))
         or "__pycache__" in parts
         or any(part.endswith(".egg-info") for part in parts)
+        or filename.endswith(_RUNTIME_ARTIFACT_SUFFIXES)
+        or any(marker in filename for marker in _RUNTIME_ARTIFACT_MARKERS)
     )
 
 
@@ -156,8 +163,8 @@ def _is_test_source(path: str) -> bool:
 def main(argv: Sequence[str] | None = None) -> int:
     parser = argparse.ArgumentParser(
         description=(
-            "Fail if generated Python artifacts are tracked or if required "
-            "source/test files are missing from the git index."
+            "Fail if generated Python/runtime artifacts are tracked or if "
+            "required source/test files are missing from the git index."
         )
     )
     parser.add_argument(
@@ -178,7 +185,8 @@ def main(argv: Sequence[str] | None = None) -> int:
     if check.ok:
         print(
             "Repository artifact guard passed: required source, dbt, scripts, "
-            "and tests are tracked, and no generated Python artifacts are tracked."
+            "and tests are tracked, and no generated Python/runtime artifacts "
+            "are tracked."
         )
         return 0
 

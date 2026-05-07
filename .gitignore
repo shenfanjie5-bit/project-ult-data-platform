@@ -13,3 +13,10 @@ PROJECT_REPORT.md
 
 # dbt runtime artifacts
 src/data_platform/dbt/logs/
+
+# Runtime/raw provider artifacts
+tests/dbt/fixtures/raw/**/*.parquet
+tests/dbt/fixtures/raw/**/_manifest.json
+*stdout*
+*stderr*
+*exitcode
