@@ -21,12 +21,16 @@ from data_platform.adapters.tushare import (  # noqa: E402
     TUSHARE_TOP10_HOLDERS_ASSET,
 )
 from data_platform.holdings_backfill import (  # noqa: E402
+    MVP20_BOUNDED_BACKFILL_STOCK_COUNT,
+    MVP20_BOUNDED_BACKFILL_WINDOW_MONTHS,
     SUPPORTED_HOLDINGS_BACKFILL_DATASETS,
     HoldingsBackfillPlan,
     HoldingsBackfillPlanError,
     HoldingsBackfillPlanItem,
     build_holdings_backfill_plan,
+    build_mvp20_bounded_backfill_manifest,
     execute_holdings_backfill_plan,
+    public_mvp20_bounded_backfill_summary,
     public_plan_summary,
 )
 from data_platform.raw import RawWriter  # noqa: E402
@@ -70,6 +74,69 @@ def test_five_holdings_interfaces_generate_bounded_plan() -> None:
     ]
     assert {item.status for item in plan.items} == {"planned"}
     assert {item.dataset for item in plan.items} == set(SUPPORTED_HOLDINGS_BACKFILL_DATASETS)
+
+
+def _mvp20_stock_codes() -> tuple[str, ...]:
+    return tuple(f"{index:06d}.SZ" for index in range(1, 21))
+
+
+def test_mvp20_manifest_builds_fixed_20_stock_120_month_provider_available_plan() -> None:
+    stock_codes = _mvp20_stock_codes()
+    manifest = build_mvp20_bounded_backfill_manifest(stock_codes=stock_codes)
+    planned_counts = public_mvp20_bounded_backfill_summary(manifest)["plan"][
+        "planned_count_by_dataset"
+    ]
+
+    assert manifest.ok is True
+    assert manifest.complete is False
+    assert len(manifest.seed_stock_codes) == MVP20_BOUNDED_BACKFILL_STOCK_COUNT
+    assert manifest.seed_stock_codes == stock_codes
+    assert len(manifest.window_month_ends) == MVP20_BOUNDED_BACKFILL_WINDOW_MONTHS
+    assert len(manifest.report_periods) == 40
+    assert len(manifest.trade_dates) == 120
+    assert len(manifest.hsgt_hold_trade_dates) == 120
+    assert planned_counts == {
+        "hsgt_hold_top10": 4_800,
+        "hsgt_top10": 4_800,
+        "top10_floatholders": 800,
+        "top10_holders": 800,
+    }
+    assert manifest.holdings_plan.rejected_items == ()
+    assert manifest.holdings_plan.skipped_items == ()
+
+
+def test_mvp20_manifest_records_provider_gaps_without_claiming_completeness() -> None:
+    stock_codes = _mvp20_stock_codes()
+    manifest = build_mvp20_bounded_backfill_manifest(
+        stock_codes=stock_codes,
+        end_month="202605",
+    )
+    summary = public_mvp20_bounded_backfill_summary(manifest)
+    encoded = json.dumps(summary, sort_keys=True)
+    reason_types = {gap["reason_type"] for gap in summary["provider_gaps"]}
+
+    assert summary["ok"] is True
+    assert summary["complete"] is False
+    assert summary["completeness_status"] == "bounded_provider_available_with_recorded_gaps"
+    assert summary["window"]["window_months"] == 120
+    assert summary["provider_gap_count"] == 4
+    assert {
+        "holder_identity_resolution_deferred",
+        "partial_month_provider_cutoff",
+        "post_publication_cutoff",
+        "related_fund_codes_unresolved_plan_only",
+    }.issubset(reason_types)
+    assert "fund_portfolio" not in summary["plan"]["planned_count_by_dataset"]
+    assert "ts_code" not in encoded
+    assert "fetch_params" not in encoded
+    assert "artifact" not in encoded
+    for stock_code in stock_codes:
+        assert stock_code not in encoded
+
+
+def test_mvp20_manifest_requires_explicit_20_stock_codes() -> None:
+    with pytest.raises(ValueError, match="exactly 20 unique"):
+        build_mvp20_bounded_backfill_manifest(stock_codes=_mvp20_stock_codes()[:19])
 
 
 @pytest.mark.parametrize(
@@ -488,6 +555,34 @@ def test_cli_json_report_sanitizes_identifier_bounds(tmp_path: Path) -> None:
     }
     assert "TESTSTK.SZ" not in encoded
     assert "ts_code" not in encoded
+
+
+def test_cli_mvp20_json_report_is_plan_only_and_sanitized(tmp_path: Path) -> None:
+    report_path = tmp_path / "reports" / "mvp20.json"
+    cli = _load_holdings_backfill_cli()
+
+    exit_code = cli.main(
+        [
+            "--mvp20-bounded-backfill",
+            "--stock-code",
+            ",".join(_mvp20_stock_codes()),
+            "--json-report",
+            str(report_path),
+        ]
+    )
+
+    assert exit_code == 0
+    payload = json.loads(report_path.read_text(encoding="utf-8"))
+    encoded = json.dumps(payload, sort_keys=True)
+    assert payload["mode"] == "mvp20_bounded_backfill"
+    assert payload["execute_live"] is False
+    assert "execution" not in payload
+    assert payload["manifest"]["seed_stock_count"] == 20
+    assert payload["manifest"]["complete"] is False
+    assert "ts_code" not in encoded
+    assert "fetch_params" not in encoded
+    for stock_code in _mvp20_stock_codes():
+        assert stock_code not in encoded
 
 
 def test_cli_execute_live_requires_env_gate_before_live_objects(

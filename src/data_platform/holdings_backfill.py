@@ -41,11 +41,19 @@ PUBLIC_SAFE_BOUND_KEYS = frozenset(
         "market_type",
         "max_plan_items",
         "missing",
+        "omitted_month_count",
         "period",
         "planned_count",
+        "provider_available_end_date",
+        "capped_month_count",
+        "related_entity_hops",
         "start_date",
         "end_date",
+        "start_month",
+        "end_month",
+        "stock_count",
         "trade_date",
+        "window_months",
     }
 )
 PUBLIC_IDENTIFIER_VALUE_RE = re.compile(
@@ -57,6 +65,13 @@ HSGT_HOLD_TOP10_BACKFILL_LAST_DATE = date(2024, 8, 20)
 DEFAULT_MAX_PLAN_ITEMS = 5_000
 DATE_FORMAT = "%Y%m%d"
 LIVE_HOLDINGS_BACKFILL_ENV = "DP_TUSHARE_LIVE_HOLDINGS_BACKFILL"
+MVP20_BOUNDED_BACKFILL_WINDOW_MONTHS = 120
+MVP20_BOUNDED_BACKFILL_STOCK_COUNT = 20
+MVP20_BOUNDED_BACKFILL_MAX_PLAN_ITEMS = 20_000
+MVP20_BOUNDED_BACKFILL_END_MONTH = date(2024, 8, 31)
+MVP20_HSGT_MARKET_TYPES = ("1", "3")
+MVP20_HSGT_EXCHANGES = ("SH", "SZ")
+MVP20_A_SHARE_STOCK_CODE_RE = re.compile(r"^\d{6}\.(?:BJ|SH|SZ)$")
 
 
 class HoldingsBackfillPlanError(ValueError):
@@ -136,6 +151,53 @@ class HoldingsBackfillExecutionResult:
         return tuple(item.artifact for item in self.items if item.artifact is not None)
 
 
+@dataclass(frozen=True, slots=True)
+class ProviderGap:
+    """One explicit gap in a provider-available planning manifest."""
+
+    scope: str
+    reason_type: str
+    reason: str
+    dataset: str | None = None
+    bounds: Mapping[str, Any] = field(default_factory=dict)
+
+    def __post_init__(self) -> None:
+        object.__setattr__(self, "bounds", dict(self.bounds))
+
+
+@dataclass(frozen=True, slots=True)
+class MVP20BoundedBackfillManifest:
+    """Plan-only MVP20 bounded backfill manifest with explicit provider gaps."""
+
+    seed_stock_codes: tuple[str, ...]
+    window_month_ends: tuple[date, ...]
+    report_periods: tuple[date, ...]
+    trade_dates: tuple[date, ...]
+    hsgt_hold_trade_dates: tuple[date, ...]
+    holdings_plan: HoldingsBackfillPlan
+    provider_gaps: tuple[ProviderGap, ...]
+    related_fund_codes: tuple[str, ...] = ()
+    related_entity_hops: int = 2
+    completeness_status: str = "bounded_provider_available_with_recorded_gaps"
+
+    def __post_init__(self) -> None:
+        object.__setattr__(self, "seed_stock_codes", tuple(self.seed_stock_codes))
+        object.__setattr__(self, "window_month_ends", tuple(self.window_month_ends))
+        object.__setattr__(self, "report_periods", tuple(self.report_periods))
+        object.__setattr__(self, "trade_dates", tuple(self.trade_dates))
+        object.__setattr__(self, "hsgt_hold_trade_dates", tuple(self.hsgt_hold_trade_dates))
+        object.__setattr__(self, "provider_gaps", tuple(self.provider_gaps))
+        object.__setattr__(self, "related_fund_codes", tuple(self.related_fund_codes))
+
+    @property
+    def ok(self) -> bool:
+        return self.holdings_plan.ok
+
+    @property
+    def complete(self) -> bool:
+        return False
+
+
 def build_holdings_backfill_plan(
     *,
     datasets: Sequence[str],
@@ -200,6 +262,106 @@ def build_holdings_backfill_plan(
         )
 
     return HoldingsBackfillPlan(tuple(items), max_plan_items=max_plan_items)
+
+
+def build_mvp20_bounded_backfill_manifest(
+    *,
+    stock_codes: Sequence[str],
+    end_month: str | date | None = None,
+    related_fund_codes: Sequence[str] = (),
+    max_plan_items: int = MVP20_BOUNDED_BACKFILL_MAX_PLAN_ITEMS,
+) -> MVP20BoundedBackfillManifest:
+    """Build the fixed MVP20 plan-only manifest without touching live providers."""
+
+    normalized_stock_codes = _normalize_mvp20_stock_codes(stock_codes)
+    normalized_fund_codes = _normalize_non_empty_strings(related_fund_codes)
+    month_ends = _month_end_window(
+        _parse_end_month(end_month),
+        months=MVP20_BOUNDED_BACKFILL_WINDOW_MONTHS,
+    )
+    report_periods = tuple(value for value in month_ends if value.month in {3, 6, 9, 12})
+    hsgt_hold_trade_dates, hsgt_hold_gaps = _hsgt_hold_provider_available_dates(month_ends)
+
+    plans = [
+        build_holdings_backfill_plan(
+            datasets=("top10_holders", "top10_floatholders"),
+            stock_codes=normalized_stock_codes,
+            periods=tuple(f"{period:%Y%m%d}" for period in report_periods),
+            max_plan_items=max_plan_items,
+        ),
+        build_holdings_backfill_plan(
+            datasets=("hsgt_top10",),
+            stock_codes=normalized_stock_codes,
+            trade_dates=tuple(f"{trade_date:%Y%m%d}" for trade_date in month_ends),
+            market_types=MVP20_HSGT_MARKET_TYPES,
+            max_plan_items=max_plan_items,
+        ),
+    ]
+    if hsgt_hold_trade_dates:
+        plans.append(
+            build_holdings_backfill_plan(
+                datasets=("hsgt_hold_top10",),
+                stock_codes=normalized_stock_codes,
+                trade_dates=tuple(f"{trade_date:%Y%m%d}" for trade_date in hsgt_hold_trade_dates),
+                exchanges=MVP20_HSGT_EXCHANGES,
+                max_plan_items=max_plan_items,
+            )
+        )
+
+    provider_gaps: list[ProviderGap] = list(hsgt_hold_gaps)
+    if normalized_fund_codes:
+        plans.append(
+            build_holdings_backfill_plan(
+                datasets=("fund_portfolio",),
+                fund_codes=normalized_fund_codes,
+                periods=tuple(f"{period:%Y%m%d}" for period in report_periods),
+                max_plan_items=max_plan_items,
+            )
+        )
+    else:
+        provider_gaps.append(
+            ProviderGap(
+                scope="two_hop_related_entities",
+                dataset="fund_portfolio",
+                reason_type="related_fund_codes_unresolved_plan_only",
+                reason=(
+                    "fund_portfolio needs fund codes discovered from observed holdings; "
+                    "the plan-only MVP20 manifest records the gap instead of fabricating "
+                    "two-hop fund coverage"
+                ),
+                bounds={
+                    "stock_count": len(normalized_stock_codes),
+                    "related_entity_hops": 2,
+                    "window_months": MVP20_BOUNDED_BACKFILL_WINDOW_MONTHS,
+                },
+            )
+        )
+
+    provider_gaps.append(
+        ProviderGap(
+            scope="two_hop_related_entities",
+            reason_type="holder_identity_resolution_deferred",
+            reason=(
+                "holder and co-held-security expansion must be derived from fetched "
+                "provider rows; this manifest does not enumerate unknown holder entities"
+            ),
+            bounds={
+                "stock_count": len(normalized_stock_codes),
+                "related_entity_hops": 2,
+            },
+        )
+    )
+
+    return MVP20BoundedBackfillManifest(
+        seed_stock_codes=normalized_stock_codes,
+        window_month_ends=month_ends,
+        report_periods=report_periods,
+        trade_dates=month_ends,
+        hsgt_hold_trade_dates=hsgt_hold_trade_dates,
+        holdings_plan=_combine_holdings_backfill_plans(plans, max_plan_items=max_plan_items),
+        provider_gaps=tuple(provider_gaps),
+        related_fund_codes=normalized_fund_codes,
+    )
 
 
 def execute_holdings_backfill_plan(
@@ -315,6 +477,93 @@ def public_execution_summary(result: HoldingsBackfillExecutionResult) -> dict[st
             for item in result.items
         ],
     }
+
+
+def public_mvp20_bounded_backfill_summary(
+    manifest: MVP20BoundedBackfillManifest,
+) -> dict[str, Any]:
+    """Return a redacted MVP20 plan manifest summary with provider gaps."""
+
+    return {
+        "ok": manifest.ok,
+        "complete": manifest.complete,
+        "completeness_status": manifest.completeness_status,
+        "seed_stock_count": len(manifest.seed_stock_codes),
+        "related_entity_hops": manifest.related_entity_hops,
+        "window": {
+            "window_months": len(manifest.window_month_ends),
+            "start_month": f"{manifest.window_month_ends[0]:%Y%m}",
+            "end_month": f"{manifest.window_month_ends[-1]:%Y%m}",
+            "report_period_count": len(manifest.report_periods),
+            "trade_date_count": len(manifest.trade_dates),
+            "hsgt_hold_trade_date_count": len(manifest.hsgt_hold_trade_dates),
+        },
+        "plan": {
+            "planned_count": len(manifest.holdings_plan.planned_items),
+            "skipped_count": len(manifest.holdings_plan.skipped_items),
+            "rejected_count": len(manifest.holdings_plan.rejected_items),
+            "max_plan_items": manifest.holdings_plan.max_plan_items,
+            "planned_count_by_dataset": _plan_item_counts_by_dataset(
+                manifest.holdings_plan.planned_items
+            ),
+            "skipped_count_by_dataset": _plan_item_counts_by_dataset(
+                manifest.holdings_plan.skipped_items
+            ),
+            "rejected_count_by_dataset": _plan_item_counts_by_dataset(
+                manifest.holdings_plan.rejected_items
+            ),
+        },
+        "provider_gap_count": len(manifest.provider_gaps),
+        "provider_gaps": [_public_provider_gap(gap) for gap in manifest.provider_gaps],
+    }
+
+
+def _combine_holdings_backfill_plans(
+    plans: Sequence[HoldingsBackfillPlan],
+    *,
+    max_plan_items: int,
+) -> HoldingsBackfillPlan:
+    items = tuple(item for plan in plans for item in plan.items)
+    planned_count = sum(1 for item in items if item.status == "planned")
+    if planned_count <= max_plan_items:
+        return HoldingsBackfillPlan(items, max_plan_items=max_plan_items)
+    return HoldingsBackfillPlan(
+        (
+            *items,
+            _rejected_item(
+                "holdings",
+                "plan_item_limit_exceeded",
+                (
+                    f"bounded holdings backfill plan has {planned_count} planned items; "
+                    f"limit is {max_plan_items}"
+                ),
+                bounds={"planned_count": planned_count, "max_plan_items": max_plan_items},
+            ),
+        ),
+        max_plan_items=max_plan_items,
+    )
+
+
+def _plan_item_counts_by_dataset(
+    items: Sequence[HoldingsBackfillPlanItem],
+) -> dict[str, int]:
+    counts: dict[str, int] = {}
+    for item in items:
+        counts[item.dataset] = counts.get(item.dataset, 0) + 1
+    return dict(sorted(counts.items()))
+
+
+def _public_provider_gap(gap: ProviderGap) -> dict[str, Any]:
+    payload: dict[str, Any] = {
+        "scope": gap.scope,
+        "reason_type": gap.reason_type,
+        "reason": gap.reason,
+    }
+    if gap.dataset is not None:
+        payload["dataset"] = gap.dataset
+    if gap.bounds:
+        payload["bounds"] = _json_safe_public_value(gap.bounds)
+    return payload
 
 
 def _plan_dataset(
@@ -627,6 +876,123 @@ def _parse_yyyymmdd(value: str) -> date | None:
     return parsed
 
 
+def _parse_end_month(value: str | date | None) -> date:
+    if value is None:
+        return MVP20_BOUNDED_BACKFILL_END_MONTH
+    if isinstance(value, date):
+        return _month_end(value.year, value.month)
+
+    normalized = value.strip()
+    if re.fullmatch(r"\d{6}", normalized):
+        year = int(normalized[:4])
+        month = int(normalized[4:])
+        if not 1 <= month <= 12:
+            msg = "end_month must use a valid YYYYMM month"
+            raise ValueError(msg)
+        return _month_end(year, month)
+
+    parsed = _parse_yyyymmdd(normalized)
+    if parsed is None:
+        msg = "end_month must use YYYYMM or YYYYMMDD"
+        raise ValueError(msg)
+    return _month_end(parsed.year, parsed.month)
+
+
+def _month_end_window(end_month: date, *, months: int) -> tuple[date, ...]:
+    if months != MVP20_BOUNDED_BACKFILL_WINDOW_MONTHS:
+        msg = "MVP20 bounded backfill uses a fixed 120-month window"
+        raise ValueError(msg)
+
+    values = []
+    end_year = end_month.year
+    end_month_number = end_month.month
+    for offset in range(months - 1, -1, -1):
+        year, month = _shift_month(end_year, end_month_number, -offset)
+        values.append(_month_end(year, month))
+    return tuple(values)
+
+
+def _shift_month(year: int, month: int, offset: int) -> tuple[int, int]:
+    month_index = year * 12 + month - 1 + offset
+    return month_index // 12, month_index % 12 + 1
+
+
+def _month_end(year: int, month: int) -> date:
+    if month == 12:
+        return date(year + 1, 1, 1) - timedelta(days=1)
+    return date(year, month + 1, 1) - timedelta(days=1)
+
+
+def _hsgt_hold_provider_available_dates(
+    month_ends: Sequence[date],
+) -> tuple[tuple[date, ...], tuple[ProviderGap, ...]]:
+    available_dates: list[date] = []
+    capped_months: list[date] = []
+    omitted_months: list[date] = []
+    cutoff = HSGT_HOLD_TOP10_BACKFILL_LAST_DATE
+    for month_end in month_ends:
+        if month_end <= cutoff:
+            available_dates.append(month_end)
+            continue
+        if month_end.year == cutoff.year and month_end.month == cutoff.month:
+            available_dates.append(cutoff)
+            capped_months.append(month_end)
+            continue
+        omitted_months.append(month_end)
+
+    gaps: list[ProviderGap] = []
+    if capped_months:
+        gaps.append(
+            ProviderGap(
+                scope="provider_available_window",
+                dataset="hsgt_hold_top10",
+                reason_type="partial_month_provider_cutoff",
+                reason=(
+                    "hsgt_hold_top10 daily publication is only provider-verifiable "
+                    f"through {cutoff:%Y-%m-%d}; the cutoff month is capped to that date"
+                ),
+                bounds={
+                    "capped_month_count": len(capped_months),
+                    "end_month": f"{capped_months[-1]:%Y%m}",
+                    "provider_available_end_date": f"{cutoff:%Y%m%d}",
+                },
+            )
+        )
+    if omitted_months:
+        gaps.append(
+            ProviderGap(
+                scope="provider_available_window",
+                dataset="hsgt_hold_top10",
+                reason_type="post_publication_cutoff",
+                reason=(
+                    "hsgt_hold_top10 daily publication is not provider-verifiable after "
+                    f"{cutoff:%Y-%m-%d}; post-cutoff months are omitted from the plan"
+                ),
+                bounds={
+                    "omitted_month_count": len(omitted_months),
+                    "start_month": f"{omitted_months[0]:%Y%m}",
+                    "end_month": f"{omitted_months[-1]:%Y%m}",
+                    "provider_available_end_date": f"{cutoff:%Y%m%d}",
+                },
+            )
+        )
+    return _dedupe_dates(available_dates), tuple(gaps)
+
+
+def _normalize_mvp20_stock_codes(stock_codes: Sequence[str]) -> tuple[str, ...]:
+    normalized = _normalize_non_empty_strings(stock_codes)
+    if (
+        len(normalized) != MVP20_BOUNDED_BACKFILL_STOCK_COUNT
+        or len(frozenset(normalized)) != len(normalized)
+    ):
+        msg = "mvp20 bounded backfill requires exactly 20 unique stock_codes"
+        raise ValueError(msg)
+    if any(MVP20_A_SHARE_STOCK_CODE_RE.fullmatch(stock_code) is None for stock_code in normalized):
+        msg = "mvp20 bounded backfill stock_codes must be A-share ts_codes"
+        raise ValueError(msg)
+    return normalized
+
+
 def _normalize_non_empty_strings(values: Sequence[str]) -> tuple[str, ...]:
     normalized: list[str] = []
     seen: set[str] = set()
@@ -890,11 +1256,19 @@ __all__ = [
     "HoldingsBackfillPlanError",
     "HoldingsBackfillPlanItem",
     "LIVE_HOLDINGS_BACKFILL_ENV",
+    "MVP20BoundedBackfillManifest",
+    "MVP20_BOUNDED_BACKFILL_STOCK_COUNT",
+    "MVP20_BOUNDED_BACKFILL_END_MONTH",
+    "MVP20_BOUNDED_BACKFILL_MAX_PLAN_ITEMS",
+    "MVP20_BOUNDED_BACKFILL_WINDOW_MONTHS",
+    "ProviderGap",
     "SUPPORTED_HOLDINGS_BACKFILL_DATASETS",
     "build_holdings_backfill_plan",
+    "build_mvp20_bounded_backfill_manifest",
     "default_holdings_assets_by_dataset",
     "execute_holdings_backfill_plan",
     "public_execution_summary",
+    "public_mvp20_bounded_backfill_summary",
     "public_plan_summary",
     "validate_holdings_backfill_live_gate",
 ]
