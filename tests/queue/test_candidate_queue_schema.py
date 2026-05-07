@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 import os
 from collections.abc import Generator
 from dataclasses import FrozenInstanceError, fields, is_dataclass
@@ -106,7 +107,7 @@ def migrated_postgres_dsn(postgres_dsn: str) -> str:
         reason="PostgreSQL candidate queue schema tests require the migration runner",
     )
     applied_versions = runner_module.MigrationRunner().apply_pending(postgres_dsn)
-    assert applied_versions == ["0001", "0002", "0003", "0004", "0005"]
+    assert applied_versions == ["0001", "0002", "0003", "0004", "0005", "0006"]
     assert runner_module.MigrationRunner().apply_pending(postgres_dsn) == []
     return postgres_dsn
 
@@ -277,7 +278,71 @@ def test_migration_creates_candidate_queue_schema(migrated_postgres_dsn: str) ->
                         """
                     )
                 )
-            } >= {"candidate_queue_pkey", "candidate_queue_ingest_seq_key"}
+            } >= {
+                "candidate_queue_pkey",
+                "candidate_queue_ingest_seq_key",
+                "candidate_queue_ex3_delta_id_key",
+            }
+            ex3_delta_index = connection.execute(
+                _text(
+                    """
+                    SELECT indexdef
+                    FROM pg_indexes
+                    WHERE schemaname = 'data_platform'
+                      AND tablename = 'candidate_queue'
+                      AND indexname = 'candidate_queue_ex3_delta_id_key'
+                    """
+                )
+            ).scalar_one()
+            assert "(payload ->> 'delta_id'::text)" in str(ex3_delta_index)
+            assert "WHERE ((payload_type = 'Ex-3'::data_platform.candidate_payload_type)" in str(
+                ex3_delta_index
+            )
+            assert "jsonb_typeof((payload -> 'delta_id'::text)) = 'string'::text" in str(
+                ex3_delta_index
+            )
+            assert "(payload ->> 'delta_id'::text) <> ''::text" in str(ex3_delta_index)
+    finally:
+        engine.dispose()
+
+
+def test_candidate_queue_ex3_delta_unique_index_matches_idempotency_domain(
+    migrated_postgres_dsn: str,
+) -> None:
+    sqlalchemy_error = pytest.importorskip(
+        "sqlalchemy.exc",
+        reason="PostgreSQL candidate queue schema tests require SQLAlchemy",
+    ).SQLAlchemyError
+    engine = _create_engine(migrated_postgres_dsn)
+    insert_sql = _text(
+        """
+        INSERT INTO data_platform.candidate_queue (
+            payload_type,
+            payload,
+            submitted_by
+        )
+        VALUES ('Ex-3', CAST(:payload AS jsonb), 'subsystem-holdings')
+        """
+    )
+
+    try:
+        with engine.begin() as connection:
+            connection.execute(
+                insert_sql,
+                {"payload": json.dumps({"delta_id": "holdings-delta-unique"})},
+            )
+
+        with pytest.raises(sqlalchemy_error):
+            with engine.begin() as connection:
+                connection.execute(
+                    insert_sql,
+                    {"payload": json.dumps({"delta_id": "holdings-delta-unique"})},
+                )
+
+        with engine.begin() as connection:
+            for delta_id in ("", 42):
+                connection.execute(insert_sql, {"payload": json.dumps({"delta_id": delta_id})})
+                connection.execute(insert_sql, {"payload": json.dumps({"delta_id": delta_id})})
     finally:
         engine.dispose()
 

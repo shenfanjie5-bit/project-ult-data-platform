@@ -1,11 +1,12 @@
 """PostgreSQL-backed Lite candidate queue APIs and types."""
 
-from data_platform.queue.api import ExPayload, submit_candidate
+from data_platform.queue.api import ExPayload, submit_candidate, submit_candidate_idempotent
 from data_platform.queue.models import (
     CANDIDATE_QUEUE_TABLE,
     INGEST_METADATA_VIEW,
     CandidatePayloadType,
     CandidateQueueItem,
+    CandidateSubmitReceipt,
     IngestMetadataRecord,
     ValidationStatus,
 )
@@ -29,6 +30,7 @@ __all__ = [
     "CandidateQueueItem",
     "CandidateQueueWriteError",
     "CandidateRepository",
+    "CandidateSubmitReceipt",
     "CandidateValidationError",
     "CandidateValidator",
     "EnvelopeCandidateValidator",
@@ -37,5 +39,6 @@ __all__ = [
     "IngestMetadataRecord",
     "ValidationStatus",
     "submit_candidate",
+    "submit_candidate_idempotent",
     "validate_candidate_envelope",
 ]

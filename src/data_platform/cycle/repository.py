@@ -5,7 +5,7 @@ from __future__ import annotations
 import os
 from collections.abc import Mapping
 from datetime import date
-from typing import Any, Final
+from typing import Any, Final, get_args
 
 from data_platform.cycle.models import (
     CYCLE_CANDIDATE_SELECTION_TABLE,
@@ -17,7 +17,7 @@ from data_platform.cycle.models import (
     _validate_cycle_status,
     cycle_id_for_date,
 )
-from data_platform.queue.models import CANDIDATE_QUEUE_TABLE
+from data_platform.queue.models import CANDIDATE_QUEUE_TABLE, CandidatePayloadType
 
 _FORWARD_TRANSITIONS: Final[dict[CycleStatus, CycleStatus]] = {
     "pending": "phase0",
@@ -27,6 +27,9 @@ _FORWARD_TRANSITIONS: Final[dict[CycleStatus, CycleStatus]] = {
 }
 _FAILED_SOURCES: Final[frozenset[CycleStatus]] = frozenset(
     ("pending", "phase0", "phase1", "phase2", "phase3")
+)
+_CANDIDATE_PAYLOAD_TYPES: Final[frozenset[str]] = frozenset(
+    get_args(CandidatePayloadType)
 )
 
 
@@ -95,7 +98,14 @@ class CycleRepository:
 
         return self._engine.begin()
 
-    def freeze_selection(self, cycle_id: str, connection: Any) -> CycleMetadata:
+    def freeze_selection(
+        self,
+        cycle_id: str,
+        connection: Any,
+        *,
+        submitted_by: str | None = None,
+        payload_type: str | None = None,
+    ) -> CycleMetadata:
         """Freeze accepted queue candidates for one cycle in the caller transaction.
 
         Under PostgreSQL READ COMMITTED, the freeze boundary is the
@@ -108,6 +118,12 @@ class CycleRepository:
         """
 
         _cycle_date_from_id(cycle_id)
+        params: dict[str, Any] = {"cycle_id": cycle_id}
+        filter_clause = _freeze_filter_clause(
+            submitted_by=submitted_by,
+            payload_type=payload_type,
+            params=params,
+        )
         current = connection.execute(
             _text(
                 f"""
@@ -136,6 +152,7 @@ class CycleRepository:
                     SELECT candidate_queue.id AS candidate_id
                     FROM {CANDIDATE_QUEUE_TABLE} AS candidate_queue
                     WHERE candidate_queue.validation_status = 'accepted'
+                      {filter_clause}
                       AND NOT EXISTS (
                           SELECT 1
                           FROM {CYCLE_CANDIDATE_SELECTION_TABLE} AS selection
@@ -186,7 +203,7 @@ class CycleRepository:
                     cycle_metadata.updated_at
                 """
             ),
-            {"cycle_id": cycle_id},
+            params,
         ).mappings().one()
         return _metadata_from_row(row)
 
@@ -397,6 +414,31 @@ def _sqlalchemy_postgres_uri(dsn: str) -> str:
     if dsn.startswith("postgres://"):
         return "postgresql+psycopg://" + dsn.removeprefix("postgres://")
     return dsn
+
+
+def _freeze_filter_clause(
+    *,
+    submitted_by: str | None,
+    payload_type: str | None,
+    params: dict[str, Any],
+) -> str:
+    clauses: list[str] = []
+    if submitted_by is not None:
+        if not submitted_by.strip():
+            msg = "submitted_by filter must be a non-empty string"
+            raise ValueError(msg)
+        params["filter_submitted_by"] = submitted_by
+        clauses.append("AND candidate_queue.submitted_by = :filter_submitted_by")
+    if payload_type is not None:
+        if payload_type not in _CANDIDATE_PAYLOAD_TYPES:
+            msg = f"payload_type filter must be one of {sorted(_CANDIDATE_PAYLOAD_TYPES)}"
+            raise ValueError(msg)
+        params["filter_payload_type"] = payload_type
+        clauses.append(
+            "AND candidate_queue.payload_type = "
+            "CAST(:filter_payload_type AS data_platform.candidate_payload_type)"
+        )
+    return "\n                      ".join(clauses)
 
 
 def _transition_target(cycle_id: str, status: str) -> CycleStatus:

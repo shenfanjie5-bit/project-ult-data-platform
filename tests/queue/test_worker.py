@@ -79,6 +79,8 @@ def test_cli_prints_json_summary(
     assert json.loads(captured.out) == {
         "accepted": 0,
         "duration_ms": 1,
+        "rejection_counts": {},
+        "rejections_by_reason_type": {},
         "rejected": 0,
         "scanned": 0,
     }
@@ -104,6 +106,8 @@ def test_worker_accepts_and_rejects_pending_candidates(
     assert summary.scanned == 3
     assert summary.accepted == 2
     assert summary.rejected == 1
+    assert summary.rejection_counts == {"fake validator rejected candidate": 1}
+    assert summary.rejections_by_reason_type == {"CandidateValidationError": 1}
 
     rows = _queue_rows(queue_engine)
     assert rows[accepted_first]["validation_status"] == "accepted"
@@ -134,6 +138,8 @@ def test_worker_respects_limit(
     assert summary.scanned == 10
     assert summary.accepted == 10
     assert summary.rejected == 0
+    assert summary.rejection_counts == {}
+    assert summary.rejections_by_reason_type == {}
     assert _status_counts(queue_engine) == {"accepted": 10, "pending": 2}
 
 
@@ -203,6 +209,8 @@ def test_cli_succeeds_on_empty_queue(
     assert summary["accepted"] == 0
     assert summary["rejected"] == 0
     assert summary["scanned"] == 0
+    assert summary["rejection_counts"] == {}
+    assert summary["rejections_by_reason_type"] == {}
     assert isinstance(summary["duration_ms"], int)
     assert summary["duration_ms"] >= 0
     assert captured.err == ""

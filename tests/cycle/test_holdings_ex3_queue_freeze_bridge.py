@@ -116,13 +116,12 @@ def test_holdings_ex3_queue_submit_freeze_phase1_reader_round_trip(
         assert _FORBIDDEN_RECEIPT_FIELDS.isdisjoint(wire_payload)
 
 
-def test_holdings_ex3_phase1_reader_rejects_private_receipt_field(
+def test_holdings_ex3_submit_rejects_private_receipt_field_before_insert(
     holdings_bridge_env: str,
+    holdings_bridge_engine: Any,
 ) -> None:
     assert holdings_bridge_env
-    cycle_id = "CYCLE_20260508"
-    create_cycle(date(2026, 5, 8))
-
+    before_count = _candidate_count(holdings_bridge_engine)
     payload = _holdings_ex3_envelope(
         delta_id="holdings-private-field-proof",
         source_node="ENT_NORTHBOUND_CHANNEL",
@@ -133,25 +132,10 @@ def test_holdings_ex3_phase1_reader_rejects_private_receipt_field(
     )
     payload["layer_b_receipt_id"] = "must-not-cross-phase1"
 
-    receipt = submit_candidate(payload)
-    assert receipt.validation_status == "pending"
+    with pytest.raises(ForbiddenIngestMetadataError, match="layer_b_receipt_id"):
+        submit_candidate(payload)
 
-    summary = validate_pending_candidates(limit=10)
-    assert summary.scanned == 1
-    assert summary.accepted == 1
-    assert summary.rejected == 0
-
-    metadata = freeze_cycle_candidates(cycle_id)
-    assert metadata.candidate_count == 1
-
-    reader = PostgresCandidateDeltaReader.from_env()
-    with pytest.raises(Exception) as exc_info:
-        reader.read_candidate_graph_deltas(
-            cycle_id=cycle_id,
-            selection_ref=f"cycle_candidate_selection:{cycle_id}",
-        )
-
-    assert "layer_b_receipt_id" in str(exc_info.value)
+    assert _candidate_count(holdings_bridge_engine) == before_count
 
 
 def test_holdings_ex3_submit_rejects_layer_b_ingest_metadata_before_insert(

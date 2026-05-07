@@ -12,6 +12,7 @@ from data_platform.queue.models import (
     CANDIDATE_QUEUE_TABLE,
     CandidatePayloadType,
     CandidateQueueItem,
+    CandidateSubmitReceipt,
     ValidationStatus,
 )
 from data_platform.queue.validation import CandidateEnvelope
@@ -40,6 +41,38 @@ VALUES (
     :submitted_by
 )
 RETURNING {", ".join(_RETURNING_COLUMNS)}
+"""
+_INSERT_CANDIDATE_IDEMPOTENT_EX3_SQL: Final[str] = f"""
+INSERT INTO {CANDIDATE_QUEUE_TABLE} (
+    payload_type,
+    payload,
+    submitted_by
+)
+VALUES (
+    :payload_type,
+    CAST(:payload AS jsonb),
+    :submitted_by
+)
+ON CONFLICT (
+    submitted_by,
+    payload_type,
+    ((payload->>'delta_id'))
+)
+WHERE payload_type = 'Ex-3'
+  AND jsonb_typeof(payload->'delta_id') = 'string'
+  AND payload->>'delta_id' <> ''
+DO NOTHING
+RETURNING {", ".join(_RETURNING_COLUMNS)}
+"""
+_FETCH_EXISTING_EX3_DELTA_SQL: Final[str] = f"""
+SELECT {", ".join(_RETURNING_COLUMNS)}
+FROM {CANDIDATE_QUEUE_TABLE}
+WHERE submitted_by = :submitted_by
+  AND payload_type = 'Ex-3'
+  AND jsonb_typeof(payload->'delta_id') = 'string'
+  AND payload->>'delta_id' = :delta_id
+ORDER BY ingest_seq ASC
+LIMIT 1
 """
 _FETCH_PENDING_FOR_UPDATE_SQL: Final[str] = f"""
 SELECT {", ".join(_RETURNING_COLUMNS)}
@@ -106,6 +139,64 @@ class CandidateRepository:
             raise
 
         return _row_to_candidate_queue_item(row)
+
+    def insert_candidate_idempotent(
+        self,
+        envelope: CandidateEnvelope,
+    ) -> CandidateSubmitReceipt:
+        """Insert a candidate and replay an existing Ex-3 ``delta_id`` row.
+
+        Only Ex-3 envelopes with a present ``delta_id`` use the production
+        idempotency key. Other payloads keep normal insert behavior and return
+        ``replayed=False``.
+        """
+
+        if not _is_ex3_delta_envelope(envelope):
+            return CandidateSubmitReceipt.from_candidate(
+                self.insert_candidate(envelope),
+                replayed=False,
+            )
+
+        try:
+            text = _sqlalchemy_text()
+            payload = json.dumps(dict(envelope.payload), allow_nan=False)
+            params = {
+                "payload_type": envelope.payload_type,
+                "payload": payload,
+                "submitted_by": envelope.submitted_by,
+                "delta_id": str(envelope.payload["delta_id"]),
+            }
+            with self._engine.begin() as connection:
+                inserted_row = (
+                    connection.execute(
+                        text(_INSERT_CANDIDATE_IDEMPOTENT_EX3_SQL),
+                        params,
+                    )
+                    .mappings()
+                    .one_or_none()
+                )
+                if inserted_row is not None:
+                    item = _row_to_candidate_queue_item(inserted_row)
+                    return CandidateSubmitReceipt.from_candidate(item, replayed=False)
+
+                existing_row = (
+                    connection.execute(text(_FETCH_EXISTING_EX3_DELTA_SQL), params)
+                    .mappings()
+                    .one()
+                )
+        except CandidateQueueWriteError:
+            raise
+        except Exception as exc:
+            if _is_sqlalchemy_error(exc):
+                raise CandidateQueueWriteError(
+                    "candidate queue idempotent insert failed", exc
+                ) from exc
+            raise
+
+        return CandidateSubmitReceipt.from_candidate(
+            _row_to_candidate_queue_item(existing_row),
+            replayed=True,
+        )
 
     def begin(self) -> Any:
         """Begin a PostgreSQL transaction for queue operations."""
@@ -244,6 +335,11 @@ def _sqlalchemy_postgres_uri(dsn: str) -> str:
     if dsn.startswith("postgres://"):
         return "postgresql+psycopg://" + dsn.removeprefix("postgres://")
     return dsn
+
+
+def _is_ex3_delta_envelope(envelope: CandidateEnvelope) -> bool:
+    delta_id = envelope.payload.get("delta_id")
+    return envelope.payload_type == "Ex-3" and isinstance(delta_id, str) and bool(delta_id)
 
 
 def _row_to_candidate_queue_item(row: Mapping[str, Any]) -> CandidateQueueItem:
